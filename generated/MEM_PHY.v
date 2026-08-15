@@ -17,44 +17,44 @@
 `ifndef DW_sig3
 `define DW_sig3 114
 `endif
-`ifndef Test
-`define Test 100
-`endif
 `ifndef LANE_NUM
 `define LANE_NUM 3
+`endif
+`ifndef Test
+`define Test 100
 `endif
 
 module MEM_PHY #(
     parameter integer UID_SIZE = 5
 ) (
-    input  wire [`RST_LANE-1:0] n_rst,
-    input  wire [`CLK_LANE-1:0] clk,
-    input  wire [`DFT_BUS-1:0]  dft_bus,
-    input  wire [`DFT_BUS-1:0]  dft_addr,
-    input  wire                 dft_test_en,
-    input  wire                 dft_out_en,
-    input  wire [UID_SIZE-1:0]  uid,
-    output wire                 apb_1,
-    output wire [1:0]           apb_2,
-    input  wire [2:0]           apb_3,
-    input  wire [3:0]           apb_4,
-    input  wire [4:0]           apb_5,
-    input  wire [5:0]           apb_6,
-    input  wire                 ahb_test_1,
-    input  wire [1:0]           ahb_test_2,
-    output wire [2:0]           ahb_test_3,
-    output wire [3:0]           ahb_test_4,
-    output wire [4:0]           ahb_test_5,
-    input  wire [`DW_sig1-1:0]  test_bus_sig1_dat,
-    input  wire [`DW_sig2-1:0]  test_bus_sig2_dat,
-    input  wire [`DW_sig3-1:0]  test_bus_sig3_dat,
-    input  wire                 test_bus_sig1_ready,
-    input  wire                 test_bus_sig2_ready,
-    input  wire                 test_bus_sig3_ready,
-    output wire                 test_bus_sig1_valid,
-    output wire                 test_bus_sig2_valid,
-    output wire                 test_bus_sig3_valid,
-    input  wire [`Test-1:0]     array [`LANE_NUM-1:0]
+    input  wire [`RST_LANE-1:0]            n_rst,
+    input  wire [`CLK_LANE-1:0]            clk,
+    input  wire [`DFT_BUS-1:0]             dft_bus,
+    input  wire [`DFT_BUS-1:0]             dft_addr,
+    input  wire                            dft_test_en,
+    input  wire                            dft_out_en,
+    input  wire [UID_SIZE-1:0]             uid,
+    output wire                            apb_1,
+    output wire [1:0]                      apb_2,
+    input  wire [2:0]                      apb_3,
+    input  wire [3:0]                      apb_4,
+    input  wire [4:0]                      apb_5,
+    input  wire [5:0]                      apb_6,
+    input  wire                            ahb_test_1,
+    input  wire [1:0]                      ahb_test_2,
+    output wire [2:0]                      ahb_test_3,
+    output wire [3:0]                      ahb_test_4,
+    output wire [4:0]                      ahb_test_5,
+    input  wire [`DW_sig1-1:0]             test_bus_sig1_dat,
+    input  wire [`DW_sig2-1:0]             test_bus_sig2_dat,
+    input  wire [`DW_sig3-1:0]             test_bus_sig3_dat,
+    input  wire                            test_bus_sig1_ready,
+    input  wire                            test_bus_sig2_ready,
+    input  wire                            test_bus_sig3_ready,
+    output wire                            test_bus_sig1_valid,
+    output wire                            test_bus_sig2_valid,
+    output wire                            test_bus_sig3_valid,
+    input  wire [`LANE_NUM-1:0][`Test-1:0] array
 );
 
     // Module placeholder: drive every output to zero.

@@ -14,43 +14,43 @@
 `ifndef DW_sig3
 `define DW_sig3 114
 `endif
-`ifndef Test_size
-`define Test_size 100
-`endif
 `ifndef LANE_NUM
 `define LANE_NUM 3
+`endif
+`ifndef Test_size
+`define Test_size 100
 `endif
 
 module RISCV_CORE_TEST #(
     parameter integer UID_SIZE = 5
 ) (
-    input  wire [`RST_LANE-1:0]  n_rst,
-    input  wire [`CLK_LANE-1:0]  clk,
-    input  wire                  dft_test_en,
-    input  wire                  dft_out_en,
-    input  wire [UID_SIZE-1:0]   uid,
-    input  wire                  ahb_test_1,
-    input  wire [1:0]            ahb_test_2,
-    output wire [2:0]            ahb_test_3,
-    output wire [3:0]            ahb_test_4,
-    output wire [4:0]            ahb_test_5,
-    input  wire [10:0]           apb_1,
-    input  wire [11:0]           apb_2,
-    output wire [12:0]           apb_3,
-    output wire [13:0]           apb_4,
-    output wire [14:0]           apb_5,
-    output wire [15:0]           apb_6,
-    input  wire [`DW_sig1-1:0]   test_bus_sig1_dat,
-    input  wire [`DW_sig2-1:0]   test_bus_sig2_dat,
-    input  wire [`DW_sig3-1:0]   test_bus_sig3_dat,
-    input  wire                  test_bus_sig1_ready,
-    input  wire                  test_bus_sig2_ready,
-    input  wire                  test_bus_sig3_ready,
-    output wire                  test_bus_sig1_valid,
-    output wire                  test_bus_sig2_valid,
-    output wire                  test_bus_sig3_valid,
+    input  wire [`RST_LANE-1:0]                 n_rst,
+    input  wire [`CLK_LANE-1:0]                 clk,
+    input  wire                                 dft_test_en,
+    input  wire                                 dft_out_en,
+    input  wire [UID_SIZE-1:0]                  uid,
+    input  wire                                 ahb_test_1,
+    input  wire [1:0]                           ahb_test_2,
+    output wire [2:0]                           ahb_test_3,
+    output wire [3:0]                           ahb_test_4,
+    output wire [4:0]                           ahb_test_5,
+    input  wire [10:0]                          apb_1,
+    input  wire [11:0]                          apb_2,
+    output wire [12:0]                          apb_3,
+    output wire [13:0]                          apb_4,
+    output wire [14:0]                          apb_5,
+    output wire [15:0]                          apb_6,
+    input  wire [`DW_sig1-1:0]                  test_bus_sig1_dat,
+    input  wire [`DW_sig2-1:0]                  test_bus_sig2_dat,
+    input  wire [`DW_sig3-1:0]                  test_bus_sig3_dat,
+    input  wire                                 test_bus_sig1_ready,
+    input  wire                                 test_bus_sig2_ready,
+    input  wire                                 test_bus_sig3_ready,
+    output wire                                 test_bus_sig1_valid,
+    output wire                                 test_bus_sig2_valid,
+    output wire                                 test_bus_sig3_valid,
     sky_cs_if.mst chi_if_risc,
-    output wire [`Test_size-1:0] array [`LANE_NUM-1:0]
+    output wire [`LANE_NUM-1:0][`Test_size-1:0] array
 );
 
     // Module placeholder: drive every output to zero.
@@ -64,8 +64,6 @@ module RISCV_CORE_TEST #(
     assign test_bus_sig1_valid = 1'b0;
     assign test_bus_sig2_valid = 1'b0;
     assign test_bus_sig3_valid = 1'b0;
-    for (genvar gen_zero_array = 0; gen_zero_array < `LANE_NUM; gen_zero_array = gen_zero_array + 1) begin : g_zero_array
-        assign array[gen_zero_array] = {`Test_size{1'b0}};
-    end
+    assign array = '0;
 
 endmodule

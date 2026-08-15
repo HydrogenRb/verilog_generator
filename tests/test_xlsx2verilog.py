@@ -62,7 +62,10 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(interface.interface_type, "sky_cs_if.mst")
         core_array = modules["RISCV_CORE_TEST"].port_map["array"]
         self.assertEqual(core_array.width.expression, "`Test_size")
-        self.assertEqual([item.expression for item in core_array.arrays], ["`LANE_NUM"])
+        self.assertEqual(
+            [item.expression for item in core_array.packed_dimensions], ["`LANE_NUM"]
+        )
+        self.assertEqual(core_array.arrays, ())
 
     def test_width_warning_uses_review_format(self) -> None:
         generated_reporter = generate(SAMPLE, Path("unused"), check_only=True)[1]
@@ -113,14 +116,15 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("`define DW_sig1 114", top)
             self.assertIn("sky_cs_if.mst chi_if_risc", top)
             self.assertIn(
-                "wire [`Test_size-1:0] w_array [`LANE_NUM-1:0];", top
+                "wire [`LANE_NUM-1:0][`Test_size-1:0] w_array;", top
             )
             self.assertIn(".test_bus_sig3_dat   (test_bus_sig3_dat)", top)
             self.assertIn(".chi_if_risc         (chi_if_risc)", top)
             self.assertIn(".array               (w_array)", top)
             self.assertIn(
-                "output wire [`Test_size-1:0] array [`LANE_NUM-1:0]", core
+                "output wire [`LANE_NUM-1:0][`Test_size-1:0] array", core
             )
+            self.assertIn("assign array = '0;", core)
 
             for child_name in ("RISCV_CORE_TEST", "MEM_PHY"):
                 instance_match = re.search(
@@ -370,7 +374,7 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(text, r"output wire \[13:0\]\s+calculated")
             self.assertRegex(text, r"output wire \[113:0\]\s+uncertain")
             self.assertRegex(
-                text, r"output wire \[`COLS-1:0\]\s+matrix \[`ROWS-1:0\]"
+                text, r"output wire \[`ROWS-1:0\]\[`COLS-1:0\]\s+matrix"
             )
             self.assertRegex(
                 text, r"output wire \[7:0\]\s+cube \[`A-1:0\] \[`B-1:0\]"
@@ -378,6 +382,7 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("sky_if.slv bus_if", text)
             self.assertIn("`define ROWS 2", text)
             self.assertIn("`define COLS 8", text)
+            self.assertIn("assign matrix = '0;", text)
             self.assertIn(
                 "assign cube[gen_zero_cube_0][gen_zero_cube_1] = 8'b0;", text
             )

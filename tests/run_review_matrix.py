@@ -473,7 +473,7 @@ def inspect_generated(workbook: Path, output: Path, paths: list[Path], reporter:
         for line in text.splitlines():
             regular = re.match(
                 r"^\s*(?:input|output|inout)\s+wire\s+"
-                r"(?:\[[^\]]+\]\s+)?([A-Za-z_]\w*)"
+                r"(?:\[[^\]]+\]\s*)*([A-Za-z_]\w*)"
                 r"(?:\s+\[[^\]]+\])*,?$",
                 line,
             )

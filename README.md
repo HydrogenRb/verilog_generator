@@ -36,7 +36,7 @@ python .\xlsx2verilog.py .\test.xlsx --check --strict
 | 表头 | 规则 |
 |---|---|
 | `端口名` | 合法的 Verilog 标识符；同一模块中的重复名称合并为同一个物理端口 |
-| `位宽` | 元素的 packed 位宽；支持正整数、安全整数表达式、宏（如 `` `DFT_BUS``）、parameter（如 `DATA_WIDTH`）或 interface modport（如 `sky_cs_if.mst`） |
+| `位宽` | packed 位宽；支持正整数、安全整数表达式、宏（如 `` `DFT_BUS``）、parameter（如 `DATA_WIDTH`）、带空格 ` * ` 分隔的多维 packed array，或 interface modport（如 `sky_cs_if.mst`） |
 | `数值` | 位宽宏或 parameter 的默认值；支持整数表达式；位宽为空时 `1` 表示标量 |
 | `i/o` | 支持 `i/o/io`、`input/output/inout`、`输入/输出/双向`；interface 行使用 `NA`/`N/A`/`interface` |
 | `数组`（可选） | 端口名之后的 unpacked array 深度，可用带空格的 ` * ` 表示多维；别名为 `数组维度`、`数组深度`、`array`、`depth` |
@@ -66,7 +66,7 @@ python .\xlsx2verilog.py .\test.xlsx --check --strict
 
 - 纯数字整数表达式会安全计算；支持括号、`+ - * / // % << >> & | ^`，不执行名称、函数或 Python 代码。例如 `2+3*4` 计算为 14 bit。
 - `*`前后没有空格时是算术乘法，例如 `3*100` 计算为 300。
-- `*`前后都有空格时表示维度分隔；`位宽` `A * B` 按“A 个元素，每个元素 B bit”生成 `[B-1:0] port [A-1:0]`。`数组`列中的 `A * B` 生成两个 unpacked 维度。
+- `*`前后都有空格时表示维度分隔；`位宽` `A * B` 按原顺序生成多维 packed array `[A-1:0][B-1:0] port`。`数组`列中的 `A * B` 仍生成端口名之后的两个 unpacked 维度。
 - 维度是宏/parameter 时，`数值`使用乘法表达式按位对应，如 `` `LANE_NUM * `Test_size`` 配合 `3*100`。
 
 `位宽` 描述每个元素的 packed width，`数组` 描述端口名之后的第二维 unpacked depth。例如 `DATA_WIDTH` 的数值为 `32`、`DEPTH` 的数组数值为 `4` 时生成：
@@ -106,7 +106,7 @@ input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]
 - `RISCV_TOP.v`：TOP 端口、APB 内部 wire、`RISCV_CORE_TEST` 和 `MEM_PHY` 实例；
 - `RISCV_CORE_TEST.v`、`MEM_PHY.v`：端口定义及 output 赋零。
 
-最新样例还包含 `test_bus_{{i}}_*` 的 `sig1/sig2/sig3` 展开、`sky_cs_if.mst` interface，以及 `` `LANE_NUM * `Test_size`` 数组。`DW_sig1`～`DW_sig3` 的 XLSX 默认值为不完整的 `155、…`，因此按 Tech Review 2 规则告警并使用 `114`；这些 warning 是有意保留的待确认标记。
+最新样例还包含 `test_bus_{{i}}_*` 的 `sig1/sig2/sig3` 展开、`sky_cs_if.mst` interface，以及 `` `LANE_NUM * `Test_size`` 数组；后者生成 ``[`LANE_NUM-1:0][`Test_size-1:0] array``。`DW_sig1`～`DW_sig3` 的 XLSX 默认值为不完整的 `155、…`，因此按 Tech Review 2 规则告警并使用 `114`；这些 warning 是有意保留的待确认标记。
 
 集成表中的三个 `test_bus_*_valid` 同时连接 `RISCV_CORE_TEST` 和 `MEM_PHY` 的 output，因此顶层 net 存在多驱动风险。脚本按表格生成并输出“多个子模块驱动端” warning；请在项目定义确定后修改 XLSX 方向或连接关系。
 

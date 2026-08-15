@@ -17,11 +17,11 @@
 `ifndef DW_sig3
 `define DW_sig3 114
 `endif
-`ifndef Test_size
-`define Test_size 100
-`endif
 `ifndef LANE_NUM
 `define LANE_NUM 3
+`endif
+`ifndef Test_size
+`define Test_size 100
 `endif
 `ifndef Test
 `define Test 100
@@ -63,7 +63,7 @@ module RISCV_TOP #(
     wire [13:0] w_apb_4;
     wire [14:0] w_apb_5;
     wire [15:0] w_apb_6;
-    wire [`Test_size-1:0] w_array [`LANE_NUM-1:0];
+    wire [`LANE_NUM-1:0][`Test_size-1:0] w_array;
 
     // TOP outputs without a child driver are tied to zero.
     assign ahb_test_3 = 3'b0;

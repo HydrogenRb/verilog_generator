@@ -21,7 +21,7 @@
 - PASS：{{i}} 已展开 sig3
 - PASS：DW_sig3 不确定位宽使用 114
 - PASS：interface 声明和实例连接正确
-- PASS：带空格乘号已转换为元素位宽 + unpacked 维度
+- PASS：带空格乘号已按原顺序转换为多维 packed array
 - PASS：9 个模板宏位宽均产生明确的 114 告警
 
 ## 第二轮：历史功能和 real_test 回归

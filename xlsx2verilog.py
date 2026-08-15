@@ -222,6 +222,7 @@ class Port:
     row: int
     arrays: tuple[Width, ...] = ()
     interface_type: str | None = None
+    packed_dimensions: tuple[Width, ...] = ()
 
     @property
     def array(self) -> Width | None:
@@ -234,7 +235,11 @@ class Port:
         if self.interface_type:
             base_type = self.interface_type.rsplit(".", 1)[0]
             return (f"interface:{base_type}", *(item.effective for item in self.arrays))
-        return (self.width.effective, *(item.effective for item in self.arrays))
+        return (
+            *(item.effective for item in self.packed_dimensions),
+            self.width.effective,
+            *(item.effective for item in self.arrays),
+        )
 
     @property
     def is_interface(self) -> bool:
@@ -492,7 +497,7 @@ def analyze_port_dimensions(
     reporter: Reporter,
     *,
     fallback_uncertain: bool,
-) -> tuple[Width, tuple[Width, ...]]:
+) -> tuple[Width, tuple[Width, ...], tuple[Width, ...]]:
     width_parts = split_top_level_product(raw_width, require_spaces=True)
     if len(width_parts) > 1:
         defaults = dimension_defaults(default_value, len(width_parts))
@@ -507,7 +512,8 @@ def analyze_port_dimensions(
             for index, part in enumerate(width_parts)
         ]
         width = dimensions[-1]
-        arrays = dimensions[:-1]
+        packed_dimensions = dimensions[:-1]
+        arrays: list[Width] = []
     else:
         width = analyze_width(
             raw_width,
@@ -516,6 +522,7 @@ def analyze_port_dimensions(
             reporter,
             fallback_uncertain=fallback_uncertain,
         )
+        packed_dimensions = []
         arrays = []
 
     array_parts = split_top_level_product(raw_array, require_spaces=True)
@@ -531,7 +538,7 @@ def analyze_port_dimensions(
             )
             for index, part in enumerate(array_parts)
         )
-    return width, tuple(arrays)
+    return width, tuple(packed_dimensions), tuple(arrays)
 
 
 def template_values_in_row(sheet: Sheet, row: int) -> list[str]:
@@ -674,7 +681,7 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                         f"{sheet.cell(row, columns['direction'])!r}"
                     )
                 width = Width("literal", "1", "1")
-                _, arrays = analyze_port_dimensions(
+                _, _, arrays = analyze_port_dimensions(
                     1,
                     1,
                     raw_array,
@@ -691,7 +698,7 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                         f"{sheet.cell(row, columns['direction'])!r}"
                     )
                     continue
-                width, arrays = analyze_port_dimensions(
+                width, packed_dimensions, arrays = analyze_port_dimensions(
                     raw_width,
                     raw_default,
                     raw_array,
@@ -701,10 +708,20 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     fallback_uncertain=expansion is not None,
                 )
 
-            port = Port(port_name, direction, width, row, arrays, interface_type)
+            if interface_type:
+                packed_dimensions = ()
+            port = Port(
+                port_name,
+                direction,
+                width,
+                row,
+                arrays,
+                interface_type,
+                packed_dimensions,
+            )
             seen[port_name] = port
             ports.append(port)
-            for dimension in (width, *arrays):
+            for dimension in (*packed_dimensions, width, *arrays):
                 if dimension.kind == "parameter":
                     old = parameters.setdefault(dimension.expression, dimension.default)
                     if old != dimension.default:
@@ -807,6 +824,28 @@ def width_range(width: Width, parameter_map: dict[str, str] | None = None) -> st
     return f"[{expression}-1:0]"
 
 
+def explicit_dimension_range(
+    width: Width, parameter_map: dict[str, str] | None = None
+) -> str:
+    expression = width_expression(width, parameter_map)
+    if width.kind == "literal":
+        return f"[{int(expression) - 1}:0]"
+    return f"[{expression}-1:0]"
+
+
+def packed_range(
+    packed_dimensions: tuple[Width, ...],
+    width: Width,
+    parameter_map: dict[str, str] | None = None,
+) -> str:
+    if not packed_dimensions:
+        return width_range(width, parameter_map)
+    return "".join(
+        explicit_dimension_range(item, parameter_map)
+        for item in (*packed_dimensions, width)
+    )
+
+
 def array_range(array: Width | None, parameter_map: dict[str, str] | None = None) -> str:
     if array is None:
         return ""
@@ -832,6 +871,8 @@ def zero_value(width: Width, parameter_map: dict[str, str] | None = None) -> str
 def connection_zero_value(port: Port, parameter_map: dict[str, str] | None = None) -> str:
     if port.arrays:
         return "'{default:'0}"
+    if port.packed_dimensions:
+        return "'0"
     return zero_value(port.width, parameter_map)
 
 
@@ -843,7 +884,8 @@ def append_zero_assignment(
 ) -> None:
     """Append a scalar/vector assignment or an element-wise array generate loop."""
     if not port.arrays:
-        lines.append(f"{indent}assign {port.name} = {zero_value(port.width, parameter_map)};")
+        value = "'0" if port.packed_dimensions else zero_value(port.width, parameter_map)
+        lines.append(f"{indent}assign {port.name} = {value};")
         return
     indices: list[str] = []
     current_indent = indent
@@ -858,9 +900,8 @@ def append_zero_assignment(
         )
         current_indent += "    "
     indexed_port = port.name + "".join(f"[{index}]" for index in indices)
-    lines.append(
-        f"{current_indent}assign {indexed_port} = {zero_value(port.width, parameter_map)};"
-    )
+    value = "'0" if port.packed_dimensions else zero_value(port.width, parameter_map)
+    lines.append(f"{current_indent}assign {indexed_port} = {value};")
     for _ in reversed(port.arrays):
         current_indent = current_indent[:-4]
         lines.append(f"{current_indent}end")
@@ -892,7 +933,9 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
         lines.append(f"module {module.name} (")
     regular_ports = [port for port in module.ports if not port.is_interface]
     direction_width = max((len(port.direction) for port in regular_ports), default=0)
-    packed_ranges = [width_range(port.width) for port in regular_ports]
+    packed_ranges = [
+        packed_range(port.packed_dimensions, port.width) for port in regular_ports
+    ]
     packed_width = max((len(item) for item in packed_ranges), default=0)
     for index, port in enumerate(module.ports):
         comma = "," if index < len(module.ports) - 1 else ""
@@ -901,7 +944,7 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
                 f"    {port.interface_type} {port.name}{array_ranges(port.arrays)}{comma}"
             )
             continue
-        packed = width_range(port.width)
+        packed = packed_range(port.packed_dimensions, port.width)
         packed_field = f"{packed:<{packed_width}} " if packed_width else ""
         lines.append(
             f"    {port.direction:<{direction_width}} wire {packed_field}"
@@ -947,6 +990,7 @@ class Wire:
     arrays: tuple[Width, ...]
     parameter_map: dict[str, str]
     interface_type: str | None = None
+    packed_dimensions: tuple[Width, ...] = ()
 
 
 def render_integration(
@@ -1233,13 +1277,16 @@ def render_integration(
                 signal_name = unique_name(f"w_{signal_base}", used_signals)
                 wires.append(
                     Wire(
-                        signal_name,
-                        source_port.width,
-                        source_port.arrays,
-                        parameter_maps.get(block.module_name, {}),
-                        source_port.interface_type.rsplit(".", 1)[0]
-                        if source_port.interface_type
-                        else None,
+                        name=signal_name,
+                        width=source_port.width,
+                        arrays=source_port.arrays,
+                        parameter_map=parameter_maps.get(block.module_name, {}),
+                        interface_type=(
+                            source_port.interface_type.rsplit(".", 1)[0]
+                            if source_port.interface_type
+                            else None
+                        ),
+                        packed_dimensions=source_port.packed_dimensions,
                     )
                 )
                 for item_block, port in entries:
@@ -1278,7 +1325,9 @@ def render_integration(
                     f"    {wire.interface_type} {wire.name}{array_ranges(wire.arrays, wire.parameter_map)}();"
                 )
                 continue
-            packed = width_range(wire.width, wire.parameter_map)
+            packed = packed_range(
+                wire.packed_dimensions, wire.width, wire.parameter_map
+            )
             packed_prefix = f"{packed} " if packed else ""
             lines.append(
                 f"    wire {packed_prefix}{wire.name}"

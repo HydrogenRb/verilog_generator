@@ -75,10 +75,10 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
         "interface 声明或连接缺失",
     )
     result.check(
-        "wire [`Test_size-1:0] w_array [`LANE_NUM-1:0];" in top
-        and "output wire [`Test_size-1:0] array [`LANE_NUM-1:0]" in core,
-        "带空格乘号已转换为元素位宽 + unpacked 维度",
-        "多维数组声明不符合预期",
+        "wire [`LANE_NUM-1:0][`Test_size-1:0] w_array;" in top
+        and "output wire [`LANE_NUM-1:0][`Test_size-1:0] array" in core,
+        "带空格乘号已按原顺序转换为多维 packed array",
+        "多维 packed array 声明不符合预期",
     )
     fallback_warnings = [
         item for item in reporter.items if item.level == "警告" and "占位值 114" in item.message
