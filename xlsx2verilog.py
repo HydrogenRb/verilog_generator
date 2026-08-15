@@ -30,6 +30,7 @@ TEMPLATE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 MISSING_TEMPLATE_OPEN_RE = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 MISSING_TEMPLATE_CLOSE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})")
 UNKNOWN_WIDTH = 114
+IGNORED_COLUMN_HEADERS = {"修改", "修改列"}
 
 
 def local_name(tag: str) -> str:
@@ -203,6 +204,48 @@ class XlsxReader:
             cells[(row, column)] = value
             max_row = max(max_row, row)
             max_column = max(max_column, column)
+
+        # A production workbook may carry a manual-review column named
+        # “修改”. Remove it from the logical sheet at the reader boundary so
+        # no downstream parser can accidentally treat its contents as a
+        # header, template note, category, port, direction, or connection.
+        header_rows: set[int] = set()
+        for row in range(1, min(max_row, 20) + 1):
+            headers = {
+                clean(cells.get((row, column))).lower().replace(" ", "")
+                for column in range(1, max_column + 1)
+            }
+            has_port_header = headers.intersection(
+                {"端口名", "port", "portname", "port_name"}
+            )
+            has_direction_header = headers.intersection(
+                {"i/o", "io", "方向", "direction", "dir"}
+            )
+            if has_port_header and has_direction_header:
+                header_rows.add(row)
+        ignored_columns = {
+            column
+            for row in header_rows
+            for column in range(1, max_column + 1)
+            if clean(cells.get((row, column))).lower().replace(" ", "")
+            in IGNORED_COLUMN_HEADERS
+        }
+        if ignored_columns:
+            retained_columns = [
+                column
+                for column in range(1, max_column + 1)
+                if column not in ignored_columns
+            ]
+            logical_column = {
+                physical: index
+                for index, physical in enumerate(retained_columns, start=1)
+            }
+            cells = {
+                (row, logical_column[column]): value
+                for (row, column), value in cells.items()
+                if column in logical_column
+            }
+            max_column = len(retained_columns)
         return Sheet(name=name, cells=cells, max_row=max_row, max_column=max_column)
 
 
@@ -1312,10 +1355,10 @@ def render_integration(
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: TOP 输入 {top_port.name} 与子模块输出 {block.module_name}.{child_port.name} 方向冲突"
                     )
-                if top_port.direction == "output" and child_port.direction == "input":
-                    reporter.error(
-                        f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 {top_port.name} 不能作为子模块输入的驱动"
-                    )
+                # A TOP output may intentionally fan out to child inputs. If
+                # no child output/inout drives it, the undriven-output pass
+                # below creates the TOP signal, ties it to zero, and the same
+                # signal then drives every connected child input.
                 if top_port.shape != child_port.shape:
                     reporter.warning(
                         f"{top.name}.{top_port.name}信号和{block.module_name}.{child_port.name}信号应该连接，但是其位宽不匹配"

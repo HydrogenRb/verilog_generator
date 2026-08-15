@@ -510,6 +510,89 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(any("展开数量不一致" in item.message for item in reporter.items))
             self.assertFalse(any("方向冲突" in item.message for item in reporter.items))
 
+    def test_top_output_drives_child_input_and_change_columns_are_ignored(self) -> None:
+        def module_rows(name: str, signal_direction: str) -> list[list[object]]:
+            rows: list[list[object]] = []
+            set_cell(rows, 1, 2, name)
+            for column, header in enumerate(
+                ("分类", "端口名", "位宽", "修改", "数值", "i/o"), start=1
+            ):
+                set_cell(rows, 2, column, header)
+            set_cell(rows, 3, 1, "plain")
+            set_cell(rows, 3, 2, "signal_a")
+            set_cell(rows, 3, 3, 1)
+            set_cell(rows, 3, 4, "这列里的内容必须完全无效")
+            set_cell(rows, 3, 6, signal_direction)
+            set_cell(rows, 4, 1, "template")
+            set_cell(rows, 4, 2, "bus_{{i}}")
+            set_cell(rows, 4, 3, 1)
+            set_cell(rows, 4, 4, "i是{wrong1,wrong2,wrong3}")
+            set_cell(rows, 4, 6, "i")
+            set_cell(rows, 4, 7, "i是{a,b}")
+            return rows
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "ignored-change-column.xlsx"
+            output = root / "generated"
+            integration_rows: list[list[object]] = []
+            set_cell(integration_rows, 1, 2, "TOP")
+            set_cell(integration_rows, 1, 5, "CHILD")
+            for column, value in (
+                (2, "端口名"),
+                (3, "修改"),
+                (4, "i/o"),
+                (5, "端口名"),
+                (6, "修改列"),
+                (7, "i/o"),
+            ):
+                set_cell(integration_rows, 2, column, value)
+            for row, port, top_direction, child_direction in (
+                (3, "signal_a", "o", "i"),
+                (4, "bus_{{i}}", "i", "i"),
+            ):
+                set_cell(integration_rows, row, 2, port)
+                set_cell(integration_rows, row, 3, "fake_top_port")
+                set_cell(integration_rows, row, 4, top_direction)
+                set_cell(integration_rows, row, 5, port)
+                set_cell(integration_rows, row, 6, "fake_child_port")
+                set_cell(integration_rows, row, 7, child_direction)
+            write_xlsx(
+                workbook,
+                [
+                    ("Integration", integration_rows),
+                    ("TOP", module_rows("TOP", "o")),
+                    ("CHILD", module_rows("CHILD", "i")),
+                ],
+            )
+
+            parsed = XlsxReader().read(workbook)
+            integration = parsed.by_name("Integration")
+            assert integration is not None
+            self.assertEqual(integration.cell(2, 3), "i/o")
+            self.assertNotIn(
+                "修改",
+                [
+                    integration.cell(row, column)
+                    for row in range(1, integration.max_row + 1)
+                    for column in range(1, integration.max_column + 1)
+                ],
+            )
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual({path.name for path in paths}, {"TOP.v", "CHILD.v"})
+            text = (output / "TOP.v").read_text(encoding="utf-8")
+            self.assertIn("assign signal_a = 1'b0;", text)
+            self.assertRegex(text, r"(?m)^\s*\.signal_a\s+\(signal_a\),$")
+            self.assertIn("bus_a", text)
+            self.assertIn("bus_b", text)
+            self.assertNotIn("wrong1", text)
+            self.assertNotIn("fake_top_port", text)
+            self.assertFalse(
+                any("TOP 输出" in item.message for item in reporter.items)
+            )
+
     def test_integer_expression_evaluator_is_safe(self) -> None:
         self.assertEqual(evaluate_int_expression("2 + 3 * 4"), 14)
         self.assertEqual(evaluate_int_expression("(24 / 3) << 1"), 16)
