@@ -7,13 +7,13 @@ module TOP_WIDTH (
     wire [7:0] w_payload;
 
     WIDTH_SRC u_width_src (
-        .clk(clk),
-        .payload(w_payload)
+        .clk     (clk),
+        .payload (w_payload)
     );
 
     WIDTH_DST u_width_dst (
-        .clk(clk),
-        .payload(w_payload)
+        .clk     (clk),
+        .payload (w_payload)
     );
 
 endmodule

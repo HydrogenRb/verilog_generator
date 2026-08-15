@@ -143,25 +143,40 @@ def set_cell(rows: list[list[Any]], row: int, column: int, value: Any) -> None:
 
 def module_sheet(
     name: str,
-    ports: list[tuple[str, Any, Any, str]],
+    ports: list[tuple[Any, ...]],
     *,
     header_row: int = 2,
     port_column: int = 2,
 ) -> list[list[Any]]:
     rows: list[list[Any]] = []
+    has_arrays = any(len(port) == 6 for port in ports)
     set_cell(rows, header_row - 1, port_column, name)
     set_cell(rows, header_row, port_column - 1, "分类")
     set_cell(rows, header_row, port_column, "端口名")
     set_cell(rows, header_row, port_column + 1, "位宽")
     set_cell(rows, header_row, port_column + 2, "数值")
-    set_cell(rows, header_row, port_column + 3, "i/o")
-    for offset, (port_name, width, value, direction) in enumerate(ports, start=1):
+    if has_arrays:
+        set_cell(rows, header_row, port_column + 3, "数组")
+        set_cell(rows, header_row, port_column + 4, "数组数值")
+    direction_column = port_column + (5 if has_arrays else 3)
+    set_cell(rows, header_row, direction_column, "i/o")
+    for offset, port in enumerate(ports, start=1):
+        if len(port) == 4:
+            port_name, width, value, direction = port
+            array = array_value = None
+        elif len(port) == 6:
+            port_name, width, value, direction, array, array_value = port
+        else:
+            raise ValueError("port rows must contain 4 fields, or 6 fields with array metadata")
         row = header_row + offset
         set_cell(rows, row, port_column - 1, "test")
         set_cell(rows, row, port_column, port_name)
         set_cell(rows, row, port_column + 1, width)
         set_cell(rows, row, port_column + 2, value)
-        set_cell(rows, row, port_column + 3, direction)
+        if has_arrays:
+            set_cell(rows, row, port_column + 3, array)
+            set_cell(rows, row, port_column + 4, array_value)
+        set_cell(rows, row, direction_column, direction)
     return rows
 
 
@@ -455,7 +470,8 @@ def inspect_generated(workbook: Path, output: Path, paths: list[Path], reporter:
         if text.count("endmodule") != 1 or text.count("(") != text.count(")"):
             problems.append(f"{path.name}: 基础结构或括号不平衡")
         declarations = re.findall(
-            r"(?m)^\s*(?:input|output|inout)\s+wire\s+(?:\[[^\]]+\]\s+)?([A-Za-z_]\w*)[,]?$",
+            r"(?m)^\s*(?:input|output|inout)\s+wire\s+(?:\[[^\]]+\]\s+)?"
+            r"([A-Za-z_]\w*)(?:\s+\[[^\]]+\])?[,]?$",
             text,
         )
         expected_ports = [port.name for port in module.ports]
@@ -468,13 +484,16 @@ def inspect_generated(workbook: Path, output: Path, paths: list[Path], reporter:
             else:
                 body = instance.group(1)
                 for port in module.ports:
-                    if body.count(f".{port.name}(") != 1:
+                    if len(re.findall(rf"\.{re.escape(port.name)}\s+\(", body)) != 1:
                         problems.append(
                             f"{integration.top_name}.v: {module.name}.{port.name} 连接数量不是 1"
                         )
             for port in module.ports:
+                assigned_name = (
+                    rf"{re.escape(port.name)}\s*\[" if port.array else rf"{re.escape(port.name)}\s*="
+                )
                 if port.direction == "output" and not re.search(
-                    rf"(?m)^\s*assign\s+{re.escape(port.name)}\s*=", text
+                    rf"(?m)^\s*assign\s+{assigned_name}", text
                 ):
                     problems.append(f"{path.name}: output {port.name} 未赋零")
     if reporter.has_errors:
@@ -493,21 +512,21 @@ class ReviewResult:
 
 EXPECTED_SNIPPETS: dict[str, list[tuple[str, str]]] = {
     "01_basic": [
-        ("TOP_BASIC.v", ".done(done)"),
-        ("TOP_BASIC.v", ".spare(1'b0)"),
-        ("TOP_BASIC.v", ".debug()"),
+        ("TOP_BASIC.v", ".done  (done)"),
+        ("TOP_BASIC.v", ".spare (1'b0)"),
+        ("TOP_BASIC.v", ".debug ()"),
     ],
     "02_parameter_macro_shifted": [
         ("TOP_PARAM.v", "`define RST_LANE 1"),
         ("TOP_PARAM.v", "parameter integer WIDTH = 8"),
         ("TOP_PARAM.v", "wire [WIDTH-1:0] w_bus;"),
-        ("TOP_PARAM.v", ".WIDTH(WIDTH)"),
+        ("TOP_PARAM.v", ".WIDTH (WIDTH)"),
     ],
     "03_duplicate_port_rows": [
-        ("TOP_DUP.v", "input wire [1:0] aaa"),
-        ("TOP_DUP.v", ".aaa(2'b0)"),
+        ("TOP_DUP.v", "input  wire [1:0] aaa"),
+        ("TOP_DUP.v", ".aaa    (2'b0)"),
     ],
-    "05_unused_inout": [("TOP_IO.v", ".pad()")],
+    "05_unused_inout": [("TOP_IO.v", ".pad ()")],
     "06_width_mismatch": [("TOP_WIDTH.v", "wire [7:0] w_payload;")],
 }
 

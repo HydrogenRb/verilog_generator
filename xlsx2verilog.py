@@ -13,7 +13,7 @@ import sys
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, TextIO
 from xml.etree import ElementTree as ET
 
 
@@ -236,6 +236,12 @@ class Port:
     direction: str
     width: Width
     row: int
+    array: Width | None = None
+
+    @property
+    def shape(self) -> tuple[str, str | None]:
+        """Default element width and optional unpacked-array depth."""
+        return self.width.effective, self.array.effective if self.array else None
 
 
 @dataclass
@@ -313,6 +319,15 @@ def find_module_header(sheet: Sheet) -> tuple[int, dict[str, int]] | None:
         "port": {"端口名", "port", "portname", "port_name"},
         "width": {"位宽", "width"},
         "value": {"数值", "value", "default", "默认值"},
+        "array": {"数组", "数组维度", "数组深度", "array", "depth"},
+        "array_value": {
+            "数组数值",
+            "数组默认值",
+            "arrayvalue",
+            "array_default",
+            "depthdefault",
+            "depth_default",
+        },
         "direction": {"i/o", "io", "方向", "direction", "dir"},
     }
     for row in range(1, min(sheet.max_row, 20) + 1):
@@ -374,22 +389,35 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             context,
             reporter,
         )
-        port = Port(port_name, direction, width, row)
+        array: Width | None = None
+        if "array" in columns:
+            raw_array = sheet.cell(row, columns["array"])
+            if raw_array is not None and clean(raw_array):
+                array_default = (
+                    sheet.cell(row, columns["array_value"])
+                    if "array_value" in columns
+                    else None
+                )
+                array = analyze_width(raw_array, array_default, f"{context} 数组维度", reporter)
+        port = Port(port_name, direction, width, row, array)
         seen[port_name] = port
         ports.append(port)
-        if width.kind == "parameter":
-            old = parameters.setdefault(width.expression, width.default)
-            if old != width.default:
-                reporter.error(
-                    f"页签 {sheet.name}: parameter {width.expression} 默认值冲突 ({old}/{width.default})"
-                )
-        elif width.kind == "macro":
-            macro_name = width.expression[1:]
-            old = macros.setdefault(macro_name, width.default)
-            if old != width.default:
-                reporter.error(
-                    f"页签 {sheet.name}: 宏 `{macro_name} 默认值冲突 ({old}/{width.default})"
-                )
+        for dimension in (width, array):
+            if dimension is None:
+                continue
+            if dimension.kind == "parameter":
+                old = parameters.setdefault(dimension.expression, dimension.default)
+                if old != dimension.default:
+                    reporter.error(
+                        f"页签 {sheet.name}: parameter {dimension.expression} 默认值冲突 ({old}/{dimension.default})"
+                    )
+            elif dimension.kind == "macro":
+                macro_name = dimension.expression[1:]
+                old = macros.setdefault(macro_name, dimension.default)
+                if old != dimension.default:
+                    reporter.error(
+                        f"页签 {sheet.name}: 宏 `{macro_name} 默认值冲突 ({old}/{dimension.default})"
+                    )
     if not ports:
         reporter.error(f"页签 {sheet.name}: 没有可生成的端口")
     return Module(module_name, sheet.name, ports, parameters, macros)
@@ -475,8 +503,17 @@ def width_range(width: Width, parameter_map: dict[str, str] | None = None) -> st
     if width.kind == "literal" and expression == "1":
         return ""
     if width.kind == "literal":
-        return f"[{int(expression) - 1}:0] "
-    return f"[{expression}-1:0] "
+        return f"[{int(expression) - 1}:0]"
+    return f"[{expression}-1:0]"
+
+
+def array_range(array: Width | None, parameter_map: dict[str, str] | None = None) -> str:
+    if array is None:
+        return ""
+    expression = width_expression(array, parameter_map)
+    if array.kind == "literal":
+        return f" [{int(expression) - 1}:0]"
+    return f" [{expression}-1:0]"
 
 
 def zero_value(width: Width, parameter_map: dict[str, str] | None = None) -> str:
@@ -484,6 +521,34 @@ def zero_value(width: Width, parameter_map: dict[str, str] | None = None) -> str
     if width.kind == "literal":
         return f"{expression}'b0"
     return f"{{{expression}{{1'b0}}}}"
+
+
+def connection_zero_value(port: Port, parameter_map: dict[str, str] | None = None) -> str:
+    if port.array is not None:
+        return "'{default:'0}"
+    return zero_value(port.width, parameter_map)
+
+
+def append_zero_assignment(
+    lines: list[str],
+    port: Port,
+    parameter_map: dict[str, str] | None = None,
+    indent: str = "    ",
+) -> None:
+    """Append a scalar/vector assignment or an element-wise array generate loop."""
+    if port.array is None:
+        lines.append(f"{indent}assign {port.name} = {zero_value(port.width, parameter_map)};")
+        return
+    index = safe_name(f"gen_zero_{port.name}")
+    depth = width_expression(port.array, parameter_map)
+    lines.append(
+        f"{indent}for (genvar {index} = 0; {index} < {depth}; "
+        f"{index} = {index} + 1) begin : g_zero_{safe_name(port.name)}"
+    )
+    lines.append(
+        f"{indent}    assign {port.name}[{index}] = {zero_value(port.width, parameter_map)};"
+    )
+    lines.append(f"{indent}end")
 
 
 def render_macros(macros: dict[str, str]) -> list[str]:
@@ -501,16 +566,25 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
     if module.parameters:
         lines.append(f"module {module.name} #(")
         parameter_items = list(module.parameters.items())
+        parameter_name_width = max(len(name) for name, _ in parameter_items)
         for index, (name, value) in enumerate(parameter_items):
             comma = "," if index < len(parameter_items) - 1 else ""
-            lines.append(f"    parameter integer {name} = {value}{comma}")
+            lines.append(
+                f"    parameter integer {name:<{parameter_name_width}} = {value}{comma}"
+            )
         lines.append(") (")
     else:
         lines.append(f"module {module.name} (")
+    direction_width = max(len(port.direction) for port in module.ports)
+    packed_ranges = [width_range(port.width) for port in module.ports]
+    packed_width = max((len(item) for item in packed_ranges), default=0)
     for index, port in enumerate(module.ports):
         comma = "," if index < len(module.ports) - 1 else ""
+        packed = width_range(port.width)
+        packed_field = f"{packed:<{packed_width}} " if packed_width else ""
         lines.append(
-            f"    {port.direction} wire {width_range(port.width)}{port.name}{comma}"
+            f"    {port.direction:<{direction_width}} wire {packed_field}"
+            f"{port.name}{array_range(port.array)}{comma}"
         )
     lines.append(");")
     return lines
@@ -523,7 +597,7 @@ def render_stub(module: Module) -> str:
         lines.append("")
         lines.append("    // Module placeholder: drive every output to zero.")
         for port in output_ports:
-            lines.append(f"    assign {port.name} = {zero_value(port.width)};")
+            append_zero_assignment(lines, port)
     lines.extend(["", "endmodule", ""])
     return "\n".join(lines)
 
@@ -549,6 +623,7 @@ def unique_name(base: str, used: set[str]) -> str:
 class Wire:
     name: str
     width: Width
+    array: Width | None
     parameter_map: dict[str, str]
 
 
@@ -649,7 +724,9 @@ def render_integration(
                 if child_port:
                     validate_sheet_direction(block, child_port, row)
                     expression = (
-                        zero_value(child_port.width, parameter_maps.get(block.module_name))
+                        connection_zero_value(
+                            child_port, parameter_maps.get(block.module_name)
+                        )
                         if child_port.direction == "input"
                         else None
                     )
@@ -672,7 +749,7 @@ def render_integration(
                 reporter.error(
                     f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 {top_port.name} 不能作为子模块输入的驱动"
                 )
-            if top_port.width.effective != child_port.width.effective:
+            if top_port.shape != child_port.shape:
                 reporter.warning(
                     f"{top.name}.{top_port.name}信号和{block.module_name}.{child_port.name}信号应该连接，但是其位宽不匹配"
                 )
@@ -694,7 +771,7 @@ def render_integration(
                 if block.module_name == top.name:
                     continue
                 expression = (
-                    zero_value(port.width, parameter_maps.get(block.module_name))
+                    connection_zero_value(port, parameter_maps.get(block.module_name))
                     if port.direction == "input"
                     else None
                 )
@@ -720,7 +797,7 @@ def render_integration(
                 )
                 if block.module_name != top.name:
                     expression = (
-                        zero_value(port.width, parameter_maps.get(block.module_name))
+                        connection_zero_value(port, parameter_maps.get(block.module_name))
                         if port.direction == "input"
                         else None
                     )
@@ -741,9 +818,9 @@ def render_integration(
                 width_source = drivers[0]
             block, source_port = width_source
             source_block, source_port_for_warning = width_source
-            source_width = source_port_for_warning.width.effective
+            source_shape = source_port_for_warning.shape
             for item_block, port in entries:
-                if (item_block, port) == width_source or port.width.effective == source_width:
+                if (item_block, port) == width_source or port.shape == source_shape:
                     continue
                 reporter.warning(
                     f"{source_block.module_name}.{source_port_for_warning.name}信号和{item_block.module_name}.{port.name}信号应该连接，但是其位宽不匹配"
@@ -754,7 +831,12 @@ def render_integration(
             )
             signal_name = unique_name(f"w_{signal_base}", used_signals)
             wires.append(
-                Wire(signal_name, source_port.width, parameter_maps.get(block.module_name, {}))
+                Wire(
+                    signal_name,
+                    source_port.width,
+                    source_port.array,
+                    parameter_maps.get(block.module_name, {}),
+                )
             )
             for item_block, port in entries:
                 if item_block.module_name == top.name:
@@ -772,7 +854,7 @@ def render_integration(
                     f"集成页签 {sheet.name}: 未列出 {child.name}.{port.name}，自动按未连接端口处理"
                 )
                 bindings[child.name][port.name] = (
-                    zero_value(port.width, parameter_maps[child.name])
+                    connection_zero_value(port, parameter_maps[child.name])
                     if port.direction == "input"
                     else None
                 )
@@ -787,7 +869,12 @@ def render_integration(
         lines.append("")
         lines.append("    // Internal child-to-child connections.")
         for wire in wires:
-            lines.append(f"    wire {width_range(wire.width, wire.parameter_map)}{wire.name};")
+            packed = width_range(wire.width, wire.parameter_map)
+            packed_prefix = f"{packed} " if packed else ""
+            lines.append(
+                f"    wire {packed_prefix}{wire.name}"
+                f"{array_range(wire.array, wire.parameter_map)};"
+            )
 
     undriven_outputs = [
         port for port in top.ports if port.direction == "output" and port.name not in top_driven_outputs
@@ -796,7 +883,7 @@ def render_integration(
         lines.append("")
         lines.append("    // TOP outputs without a child driver are tied to zero.")
         for port in undriven_outputs:
-            lines.append(f"    assign {port.name} = {zero_value(port.width)};")
+            append_zero_assignment(lines, port)
 
     for child in children:
         lines.append("")
@@ -804,17 +891,21 @@ def render_integration(
         if child.parameters:
             lines.append(f"    {child.name} #(")
             items = list(child.parameters)
+            parameter_name_width = max(len(name) for name in items)
             for index, name in enumerate(items):
                 comma = "," if index < len(items) - 1 else ""
-                lines.append(f"        .{name}({parameter_map[name]}){comma}")
+                lines.append(
+                    f"        .{name:<{parameter_name_width}} ({parameter_map[name]}){comma}"
+                )
             lines.append(f"    ) u_{child.name.lower()} (")
         else:
             lines.append(f"    {child.name} u_{child.name.lower()} (")
+        port_name_width = max(len(port.name) for port in child.ports)
         for index, port in enumerate(child.ports):
             comma = "," if index < len(child.ports) - 1 else ""
             expression = bindings[child.name].get(port.name)
             rendered = "" if expression is None else expression
-            lines.append(f"        .{port.name}({rendered}){comma}")
+            lines.append(f"        .{port.name:<{port_name_width}} ({rendered}){comma}")
         lines.append("    );")
     lines.extend(["", "endmodule", ""])
     return "\n".join(lines)
@@ -861,26 +952,136 @@ def generate(
     return paths, reporter
 
 
-def choose_workbook() -> Path:
+def discover_workbooks() -> list[Path]:
     # Excel creates lock files such as "~$test.xlsx" while a workbook is open;
     # those are not valid workbooks and must not appear in the selection menu.
-    candidates = sorted(
+    return sorted(
         path for path in Path.cwd().glob("*.xlsx") if not path.name.startswith("~$")
     )
+
+
+def read_terminal_key() -> str:
+    """Read one logical key without third-party packages."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        character = msvcrt.getwch()
+        if character in {"\x00", "\xe0"}:
+            return {"H": "up", "P": "down"}.get(msvcrt.getwch(), "other")
+        if character == "\r":
+            return "enter"
+        if character == "\x1b":
+            return "escape"
+        if character == "\x03":
+            raise KeyboardInterrupt
+        return character.lower()
+
+    import select
+    import termios
+    import tty
+
+    descriptor = sys.stdin.fileno()
+    previous = termios.tcgetattr(descriptor)
+    try:
+        tty.setraw(descriptor)
+        character = sys.stdin.read(1)
+        if character == "\x1b":
+            sequence = ""
+            while len(sequence) < 2 and select.select([sys.stdin], [], [], 0.03)[0]:
+                sequence += sys.stdin.read(1)
+            return {"[A": "up", "[B": "down"}.get(sequence, "escape")
+        if character in {"\r", "\n"}:
+            return "enter"
+        if character == "\x03":
+            raise KeyboardInterrupt
+        return character.lower()
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
+
+
+def arrow_menu(
+    title: str,
+    options: list[str],
+    *,
+    key_reader: Callable[[], str] | None = None,
+    output: TextIO | None = None,
+) -> int | None:
+    """Return the selected option index using Up/Down and Enter; Esc/Q cancels."""
+    if not options:
+        return None
+    read_key = key_reader or read_terminal_key
+    stream = output or sys.stdout
+    selected = 0
+    stream.write(f"{title}\n")
+    first_draw = True
+    while True:
+        if not first_draw:
+            stream.write(f"\x1b[{len(options)}A")
+        for index, option in enumerate(options):
+            marker = ">" if index == selected else " "
+            stream.write(f"\x1b[2K\r {marker} {option}\n")
+        stream.flush()
+        first_draw = False
+        key = read_key()
+        if key == "up":
+            selected = (selected - 1) % len(options)
+        elif key == "down":
+            selected = (selected + 1) % len(options)
+        elif key == "enter":
+            stream.write("\n")
+            stream.flush()
+            return selected
+        elif key in {"escape", "q"}:
+            stream.write("\n")
+            stream.flush()
+            return None
+        elif key.isdigit() and 1 <= int(key) <= len(options):
+            stream.write("\n")
+            stream.flush()
+            return int(key) - 1
+
+
+class MenuCancelled(ValueError):
+    """Raised when the user backs out of an interactive selection."""
+
+
+def choose_workbook() -> Path:
+    candidates = discover_workbooks()
     if not candidates:
         raise ValueError("当前目录没有 .xlsx 文件，请在命令行指定工作簿路径")
     if len(candidates) == 1 or not sys.stdin.isatty():
         if len(candidates) > 1 and not sys.stdin.isatty():
             raise ValueError("当前目录有多个 .xlsx 文件，请在命令行指定其中一个")
         return candidates[0]
-    print("请选择要生成的工作簿：")
-    for index, path in enumerate(candidates, start=1):
-        print(f"  [{index}] {path.name}")
+    selected = arrow_menu("请选择工作簿（↑/↓，Enter 确认，Esc 返回）：", [p.name for p in candidates])
+    if selected is None:
+        raise MenuCancelled("已取消选择工作簿")
+    return candidates[selected]
+
+
+def interactive_main() -> int:
+    actions = ["生成 Verilog", "查看识别结果", "校验工作簿", "严格校验", "退出"]
     while True:
-        response = input(f"输入序号 (1-{len(candidates)}): ").strip()
-        if response.isdigit() and 1 <= int(response) <= len(candidates):
-            return candidates[int(response) - 1]
-        print("输入无效，请重试。")
+        selected = arrow_menu("XLSX → Verilog（↑/↓，Enter 确认）：", actions)
+        if selected is None or selected == 4:
+            print("已退出。")
+            return 0
+        try:
+            workbook = choose_workbook()
+        except MenuCancelled:
+            continue
+        except ValueError as exc:
+            print(f"错误: {exc}", file=sys.stderr)
+            return 2
+        if selected == 0:
+            response = input("输出目录 [generated]: ").strip()
+            output = response or "generated"
+            return main([str(workbook), "--output", output])
+        if selected == 1:
+            return main([str(workbook), "--list"])
+        if selected == 2:
+            return main([str(workbook), "--check"])
+        return main([str(workbook), "--check", "--strict"])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -896,7 +1097,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw_arguments = list(argv) if argv is not None else sys.argv[1:]
+    if argv is None and not raw_arguments and sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            return interactive_main()
+        except KeyboardInterrupt:
+            print("\n已取消。")
+            return 130
+    args = build_parser().parse_args(raw_arguments)
     try:
         workbook_path = args.workbook or choose_workbook()
         if not workbook_path.is_file():

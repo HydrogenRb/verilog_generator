@@ -6,27 +6,27 @@
 module TOP_PARAM #(
     parameter integer WIDTH = 8
 ) (
-    input wire [`RST_LANE-1:0] n_rst,
-    output wire [WIDTH-1:0] result
+    input  wire [`RST_LANE-1:0] n_rst,
+    output wire [WIDTH-1:0]     result
 );
 
     // Internal child-to-child connections.
     wire [WIDTH-1:0] w_bus;
 
     PRODUCER #(
-        .WIDTH(WIDTH)
+        .WIDTH (WIDTH)
     ) u_producer (
-        .n_rst(n_rst),
-        .bus(w_bus),
-        .debug()
+        .n_rst (n_rst),
+        .bus   (w_bus),
+        .debug ()
     );
 
     CONSUMER #(
-        .WIDTH(WIDTH)
+        .WIDTH (WIDTH)
     ) u_consumer (
-        .n_rst(n_rst),
-        .bus(w_bus),
-        .result(result)
+        .n_rst  (n_rst),
+        .bus    (w_bus),
+        .result (result)
     );
 
 endmodule

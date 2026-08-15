@@ -4,8 +4,8 @@ module TOP_IO (
 );
 
     IO_CHILD u_io_child (
-        .clk(clk),
-        .pad()
+        .clk (clk),
+        .pad ()
     );
 
 endmodule

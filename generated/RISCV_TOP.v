@@ -12,20 +12,20 @@
 module RISCV_TOP #(
     parameter integer UID_SIZE = 5
 ) (
-    input wire [`RST_LANE-1:0] n_rst,
-    input wire [`CLK_LANE-1:0] clk,
-    input wire [`DFT_BUS-1:0] dft_bus,
-    input wire [`DFT_BUS-1:0] dft_addr,
-    input wire dft_test_en,
-    input wire dft_out_en,
-    input wire dft_rd,
-    input wire [UID_SIZE-1:0] uid,
-    input wire ahb_test_1,
-    input wire [1:0] ahb_test_2,
-    output wire [2:0] ahb_test_3,
-    output wire [3:0] ahb_test_4,
-    output wire [4:0] ahb_test_5,
-    output wire [5:0] ahb_test_6
+    input  wire [`RST_LANE-1:0] n_rst,
+    input  wire [`CLK_LANE-1:0] clk,
+    input  wire [`DFT_BUS-1:0]  dft_bus,
+    input  wire [`DFT_BUS-1:0]  dft_addr,
+    input  wire                 dft_test_en,
+    input  wire                 dft_out_en,
+    input  wire                 dft_rd,
+    input  wire [UID_SIZE-1:0]  uid,
+    input  wire                 ahb_test_1,
+    input  wire [1:0]           ahb_test_2,
+    output wire [2:0]           ahb_test_3,
+    output wire [3:0]           ahb_test_4,
+    output wire [4:0]           ahb_test_5,
+    output wire [5:0]           ahb_test_6
 );
 
     // Internal child-to-child connections.
@@ -43,47 +43,47 @@ module RISCV_TOP #(
     assign ahb_test_6 = 6'b0;
 
     RISCV_CORE_TEST #(
-        .UID_SIZE(UID_SIZE)
+        .UID_SIZE (UID_SIZE)
     ) u_riscv_core_test (
-        .n_rst(n_rst),
-        .clk(clk),
-        .dft_test_en(dft_test_en),
-        .dft_out_en(dft_out_en),
-        .uid(uid),
-        .ahb_test_1(1'b0),
-        .ahb_test_2(2'b0),
-        .ahb_test_3(),
-        .ahb_test_4(),
-        .ahb_test_5(),
-        .apb_1(w_apb_1),
-        .apb_2(w_apb_2),
-        .apb_3(w_apb_3),
-        .apb_4(w_apb_4),
-        .apb_5(w_apb_5),
-        .apb_6(w_apb_6)
+        .n_rst       (n_rst),
+        .clk         (clk),
+        .dft_test_en (dft_test_en),
+        .dft_out_en  (dft_out_en),
+        .uid         (uid),
+        .ahb_test_1  (1'b0),
+        .ahb_test_2  (2'b0),
+        .ahb_test_3  (),
+        .ahb_test_4  (),
+        .ahb_test_5  (),
+        .apb_1       (w_apb_1),
+        .apb_2       (w_apb_2),
+        .apb_3       (w_apb_3),
+        .apb_4       (w_apb_4),
+        .apb_5       (w_apb_5),
+        .apb_6       (w_apb_6)
     );
 
     MEM_PHY #(
-        .UID_SIZE(UID_SIZE)
+        .UID_SIZE (UID_SIZE)
     ) u_mem_phy (
-        .n_rst(n_rst),
-        .clk(clk),
-        .dft_bus(dft_bus),
-        .dft_addr(dft_addr),
-        .dft_test_en(dft_test_en),
-        .dft_out_en(dft_out_en),
-        .uid(uid),
-        .apb_1(w_apb_1),
-        .apb_2(w_apb_2),
-        .apb_3(w_apb_3),
-        .apb_4(w_apb_4),
-        .apb_5(w_apb_5),
-        .apb_6(w_apb_6),
-        .ahb_test_1(1'b0),
-        .ahb_test_2(2'b0),
-        .ahb_test_3(),
-        .ahb_test_4(),
-        .ahb_test_5()
+        .n_rst       (n_rst),
+        .clk         (clk),
+        .dft_bus     (dft_bus),
+        .dft_addr    (dft_addr),
+        .dft_test_en (dft_test_en),
+        .dft_out_en  (dft_out_en),
+        .uid         (uid),
+        .apb_1       (w_apb_1),
+        .apb_2       (w_apb_2),
+        .apb_3       (w_apb_3),
+        .apb_4       (w_apb_4),
+        .apb_5       (w_apb_5),
+        .apb_6       (w_apb_6),
+        .ahb_test_1  (1'b0),
+        .ahb_test_2  (2'b0),
+        .ahb_test_3  (),
+        .ahb_test_4  (),
+        .ahb_test_5  ()
     );
 
 endmodule

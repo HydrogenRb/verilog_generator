@@ -9,22 +9,22 @@
 module RISCV_CORE_TEST #(
     parameter integer UID_SIZE = 5
 ) (
-    input wire [`RST_LANE-1:0] n_rst,
-    input wire [`CLK_LANE-1:0] clk,
-    input wire dft_test_en,
-    input wire dft_out_en,
-    input wire [UID_SIZE-1:0] uid,
-    input wire ahb_test_1,
-    input wire [1:0] ahb_test_2,
-    output wire [2:0] ahb_test_3,
-    output wire [3:0] ahb_test_4,
-    output wire [4:0] ahb_test_5,
-    input wire [10:0] apb_1,
-    input wire [11:0] apb_2,
-    output wire [12:0] apb_3,
-    output wire [13:0] apb_4,
-    output wire [14:0] apb_5,
-    output wire [15:0] apb_6
+    input  wire [`RST_LANE-1:0] n_rst,
+    input  wire [`CLK_LANE-1:0] clk,
+    input  wire                 dft_test_en,
+    input  wire                 dft_out_en,
+    input  wire [UID_SIZE-1:0]  uid,
+    input  wire                 ahb_test_1,
+    input  wire [1:0]           ahb_test_2,
+    output wire [2:0]           ahb_test_3,
+    output wire [3:0]           ahb_test_4,
+    output wire [4:0]           ahb_test_5,
+    input  wire [10:0]          apb_1,
+    input  wire [11:0]          apb_2,
+    output wire [12:0]          apb_3,
+    output wire [13:0]          apb_4,
+    output wire [14:0]          apb_5,
+    output wire [15:0]          apb_6
 );
 
     // Module placeholder: drive every output to zero.

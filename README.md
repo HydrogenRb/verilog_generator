@@ -8,7 +8,7 @@
 # 指定输入和输出目录
 python .\xlsx2verilog.py .\test.xlsx -o .\generated
 
-# 当前目录只有一个 xlsx 时可直接运行；有多个时会显示终端选择菜单
+# 无参数且在交互式终端中运行时，进入终端菜单
 python .\xlsx2verilog.py
 
 # 只查看识别结果
@@ -21,6 +21,8 @@ python .\xlsx2verilog.py .\test.xlsx --check
 python .\xlsx2verilog.py .\test.xlsx --check --strict
 ```
 
+命令行参数仍全部保留。无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；使用 `↑`、`↓` 移动选项，按 `Enter` 确认，按 `Esc` 返回上级菜单或退出。主菜单包含“生成”“查看”“校验”“严格校验”和“退出”，可继续选择 XLSX 和输出目录。显式传入 XLSX 或 `--list`、`--check`、`--strict` 等参数时直接按命令行模式执行，不显示菜单；管道、CI 等非交互环境维持原有命令行行为。
+
 正常生成的返回码为 `0`，校验失败为 `2`。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会被原子替换，输出目录内其他文件不会被删除。
 
 ## XLSX 规则
@@ -29,14 +31,16 @@ python .\xlsx2verilog.py .\test.xlsx --check --strict
 
 ### 模块定义页签
 
-每个模块占一个页签，必须包含以下表头：
+每个模块占一个页签，必须包含 `端口名`、`位宽`、`数值` 和 `i/o` 表头；数组相关表头可选：
 
 | 表头 | 规则 |
 |---|---|
 | `端口名` | 合法的 Verilog 标识符；同一模块中的重复名称合并为同一个物理端口 |
-| `位宽` | 正整数、宏（如 `` `DFT_BUS``）或 parameter（如 `UID_SIZE`） |
-| `数值` | 宏或 parameter 的默认值；位宽为空时 `1` 表示标量 |
+| `位宽` | 元素的 packed 位宽；支持正整数、宏（如 `` `DFT_BUS``）或 parameter（如 `DATA_WIDTH`） |
+| `数值` | 位宽宏或 parameter 的默认值；位宽为空时 `1` 表示标量 |
 | `i/o` | 支持 `i/o/io`、`input/output/inout`、`输入/输出/双向` |
+| `数组`（可选） | 第二维 unpacked array 的深度；别名为 `数组维度`、`数组深度`、`array`、`depth` |
+| `数组数值`（可选） | 数组深度宏或 parameter 的默认值；别名为 `数组默认值`、`arrayvalue`、`array_default`、`depthdefault`、`depth_default` |
 
 模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。
 
@@ -45,6 +49,18 @@ python .\xlsx2verilog.py .\test.xlsx --check --strict
 - 数字位宽 `N` 会生成 `[N-1:0]`；数字 `1` 生成标量。
 - 重复名称可以出现在多行或不同模块中。单个 Verilog 模块只声明一次同名端口；同一模块后续同名行合并到第一次定义。
 - 普通模块页签中的所有 output 会在模块内部连续赋零，方便生成结果直接通过基础语法检查。
+
+`位宽` 描述每个元素的 packed width，`数组` 描述端口名之后的第二维 unpacked depth。例如 `DATA_WIDTH` 的数值为 `32`、`DEPTH` 的数组数值为 `4` 时生成：
+
+```systemverilog
+input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]
+```
+
+未连接的数组 input 使用 `'{default:'0}` 接零；普通模块及未驱动 output 的数组桩使用 `generate for` 逐元素赋零。二维端口和数组赋值属于 SystemVerilog 语法：生成文件仍使用 `.v` 扩展名，仿真、综合和 lint 工具必须显式启用 SystemVerilog 模式。
+
+## 生成代码格式
+
+生成器会按当前模块中最长的字段统一排版：模块端口声明的方向、类型、packed 位宽和端口名按列对齐；模块实例的参数连接与端口连接中，左括号纵向对齐。该格式只改善可读性，不改变端口顺序或连接语义。
 
 ### 集成页签
 
@@ -81,6 +97,9 @@ warning[RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是�
 python -m unittest discover -s tests -v
 python -m py_compile .\xlsx2verilog.py
 python .\tests\run_review_matrix.py
+python .\xlsx2verilog.py .\review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --check --strict
+python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\01_core_layer.xlsx --check --strict
+python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xlsx --check --strict
 ```
 
 测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类为“脚本问题”“生成的 XLSX 问题”或“项目定义的歧义”。

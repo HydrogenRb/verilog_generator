@@ -12,24 +12,24 @@
 module MEM_PHY #(
     parameter integer UID_SIZE = 5
 ) (
-    input wire [`RST_LANE-1:0] n_rst,
-    input wire [`CLK_LANE-1:0] clk,
-    input wire [`DFT_BUS-1:0] dft_bus,
-    input wire [`DFT_BUS-1:0] dft_addr,
-    input wire dft_test_en,
-    input wire dft_out_en,
-    input wire [UID_SIZE-1:0] uid,
-    output wire apb_1,
-    output wire [1:0] apb_2,
-    input wire [2:0] apb_3,
-    input wire [3:0] apb_4,
-    input wire [4:0] apb_5,
-    input wire [5:0] apb_6,
-    input wire ahb_test_1,
-    input wire [1:0] ahb_test_2,
-    output wire [2:0] ahb_test_3,
-    output wire [3:0] ahb_test_4,
-    output wire [4:0] ahb_test_5
+    input  wire [`RST_LANE-1:0] n_rst,
+    input  wire [`CLK_LANE-1:0] clk,
+    input  wire [`DFT_BUS-1:0]  dft_bus,
+    input  wire [`DFT_BUS-1:0]  dft_addr,
+    input  wire                 dft_test_en,
+    input  wire                 dft_out_en,
+    input  wire [UID_SIZE-1:0]  uid,
+    output wire                 apb_1,
+    output wire [1:0]           apb_2,
+    input  wire [2:0]           apb_3,
+    input  wire [3:0]           apb_4,
+    input  wire [4:0]           apb_5,
+    input  wire [5:0]           apb_6,
+    input  wire                 ahb_test_1,
+    input  wire [1:0]           ahb_test_2,
+    output wire [2:0]           ahb_test_3,
+    output wire [3:0]           ahb_test_4,
+    output wire [4:0]           ahb_test_5
 );
 
     // Module placeholder: drive every output to zero.

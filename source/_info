@@ -9,48 +9,96 @@ z2
 !i10f 100
 cModel Technology
 Z0 dc:/Users/HydrogenRb/HydrogenRb/Work/tech/Agent/8_14
-vMEM_PHY
-2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
-!s110 1786711428
+vBASIC_CHILD
+2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\BASIC_CHILD.v
+!s110 1786758267
 !i10b 1
-!s100 o^liET7^E2AN<@kVh0ZnY0
-IOnceE`=j1ZD<m6aQ4T8KZ3
+!s100 8e1m`4N:H0^WO>_9V?8Rb2
+In7n>8TJ5XF@YL]8G6;`P:1
 R0
-Z1 w1786711309
-8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
-Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
-!i122 2
-L0 12 31
+Z1 w1786711723
+8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\BASIC_CHILD.v
+Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\BASIC_CHILD.v
+!i122 9
+L0 2 12
 Z2 VDg1SIo80bB@j0V0VzS_@n1
 Z3 OL;L;2025.2;82
 r1
 !s85 0
 31
-!s108 1786711428.000000
-!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\generated\\MEM_PHY.v|
-!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v|
+!s108 1786758267.000000
+!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\review_test_cases\\01_basic\\generated\\BASIC_CHILD.v|
+!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\BASIC_CHILD.v|
 !i113 0
 Z4 o-nologo -work source -L mtiAvm -L mtiRnm -L mtiOvm -L mtiUvm -L mtiUPF -L infact
 Z5 tCvgOpt 0 defaultOptions 1085333592
+n@b@a@s@i@c_@c@h@i@l@d
+vCONSUMER
+2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\02_parameter_macro_shifted\generated\CONSUMER.v
+!s110 1786758287
+!i10b 1
+!s100 1Ta>;Pk5gFRMCFRW_8eZQ3
+IY6J>nILQn_Qej@m>;Qh]o0
+R0
+R1
+8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\02_parameter_macro_shifted\generated\CONSUMER.v
+Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\02_parameter_macro_shifted\generated\CONSUMER.v
+!i122 11
+L0 6 12
+R2
+R3
+r1
+!s85 0
+31
+!s108 1786758287.000000
+!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\review_test_cases\\02_parameter_macro_shifted\\generated\\CONSUMER.v|
+!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\02_parameter_macro_shifted\generated\CONSUMER.v|
+!i113 0
+R4
+R5
+n@c@o@n@s@u@m@e@r
+vMEM_PHY
+2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
+!s110 1786758418
+!i10b 1
+!s100 ;K1=OOff=_5f>OW_K^9?21
+ILT4__G=7jHnIZnB>z9DQh1
+R0
+Z6 w1786758337
+8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
+Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
+!i122 13
+L0 12 31
+R2
+R3
+r1
+!s85 0
+31
+!s108 1786758417.000000
+!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\generated\\MEM_PHY.v|
+!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v|
+!i113 0
+R4
+R5
 n@m@e@m_@p@h@y
 vRISCV_CORE_TEST
 2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v
-!s110 1786711440
+!s110 1786757730
 !i10b 1
-!s100 YZJ4j;VHZgI=UY2Bgga>]3
-IBa:Le?VL2M74aN[7mXF[W2
+!s100 1_Tbdm<VFBYoGNO66Y^nH1
+IaG@8AS0a?fKzDb<lBTcfH3
 R0
-R1
+w1786711670
 8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v
 Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v
-!i122 3
+!i122 8
 L0 9 31
 R2
 R3
 r1
 !s85 0
 31
-!s108 1786711440.000000
+!s108 1786757730.000000
 !s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\generated\\RISCV_CORE_TEST.v|
 !s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v|
 !i113 0
@@ -59,25 +107,49 @@ R5
 n@r@i@s@c@v_@c@o@r@e_@t@e@s@t
 vRISCV_TOP
 2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v
-!s110 1786711451
+!s110 1786760668
 !i10b 1
-!s100 H`zR[1U`DAjZTaVE5;Ybl2
-Ii5@nZkS<7BH6TzB]<dlV:0
+!s100 4ofM=1Gn]G:GgYdM:hRo[1
+Ihc?]`3BMeWh62oTm:ijA[3
 R0
-R1
+R6
 8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v
 Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v
-!i122 4
+!i122 14
 L0 12 78
 R2
 R3
 r1
 !s85 0
 31
-!s108 1786711451.000000
+!s108 1786760668.000000
 !s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\generated\\RISCV_TOP.v|
 !s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v|
 !i113 0
 R4
 R5
 n@r@i@s@c@v_@t@o@p
+vTOP_BASIC
+2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\TOP_BASIC.v
+!s110 1786758269
+!i10b 1
+!s100 b1Yi0H]@Q`[=JUn=EBo1I1
+ILgQ><NE[]=gaSW3`hAO>C1
+R0
+R1
+8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\TOP_BASIC.v
+Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\TOP_BASIC.v
+!i122 10
+L0 2 13
+R2
+R3
+r1
+!s85 0
+31
+!s108 1786758269.000000
+!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\review_test_cases\\01_basic\\generated\\TOP_BASIC.v|
+!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\review_test_cases\01_basic\generated\TOP_BASIC.v|
+!i113 0
+R4
+R5
+n@t@o@p_@b@a@s@i@c

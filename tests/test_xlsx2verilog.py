@@ -7,8 +7,8 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
-from xlsx2verilog import Reporter, XlsxReader, generate, parse_workbook
-from tests.run_review_matrix import run_matrix
+from xlsx2verilog import Reporter, XlsxReader, arrow_menu, generate, parse_workbook
+from tests.run_review_matrix import integration_sheet, module_sheet, run_matrix, write_xlsx
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,8 +66,8 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("wire [15:0] w_apb_6;", top)
             self.assertIn("RISCV_CORE_TEST #(", top)
             self.assertIn("MEM_PHY #(", top)
-            self.assertIn(".ahb_test_1(1'b0)", top)
-            self.assertIn(".ahb_test_3()", top)
+            self.assertIn(".ahb_test_1  (1'b0)", top)
+            self.assertIn(".ahb_test_3  ()", top)
             self.assertIn("assign ahb_test_6 = 6'b0;", top)
             self.assertIn("assign apb_6 = 16'b0;", core)
             self.assertIn("assign apb_1 = 1'b0;", phy)
@@ -95,7 +95,10 @@ class GenerationTests(unittest.TestCase):
                         "ahb_test_3", "ahb_test_4", "ahb_test_5",
                     ],
                 }[child_name]:
-                    self.assertEqual(child_body.count(f".{port}("), 1)
+                    self.assertEqual(
+                        len(re.findall(rf"\.{re.escape(port)}\s+\(", child_body)),
+                        1,
+                    )
 
             for content in (top, core, phy):
                 self.assertEqual(content.count("module "), 1)
@@ -117,6 +120,196 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual(len(paths), 3)
             self.assertFalse(output.exists())
+
+    def test_module_and_instance_fields_are_column_aligned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "format.xlsx"
+            output = root / "generated"
+            write_xlsx(
+                workbook,
+                [
+                    (
+                        "Integration",
+                        integration_sheet(
+                            [
+                                (
+                                    ["FORMAT_TOP", "FORMAT_CHILD"],
+                                    [
+                                        [("clk", "i"), ("clk", "i")],
+                                        [("result", "o"), ("result", "o")],
+                                    ],
+                                ),
+                                (
+                                    ["FORMAT_CHILD"],
+                                    [[("short", "i")], [("much_longer", "i")]],
+                                ),
+                            ]
+                        ),
+                    ),
+                    (
+                        "FORMAT_TOP",
+                        module_sheet(
+                            "FORMAT_TOP",
+                            [("clk", 1, None, "i"), ("result", "WIDTH", 8, "o")],
+                        ),
+                    ),
+                    (
+                        "FORMAT_CHILD",
+                        module_sheet(
+                            "FORMAT_CHILD",
+                            [
+                                ("clk", 1, None, "i"),
+                                ("short", 1, None, "i"),
+                                ("much_longer", "WIDTH", 8, "i"),
+                                ("result", "WIDTH", 8, "o"),
+                            ],
+                        ),
+                    ),
+                ],
+            )
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual(len(paths), 2)
+            top = (output / "FORMAT_TOP.v").read_text(encoding="utf-8")
+
+            declaration_lines = [
+                line
+                for line in top.splitlines()
+                if re.match(r"^    (?:input|output|inout)\s+wire\b", line)
+            ]
+            self.assertEqual(len(declaration_lines), 2)
+            self.assertTrue(declaration_lines[0].startswith("    input  wire"))
+            self.assertTrue(declaration_lines[1].startswith("    output wire"))
+            name_columns = [
+                line.index(name)
+                for line, name in zip(declaration_lines, ("clk", "result"))
+            ]
+            self.assertEqual(len(set(name_columns)), 1)
+
+            self.assertRegex(top, r"(?m)^        \.WIDTH\s+\(WIDTH\)$")
+            self.assertRegex(top, r"(?m)^        \.short\s{7}\(1'b0\),$")
+            self.assertRegex(top, r"(?m)^        \.much_longer \(\{WIDTH\{1'b0\}\}\),$")
+
+    def test_unpacked_array_declarations_connections_and_zero_drives(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "arrays.xlsx"
+            output = root / "generated"
+            write_xlsx(
+                workbook,
+                [
+                    (
+                        "Integration",
+                        integration_sheet(
+                            [
+                                (
+                                    ["ARRAY_TOP", "ARRAY_SRC", "ARRAY_DST"],
+                                    [[("clk", "i"), ("clk", "i"), ("clk", "i")]],
+                                ),
+                                (
+                                    ["ARRAY_SRC", "ARRAY_DST"],
+                                    [[("data", "o"), ("data", "i")]],
+                                ),
+                                (["ARRAY_DST"], [[("spare", "i")]]),
+                            ]
+                        ),
+                    ),
+                    (
+                        "ARRAY_TOP",
+                        module_sheet(
+                            "ARRAY_TOP",
+                            [
+                                ("clk", 1, None, "i"),
+                                ("monitor", "DATA_WIDTH", 32, "o", "DEPTH", 4),
+                            ],
+                        ),
+                    ),
+                    (
+                        "ARRAY_SRC",
+                        module_sheet(
+                            "ARRAY_SRC",
+                            [
+                                ("clk", 1, None, "i"),
+                                ("data", "DATA_WIDTH", 32, "o", "DEPTH", 4),
+                            ],
+                        ),
+                    ),
+                    (
+                        "ARRAY_DST",
+                        module_sheet(
+                            "ARRAY_DST",
+                            [
+                                ("clk", 1, None, "i"),
+                                ("data", "DATA_WIDTH", 32, "i", "DEPTH", 4),
+                                ("spare", "DATA_WIDTH", 32, "i", "DEPTH", 4),
+                            ],
+                        ),
+                    ),
+                ],
+            )
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual(len(paths), 3)
+            top = (output / "ARRAY_TOP.v").read_text(encoding="utf-8")
+            source = (output / "ARRAY_SRC.v").read_text(encoding="utf-8")
+            destination = (output / "ARRAY_DST.v").read_text(encoding="utf-8")
+
+            self.assertIn(
+                "output wire [DATA_WIDTH-1:0] monitor [DEPTH-1:0]", top
+            )
+            self.assertIn(
+                "output wire [DATA_WIDTH-1:0] data [DEPTH-1:0]", source
+            )
+            self.assertIn(
+                "input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]", destination
+            )
+            self.assertIn(
+                "wire [DATA_WIDTH-1:0] w_data [DEPTH-1:0];", top
+            )
+            self.assertRegex(top, r"(?m)^        \.spare \('\{default:'0\}\)$")
+            self.assertIn(
+                "for (genvar gen_zero_data = 0; gen_zero_data < DEPTH; "
+                "gen_zero_data = gen_zero_data + 1) begin : g_zero_data",
+                source,
+            )
+            self.assertIn(
+                "assign data[gen_zero_data] = {DATA_WIDTH{1'b0}};", source
+            )
+
+
+class TerminalMenuTests(unittest.TestCase):
+    @staticmethod
+    def choose(keys: list[str]) -> tuple[int | None, str]:
+        sequence = iter(keys)
+        output = StringIO()
+        selected = arrow_menu(
+            "Pick one",
+            ["first", "second", "third"],
+            key_reader=lambda: next(sequence),
+            output=output,
+        )
+        return selected, output.getvalue()
+
+    def test_down_and_enter_select_an_option(self) -> None:
+        selected, rendered = self.choose(["down", "enter"])
+        self.assertEqual(selected, 1)
+        self.assertIn("Pick one", rendered)
+        self.assertIn("> second", rendered)
+
+    def test_up_wraps_to_last_option(self) -> None:
+        selected, _ = self.choose(["up", "enter"])
+        self.assertEqual(selected, 2)
+
+    def test_down_wraps_to_first_option(self) -> None:
+        selected, _ = self.choose(["down", "down", "down", "enter"])
+        self.assertEqual(selected, 0)
+
+    def test_escape_cancels(self) -> None:
+        selected, _ = self.choose(["escape"])
+        self.assertIsNone(selected)
 
 
 class ReviewMatrixTests(unittest.TestCase):
