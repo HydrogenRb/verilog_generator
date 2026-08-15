@@ -1,0 +1,83 @@
+m255
+K4
+z2
+!s11f vlog 2025.2 2025.05, May 31 2025
+13
+!s112 1.1
+!i10d 8192
+!i10e 25
+!i10f 100
+cModel Technology
+Z0 dc:/Users/HydrogenRb/HydrogenRb/Work/tech/Agent/8_14
+vMEM_PHY
+2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
+!s110 1786711428
+!i10b 1
+!s100 o^liET7^E2AN<@kVh0ZnY0
+IOnceE`=j1ZD<m6aQ4T8KZ3
+R0
+Z1 w1786711309
+8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
+Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v
+!i122 2
+L0 12 31
+Z2 VDg1SIo80bB@j0V0VzS_@n1
+Z3 OL;L;2025.2;82
+r1
+!s85 0
+31
+!s108 1786711428.000000
+!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\generated\\MEM_PHY.v|
+!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\MEM_PHY.v|
+!i113 0
+Z4 o-nologo -work source -L mtiAvm -L mtiRnm -L mtiOvm -L mtiUvm -L mtiUPF -L infact
+Z5 tCvgOpt 0 defaultOptions 1085333592
+n@m@e@m_@p@h@y
+vRISCV_CORE_TEST
+2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v
+!s110 1786711440
+!i10b 1
+!s100 YZJ4j;VHZgI=UY2Bgga>]3
+IBa:Le?VL2M74aN[7mXF[W2
+R0
+R1
+8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v
+Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v
+!i122 3
+L0 9 31
+R2
+R3
+r1
+!s85 0
+31
+!s108 1786711440.000000
+!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\generated\\RISCV_CORE_TEST.v|
+!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_CORE_TEST.v|
+!i113 0
+R4
+R5
+n@r@i@s@c@v_@c@o@r@e_@t@e@s@t
+vRISCV_TOP
+2c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v
+!s110 1786711451
+!i10b 1
+!s100 H`zR[1U`DAjZTaVE5;Ybl2
+Ii5@nZkS<7BH6TzB]<dlV:0
+R0
+R1
+8c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v
+Fc:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v
+!i122 4
+L0 12 78
+R2
+R3
+r1
+!s85 0
+31
+!s108 1786711451.000000
+!s107 c:\\Users\\HydrogenRb\\HydrogenRb\\Work\\tech\\Agent\\8_14\\generated\\RISCV_TOP.v|
+!s90 -nologo|-work|source|c:\Users\HydrogenRb\HydrogenRb\Work\tech\Agent\8_14\generated\RISCV_TOP.v|
+!i113 0
+R4
+R5
+n@r@i@s@c@v_@t@o@p

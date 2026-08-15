@@ -1,0 +1,950 @@
+{
+  "core_layer": {
+    "workbook": "review_test_cases\\08_real_test_2\\01_core_layer.xlsx",
+    "output": "review_test_cases\\08_real_test_2\\layer_core_generated",
+    "checks": [
+      {
+        "check": "workbook parses without errors",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "top module detected",
+        "passed": true,
+        "detail": "ibex_core"
+      },
+      {
+        "check": "three expected children detected",
+        "passed": true,
+        "detail": "['ibex_if_stage', 'ibex_id_stage', 'ibex_load_store_unit']"
+      },
+      {
+        "check": "generated file set matches workbook modules",
+        "passed": true,
+        "detail": "['ibex_core.v', 'ibex_id_stage.v', 'ibex_if_stage.v', 'ibex_load_store_unit.v']"
+      },
+      {
+        "check": "ibex_if_stage instantiated exactly once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.clk_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.rst_ni connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.boot_addr_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.req_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_req_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_addr_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_gnt_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_rvalid_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_rdata_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_bus_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_valid_id_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_rdata_id_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.id_in_ready_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.dummy_instr_en_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.dummy_instr_mask_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.dummy_instr_seed_en_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.dummy_instr_seed_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.if_busy_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage instantiated exactly once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.clk_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.rst_ni connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.instr_valid_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.instr_rdata_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.instr_req_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.id_in_ready_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_resp_valid_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_req_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_we_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_type_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_sign_ext_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_wdata_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_req_done_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_addr_incr_req_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_addr_last_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_load_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_load_resp_intg_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_store_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_store_resp_intg_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.alu_adder_result_ex_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit instantiated exactly once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.clk_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.rst_ni connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_req_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_gnt_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_rvalid_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_bus_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_pmp_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_addr_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_we_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_be_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_wdata_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_rdata_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_we_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_type_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_wdata_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_sign_ext_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_rdata_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_rdata_valid_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_req_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.adder_result_ex_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.addr_incr_req_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.addr_last_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_req_done_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_resp_valid_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.load_err_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.load_resp_intg_err_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.store_err_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.store_resp_intg_err_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.busy_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.perf_load_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.perf_store_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_core module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_core port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_req_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_addr_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_valid_id_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.instr_rdata_id_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage.if_busy_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.instr_req_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.id_in_ready_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_req_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_we_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_type_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_sign_ext_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.lsu_wdata_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_id_stage.alu_adder_result_ex_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_req_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_addr_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_we_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_be_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.data_wdata_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_rdata_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_rdata_valid_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.addr_incr_req_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.addr_last_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_req_done_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.lsu_resp_valid_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.load_err_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.load_resp_intg_err_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.store_err_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.store_resp_intg_err_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.busy_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.perf_load_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_load_store_unit.perf_store_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      }
+    ],
+    "passed": true
+  },
+  "if_stage_layer": {
+    "workbook": "review_test_cases\\08_real_test_2\\02_if_stage_layer.xlsx",
+    "output": "review_test_cases\\08_real_test_2\\layer_if_generated",
+    "checks": [
+      {
+        "check": "workbook parses without errors",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "top module detected",
+        "passed": true,
+        "detail": "ibex_if_stage"
+      },
+      {
+        "check": "three expected children detected",
+        "passed": true,
+        "detail": "['ibex_prefetch_buffer', 'ibex_compressed_decoder', 'ibex_dummy_instr']"
+      },
+      {
+        "check": "generated file set matches workbook modules",
+        "passed": true,
+        "detail": "['ibex_compressed_decoder.v', 'ibex_dummy_instr.v', 'ibex_if_stage.v', 'ibex_prefetch_buffer.v']"
+      },
+      {
+        "check": "ibex_prefetch_buffer instantiated exactly once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.clk_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.rst_ni connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.req_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.branch_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.addr_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.ready_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.valid_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.rdata_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.addr_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.err_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.err_plus2_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_req_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_gnt_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_addr_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_rdata_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_err_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_rvalid_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.busy_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder instantiated exactly once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.clk_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.rst_ni connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.valid_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.id_in_ready_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.instr_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.instr_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.is_compressed_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.gets_expanded_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.flush_expanded_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.illegal_instr_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr instantiated exactly once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.clk_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.rst_ni connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.dummy_instr_en_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.dummy_instr_mask_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.dummy_instr_seed_en_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.dummy_instr_seed_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.fetch_valid_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.id_in_ready_i connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.insert_dummy_instr_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.dummy_instr_data_o connected once",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_if_stage port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.valid_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.rdata_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.addr_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.err_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.err_plus2_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_req_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.instr_addr_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_prefetch_buffer.busy_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.instr_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.is_compressed_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.gets_expanded_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_compressed_decoder.illegal_instr_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr module boundary",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr port list exact",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.insert_dummy_instr_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      },
+      {
+        "check": "ibex_dummy_instr.dummy_instr_data_o stub output assigned",
+        "passed": true,
+        "detail": ""
+      }
+    ],
+    "passed": true
+  },
+  "composition_checks": [
+    {
+      "check": "ibex_if_stage signatures match across layer workbooks",
+      "passed": true
+    },
+    {
+      "check": "composed module set contains exactly seven unique modules",
+      "passed": true,
+      "detail": "['ibex_compressed_decoder', 'ibex_core', 'ibex_dummy_instr', 'ibex_id_stage', 'ibex_if_stage', 'ibex_load_store_unit', 'ibex_prefetch_buffer']"
+    },
+    {
+      "check": "all composed files have balanced basic structure",
+      "passed": true
+    },
+    {
+      "check": "ibex_core contains three direct child instances",
+      "passed": true
+    },
+    {
+      "check": "ibex_if_stage contains three direct child instances",
+      "passed": true
+    }
+  ],
+  "passed": true
+}
