@@ -8,6 +8,21 @@
 `ifndef DFT_BUS
 `define DFT_BUS 64
 `endif
+`ifndef DW_sig1
+`define DW_sig1 114
+`endif
+`ifndef DW_sig2
+`define DW_sig2 114
+`endif
+`ifndef DW_sig3
+`define DW_sig3 114
+`endif
+`ifndef Test
+`define Test 100
+`endif
+`ifndef LANE_NUM
+`define LANE_NUM 3
+`endif
 
 module MEM_PHY #(
     parameter integer UID_SIZE = 5
@@ -29,7 +44,17 @@ module MEM_PHY #(
     input  wire [1:0]           ahb_test_2,
     output wire [2:0]           ahb_test_3,
     output wire [3:0]           ahb_test_4,
-    output wire [4:0]           ahb_test_5
+    output wire [4:0]           ahb_test_5,
+    input  wire [`DW_sig1-1:0]  test_bus_sig1_dat,
+    input  wire [`DW_sig2-1:0]  test_bus_sig2_dat,
+    input  wire [`DW_sig3-1:0]  test_bus_sig3_dat,
+    input  wire                 test_bus_sig1_ready,
+    input  wire                 test_bus_sig2_ready,
+    input  wire                 test_bus_sig3_ready,
+    output wire                 test_bus_sig1_valid,
+    output wire                 test_bus_sig2_valid,
+    output wire                 test_bus_sig3_valid,
+    input  wire [`Test-1:0]     array [`LANE_NUM-1:0]
 );
 
     // Module placeholder: drive every output to zero.
@@ -38,5 +63,8 @@ module MEM_PHY #(
     assign ahb_test_3 = 3'b0;
     assign ahb_test_4 = 4'b0;
     assign ahb_test_5 = 5'b0;
+    assign test_bus_sig1_valid = 1'b0;
+    assign test_bus_sig2_valid = 1'b0;
+    assign test_bus_sig3_valid = 1'b0;
 
 endmodule

@@ -469,11 +469,22 @@ def inspect_generated(workbook: Path, output: Path, paths: list[Path], reporter:
             problems.append(f"{path.name}: module 声明数量不是 1")
         if text.count("endmodule") != 1 or text.count("(") != text.count(")"):
             problems.append(f"{path.name}: 基础结构或括号不平衡")
-        declarations = re.findall(
-            r"(?m)^\s*(?:input|output|inout)\s+wire\s+(?:\[[^\]]+\]\s+)?"
-            r"([A-Za-z_]\w*)(?:\s+\[[^\]]+\])?[,]?$",
-            text,
-        )
+        declarations: list[str] = []
+        for line in text.splitlines():
+            regular = re.match(
+                r"^\s*(?:input|output|inout)\s+wire\s+"
+                r"(?:\[[^\]]+\]\s+)?([A-Za-z_]\w*)"
+                r"(?:\s+\[[^\]]+\])*,?$",
+                line,
+            )
+            interface = re.match(
+                r"^\s*(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*\.[A-Za-z_]\w*\s+"
+                r"([A-Za-z_]\w*)(?:\s+\[[^\]]+\])*,?$",
+                line,
+            )
+            match = regular or interface
+            if match:
+                declarations.append(match.group(1))
         expected_ports = [port.name for port in module.ports]
         if declarations != expected_ports or len(declarations) != len(set(declarations)):
             problems.append(f"{path.name}: 端口声明与去重后的 XLSX 定义不一致")

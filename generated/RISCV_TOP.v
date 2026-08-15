@@ -8,6 +8,24 @@
 `ifndef DFT_BUS
 `define DFT_BUS 64
 `endif
+`ifndef DW_sig1
+`define DW_sig1 114
+`endif
+`ifndef DW_sig2
+`define DW_sig2 114
+`endif
+`ifndef DW_sig3
+`define DW_sig3 114
+`endif
+`ifndef Test_size
+`define Test_size 100
+`endif
+`ifndef LANE_NUM
+`define LANE_NUM 3
+`endif
+`ifndef Test
+`define Test 100
+`endif
 
 module RISCV_TOP #(
     parameter integer UID_SIZE = 5
@@ -25,7 +43,17 @@ module RISCV_TOP #(
     output wire [2:0]           ahb_test_3,
     output wire [3:0]           ahb_test_4,
     output wire [4:0]           ahb_test_5,
-    output wire [5:0]           ahb_test_6
+    output wire [5:0]           ahb_test_6,
+    input  wire [`DW_sig1-1:0]  test_bus_sig1_dat,
+    input  wire [`DW_sig2-1:0]  test_bus_sig2_dat,
+    input  wire [`DW_sig3-1:0]  test_bus_sig3_dat,
+    input  wire                 test_bus_sig1_ready,
+    input  wire                 test_bus_sig2_ready,
+    input  wire                 test_bus_sig3_ready,
+    output wire                 test_bus_sig1_valid,
+    output wire                 test_bus_sig2_valid,
+    output wire                 test_bus_sig3_valid,
+    sky_cs_if.mst chi_if_risc
 );
 
     // Internal child-to-child connections.
@@ -35,6 +63,7 @@ module RISCV_TOP #(
     wire [13:0] w_apb_4;
     wire [14:0] w_apb_5;
     wire [15:0] w_apb_6;
+    wire [`Test_size-1:0] w_array [`LANE_NUM-1:0];
 
     // TOP outputs without a child driver are tied to zero.
     assign ahb_test_3 = 3'b0;
@@ -45,45 +74,66 @@ module RISCV_TOP #(
     RISCV_CORE_TEST #(
         .UID_SIZE (UID_SIZE)
     ) u_riscv_core_test (
-        .n_rst       (n_rst),
-        .clk         (clk),
-        .dft_test_en (dft_test_en),
-        .dft_out_en  (dft_out_en),
-        .uid         (uid),
-        .ahb_test_1  (1'b0),
-        .ahb_test_2  (2'b0),
-        .ahb_test_3  (),
-        .ahb_test_4  (),
-        .ahb_test_5  (),
-        .apb_1       (w_apb_1),
-        .apb_2       (w_apb_2),
-        .apb_3       (w_apb_3),
-        .apb_4       (w_apb_4),
-        .apb_5       (w_apb_5),
-        .apb_6       (w_apb_6)
+        .n_rst               (n_rst),
+        .clk                 (clk),
+        .dft_test_en         (dft_test_en),
+        .dft_out_en          (dft_out_en),
+        .uid                 (uid),
+        .ahb_test_1          (1'b0),
+        .ahb_test_2          (2'b0),
+        .ahb_test_3          (),
+        .ahb_test_4          (),
+        .ahb_test_5          (),
+        .apb_1               (w_apb_1),
+        .apb_2               (w_apb_2),
+        .apb_3               (w_apb_3),
+        .apb_4               (w_apb_4),
+        .apb_5               (w_apb_5),
+        .apb_6               (w_apb_6),
+        .test_bus_sig1_dat   (test_bus_sig1_dat),
+        .test_bus_sig2_dat   (test_bus_sig2_dat),
+        .test_bus_sig3_dat   (test_bus_sig3_dat),
+        .test_bus_sig1_ready (test_bus_sig1_ready),
+        .test_bus_sig2_ready (test_bus_sig2_ready),
+        .test_bus_sig3_ready (test_bus_sig3_ready),
+        .test_bus_sig1_valid (test_bus_sig1_valid),
+        .test_bus_sig2_valid (test_bus_sig2_valid),
+        .test_bus_sig3_valid (test_bus_sig3_valid),
+        .chi_if_risc         (chi_if_risc),
+        .array               (w_array)
     );
 
     MEM_PHY #(
         .UID_SIZE (UID_SIZE)
     ) u_mem_phy (
-        .n_rst       (n_rst),
-        .clk         (clk),
-        .dft_bus     (dft_bus),
-        .dft_addr    (dft_addr),
-        .dft_test_en (dft_test_en),
-        .dft_out_en  (dft_out_en),
-        .uid         (uid),
-        .apb_1       (w_apb_1),
-        .apb_2       (w_apb_2),
-        .apb_3       (w_apb_3),
-        .apb_4       (w_apb_4),
-        .apb_5       (w_apb_5),
-        .apb_6       (w_apb_6),
-        .ahb_test_1  (1'b0),
-        .ahb_test_2  (2'b0),
-        .ahb_test_3  (),
-        .ahb_test_4  (),
-        .ahb_test_5  ()
+        .n_rst               (n_rst),
+        .clk                 (clk),
+        .dft_bus             (dft_bus),
+        .dft_addr            (dft_addr),
+        .dft_test_en         (dft_test_en),
+        .dft_out_en          (dft_out_en),
+        .uid                 (uid),
+        .apb_1               (w_apb_1),
+        .apb_2               (w_apb_2),
+        .apb_3               (w_apb_3),
+        .apb_4               (w_apb_4),
+        .apb_5               (w_apb_5),
+        .apb_6               (w_apb_6),
+        .ahb_test_1          (1'b0),
+        .ahb_test_2          (2'b0),
+        .ahb_test_3          (),
+        .ahb_test_4          (),
+        .ahb_test_5          (),
+        .test_bus_sig1_dat   (test_bus_sig1_dat),
+        .test_bus_sig2_dat   (test_bus_sig2_dat),
+        .test_bus_sig3_dat   (test_bus_sig3_dat),
+        .test_bus_sig1_ready (test_bus_sig1_ready),
+        .test_bus_sig2_ready (test_bus_sig2_ready),
+        .test_bus_sig3_ready (test_bus_sig3_ready),
+        .test_bus_sig1_valid (test_bus_sig1_valid),
+        .test_bus_sig2_valid (test_bus_sig2_valid),
+        .test_bus_sig3_valid (test_bus_sig3_valid),
+        .array               (w_array)
     );
 
 endmodule

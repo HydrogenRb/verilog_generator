@@ -7,7 +7,14 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
-from xlsx2verilog import Reporter, XlsxReader, arrow_menu, generate, parse_workbook
+from xlsx2verilog import (
+    Reporter,
+    XlsxReader,
+    arrow_menu,
+    evaluate_int_expression,
+    generate,
+    parse_workbook,
+)
 from tests.run_review_matrix import integration_sheet, module_sheet, run_matrix, write_xlsx
 
 
@@ -35,6 +42,28 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(integration.child_names, ["RISCV_CORE_TEST", "MEM_PHY"])
         self.assertFalse(any("重复" in item.message for item in reporter.items))
 
+        top = modules["RISCV_TOP"]
+        self.assertEqual(
+            [port.name for port in top.ports if port.name.startswith("test_bus_")],
+            [
+                "test_bus_sig1_dat",
+                "test_bus_sig2_dat",
+                "test_bus_sig3_dat",
+                "test_bus_sig1_ready",
+                "test_bus_sig2_ready",
+                "test_bus_sig3_ready",
+                "test_bus_sig1_valid",
+                "test_bus_sig2_valid",
+                "test_bus_sig3_valid",
+            ],
+        )
+        interface = top.port_map["chi_if_risc"]
+        self.assertTrue(interface.is_interface)
+        self.assertEqual(interface.interface_type, "sky_cs_if.mst")
+        core_array = modules["RISCV_CORE_TEST"].port_map["array"]
+        self.assertEqual(core_array.width.expression, "`Test_size")
+        self.assertEqual([item.expression for item in core_array.arrays], ["`LANE_NUM"])
+
     def test_width_warning_uses_review_format(self) -> None:
         generated_reporter = generate(SAMPLE, Path("unused"), check_only=True)[1]
         output = StringIO()
@@ -53,6 +82,16 @@ class GenerationTests(unittest.TestCase):
             paths, reporter = generate(SAMPLE, output)
             self.assertFalse(reporter.has_errors)
             self.assertEqual(
+                len(
+                    [
+                        item
+                        for item in reporter.items
+                        if "多个子模块驱动端" in item.message
+                    ]
+                ),
+                3,
+            )
+            self.assertEqual(
                 {path.name for path in paths},
                 {"RISCV_TOP.v", "RISCV_CORE_TEST.v", "MEM_PHY.v"},
             )
@@ -66,11 +105,22 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("wire [15:0] w_apb_6;", top)
             self.assertIn("RISCV_CORE_TEST #(", top)
             self.assertIn("MEM_PHY #(", top)
-            self.assertIn(".ahb_test_1  (1'b0)", top)
-            self.assertIn(".ahb_test_3  ()", top)
+            self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(1'b0\),$")
+            self.assertRegex(top, r"(?m)^\s*\.ahb_test_3\s+\(\),$")
             self.assertIn("assign ahb_test_6 = 6'b0;", top)
             self.assertIn("assign apb_6 = 16'b0;", core)
             self.assertIn("assign apb_1 = 1'b0;", phy)
+            self.assertIn("`define DW_sig1 114", top)
+            self.assertIn("sky_cs_if.mst chi_if_risc", top)
+            self.assertIn(
+                "wire [`Test_size-1:0] w_array [`LANE_NUM-1:0];", top
+            )
+            self.assertIn(".test_bus_sig3_dat   (test_bus_sig3_dat)", top)
+            self.assertIn(".chi_if_risc         (chi_if_risc)", top)
+            self.assertIn(".array               (w_array)", top)
+            self.assertIn(
+                "output wire [`Test_size-1:0] array [`LANE_NUM-1:0]", core
+            )
 
             for child_name in ("RISCV_CORE_TEST", "MEM_PHY"):
                 instance_match = re.search(
@@ -86,13 +136,23 @@ class GenerationTests(unittest.TestCase):
                         "n_rst", "clk", "dft_test_en", "dft_out_en", "uid",
                         "ahb_test_1", "ahb_test_2", "ahb_test_3", "ahb_test_4",
                         "ahb_test_5", "apb_1", "apb_2", "apb_3", "apb_4",
-                        "apb_5", "apb_6",
+                        "apb_5", "apb_6", "test_bus_sig1_dat",
+                        "test_bus_sig2_dat", "test_bus_sig3_dat",
+                        "test_bus_sig1_ready", "test_bus_sig2_ready",
+                        "test_bus_sig3_ready", "test_bus_sig1_valid",
+                        "test_bus_sig2_valid", "test_bus_sig3_valid",
+                        "chi_if_risc", "array",
                     ],
                     "MEM_PHY": [
                         "n_rst", "clk", "dft_bus", "dft_addr", "dft_test_en",
                         "dft_out_en", "uid", "apb_1", "apb_2", "apb_3",
                         "apb_4", "apb_5", "apb_6", "ahb_test_1", "ahb_test_2",
                         "ahb_test_3", "ahb_test_4", "ahb_test_5",
+                        "test_bus_sig1_dat", "test_bus_sig2_dat",
+                        "test_bus_sig3_dat", "test_bus_sig1_ready",
+                        "test_bus_sig2_ready", "test_bus_sig3_ready",
+                        "test_bus_sig1_valid", "test_bus_sig2_valid",
+                        "test_bus_sig3_valid", "array",
                     ],
                 }[child_name]:
                     self.assertEqual(
@@ -278,6 +338,57 @@ class GenerationTests(unittest.TestCase):
             self.assertIn(
                 "assign data[gen_zero_data] = {DATA_WIDTH{1'b0}};", source
             )
+
+    def test_expressions_multiple_dimensions_and_interface(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "advanced.xlsx"
+            output = root / "generated"
+            write_xlsx(
+                workbook,
+                [
+                    (
+                        "ADVANCED",
+                        module_sheet(
+                            "ADVANCED",
+                            [
+                                ("calculated", "2+3*4", None, "o", None, None),
+                                ("uncertain", "WIDTH+OFFSET", "unknown", "o", None, None),
+                                ("matrix", "`ROWS * `COLS", "2*8", "o", None, None),
+                                ("cube", 8, None, "o", "`A * `B", "2*3"),
+                                ("bus_if", "sky_if.slv", None, "NA", None, None),
+                            ],
+                        ),
+                    )
+                ],
+            )
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual([path.name for path in paths], ["ADVANCED.v"])
+            text = paths[0].read_text(encoding="utf-8")
+            self.assertRegex(text, r"output wire \[13:0\]\s+calculated")
+            self.assertRegex(text, r"output wire \[113:0\]\s+uncertain")
+            self.assertRegex(
+                text, r"output wire \[`COLS-1:0\]\s+matrix \[`ROWS-1:0\]"
+            )
+            self.assertRegex(
+                text, r"output wire \[7:0\]\s+cube \[`A-1:0\] \[`B-1:0\]"
+            )
+            self.assertIn("sky_if.slv bus_if", text)
+            self.assertIn("`define ROWS 2", text)
+            self.assertIn("`define COLS 8", text)
+            self.assertIn(
+                "assign cube[gen_zero_cube_0][gen_zero_cube_1] = 8'b0;", text
+            )
+            self.assertTrue(any("占位值 114" in item.message for item in reporter.items))
+
+    def test_integer_expression_evaluator_is_safe(self) -> None:
+        self.assertEqual(evaluate_int_expression("2 + 3 * 4"), 14)
+        self.assertEqual(evaluate_int_expression("(24 / 3) << 1"), 16)
+        self.assertIsNone(evaluate_int_expression("2 ** 10"))
+        self.assertIsNone(evaluate_int_expression("__import__('os')"))
+        self.assertIsNone(evaluate_int_expression(str(1 << 40)))
 
 
 class TerminalMenuTests(unittest.TestCase):

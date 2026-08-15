@@ -8,6 +8,7 @@ script can be copied to an offline machine without installing openpyxl.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 import zipfile
@@ -20,6 +21,12 @@ from xml.etree import ElementTree as ET
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 CELL_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
 MACRO_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_$]*)$")
+INTERFACE_TYPE_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_$]*::)*"
+    r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$"
+)
+TEMPLATE_TOKEN = "{{i}}"
+UNKNOWN_WIDTH = 114
 
 
 def local_name(tag: str) -> str:
@@ -35,29 +42,6 @@ def column_number(letters: str) -> int:
 
 def clean(value: Any) -> str:
     return "" if value is None else str(value).strip()
-
-
-def as_positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, float) and value.is_integer():
-        number = int(value)
-        return number if number > 0 else None
-    text = clean(value)
-    if re.fullmatch(r"[0-9]+", text):
-        number = int(text)
-        return number if number > 0 else None
-    return None
-
-
-def verilog_value(value: Any, fallback: int = 1) -> str:
-    if value is None or clean(value) == "":
-        return str(fallback)
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return clean(value)
 
 
 @dataclass
@@ -236,12 +220,25 @@ class Port:
     direction: str
     width: Width
     row: int
-    array: Width | None = None
+    arrays: tuple[Width, ...] = ()
+    interface_type: str | None = None
 
     @property
-    def shape(self) -> tuple[str, str | None]:
-        """Default element width and optional unpacked-array depth."""
-        return self.width.effective, self.array.effective if self.array else None
+    def array(self) -> Width | None:
+        """Backward-compatible access to the first unpacked dimension."""
+        return self.arrays[0] if self.arrays else None
+
+    @property
+    def shape(self) -> tuple[str, ...]:
+        """Comparable interface/element type and all unpacked dimensions."""
+        if self.interface_type:
+            base_type = self.interface_type.rsplit(".", 1)[0]
+            return (f"interface:{base_type}", *(item.effective for item in self.arrays))
+        return (self.width.effective, *(item.effective for item in self.arrays))
+
+    @property
+    def is_interface(self) -> bool:
+        return self.interface_type is not None
 
 
 @dataclass
@@ -288,30 +285,274 @@ def normalized_direction(value: Any) -> str | None:
         "i/o": "inout",
         "inout": "inout",
         "双向": "inout",
+        "na": "interface",
+        "n/a": "interface",
+        "interface": "interface",
+        "if": "interface",
     }.get(text)
 
 
-def analyze_width(raw_width: Any, default_value: Any, context: str, reporter: Reporter) -> Width:
+def evaluate_int_expression(value: Any) -> int | None:
+    """Safely evaluate a small, integer-only arithmetic expression."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float) and value.is_integer():
+        integer = int(value)
+        return integer if integer > 0 else None
+    text = clean(value)
+    if not text:
+        return None
+    try:
+        root = ast.parse(text, mode="eval")
+    except (SyntaxError, ValueError):
+        return None
+
+    node_count = 0
+
+    def visit(node: ast.AST) -> int:
+        nonlocal node_count
+        node_count += 1
+        if node_count > 64:
+            raise ValueError
+        if isinstance(node, ast.Expression):
+            return visit(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(
+            node.value, bool
+        ):
+            if abs(node.value) > (1 << 31):
+                raise ValueError
+            return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            operand = visit(node.operand)
+            return operand if isinstance(node.op, ast.UAdd) else -operand
+        if isinstance(node, ast.BinOp):
+            left = visit(node.left)
+            right = visit(node.right)
+            if isinstance(node.op, ast.Add):
+                result = left + right
+            elif isinstance(node.op, ast.Sub):
+                result = left - right
+            elif isinstance(node.op, ast.Mult):
+                result = left * right
+            elif isinstance(node.op, (ast.Div, ast.FloorDiv)):
+                if right == 0:
+                    raise ValueError
+                result = int(left / right)
+            elif isinstance(node.op, ast.Mod):
+                if right == 0:
+                    raise ValueError
+                result = left % right
+            elif isinstance(node.op, ast.LShift):
+                if right < 0 or right > 30:
+                    raise ValueError
+                result = left << right
+            elif isinstance(node.op, ast.RShift):
+                if right < 0 or right > 30:
+                    raise ValueError
+                result = left >> right
+            elif isinstance(node.op, ast.BitAnd):
+                result = left & right
+            elif isinstance(node.op, ast.BitOr):
+                result = left | right
+            elif isinstance(node.op, ast.BitXor):
+                result = left ^ right
+            else:
+                raise ValueError
+            if abs(result) > (1 << 31):
+                raise ValueError
+            return result
+        raise ValueError
+
+    try:
+        result = visit(root)
+    except (ValueError, OverflowError, ZeroDivisionError):
+        return None
+    return result if result > 0 else None
+
+
+def split_top_level_product(value: Any, *, require_spaces: bool) -> list[str]:
+    """Split top-level multiplication, optionally requiring spaces around `*`."""
+    text = clean(value)
+    if not text:
+        return []
+    depth = 0
+    start = 0
+    parts: list[str] = []
+    for index, character in enumerate(text):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif character == "*" and depth == 0:
+            spaced = index > 0 and index + 1 < len(text) and text[index - 1].isspace() and text[
+                index + 1
+            ].isspace()
+            if require_spaces and not spaced:
+                continue
+            part = text[start:index].strip()
+            if not part:
+                return [text]
+            parts.append(part)
+            start = index + 1
+    if not parts:
+        return [text]
+    final = text[start:].strip()
+    if not final:
+        return [text]
+    parts.append(final)
+    return parts
+
+
+def dimension_defaults(raw_default: Any, count: int) -> list[Any]:
+    if count <= 1:
+        return [raw_default]
+    parts = split_top_level_product(raw_default, require_spaces=False)
+    if len(parts) == count:
+        return parts
+    return [None] * count
+
+
+def normalized_width_default(
+    default_value: Any,
+    context: str,
+    reporter: Reporter,
+    *,
+    fallback_uncertain: bool,
+) -> str:
+    evaluated = evaluate_int_expression(default_value)
+    if evaluated is not None:
+        return str(evaluated)
+    if fallback_uncertain:
+        reporter.warning(f"{context}: 位宽默认值无法确定，使用占位值 {UNKNOWN_WIDTH}")
+        return str(UNKNOWN_WIDTH)
+    if default_value is None or not clean(default_value):
+        reporter.error(f"{context}: 缺少“数值”默认值")
+    else:
+        reporter.error(f"{context}: 无法计算默认值 {clean(default_value)!r}")
+    return "1"
+
+
+def analyze_width(
+    raw_width: Any,
+    default_value: Any,
+    context: str,
+    reporter: Reporter,
+    *,
+    fallback_uncertain: bool = False,
+) -> Width:
     if raw_width is None or clean(raw_width) == "":
-        number = as_positive_int(default_value)
+        number = evaluate_int_expression(default_value)
         return Width("literal", str(number or 1), str(number or 1))
-    number = as_positive_int(raw_width)
+    number = evaluate_int_expression(raw_width)
     if number is not None:
         return Width("literal", str(number), str(number))
 
     text = clean(raw_width)
     macro_match = MACRO_RE.fullmatch(text)
     if macro_match:
-        if default_value is None or clean(default_value) == "":
-            reporter.error(f"{context}: 宏 {text} 缺少“数值”默认值")
-        return Width("macro", text, verilog_value(default_value))
+        default = normalized_width_default(
+            default_value,
+            f"{context}: 宏 {text}",
+            reporter,
+            fallback_uncertain=fallback_uncertain,
+        )
+        return Width("macro", text, default)
     if IDENTIFIER_RE.fullmatch(text):
-        if default_value is None or clean(default_value) == "":
-            reporter.error(f"{context}: parameter {text} 缺少“数值”默认值")
-        return Width("parameter", text, verilog_value(default_value))
+        default = normalized_width_default(
+            default_value,
+            f"{context}: parameter {text}",
+            reporter,
+            fallback_uncertain=fallback_uncertain,
+        )
+        return Width("parameter", text, default)
+
+    if re.fullmatch(r"[A-Za-z0-9_$`()\s`+\-*/%<>&|^]+", text) and re.search(
+        r"[+\-*/%<>&|^]", text
+    ):
+        inferred = evaluate_int_expression(default_value)
+        if inferred is not None:
+            return Width("literal", str(inferred), str(inferred))
+        reporter.warning(
+            f"{context}: 表达式 {text!r} 无法确定位宽，使用占位值 {UNKNOWN_WIDTH}"
+        )
+        return Width("literal", str(UNKNOWN_WIDTH), str(UNKNOWN_WIDTH))
 
     reporter.error(f"{context}: 不支持的位宽 {text!r}；请使用正整数、`MACRO 或 PARAMETER")
     return Width("literal", "1", "1")
+
+
+def analyze_port_dimensions(
+    raw_width: Any,
+    default_value: Any,
+    raw_array: Any,
+    array_default: Any,
+    context: str,
+    reporter: Reporter,
+    *,
+    fallback_uncertain: bool,
+) -> tuple[Width, tuple[Width, ...]]:
+    width_parts = split_top_level_product(raw_width, require_spaces=True)
+    if len(width_parts) > 1:
+        defaults = dimension_defaults(default_value, len(width_parts))
+        dimensions = [
+            analyze_width(
+                part,
+                defaults[index],
+                f"{context} 第 {index + 1} 维",
+                reporter,
+                fallback_uncertain=fallback_uncertain,
+            )
+            for index, part in enumerate(width_parts)
+        ]
+        width = dimensions[-1]
+        arrays = dimensions[:-1]
+    else:
+        width = analyze_width(
+            raw_width,
+            default_value,
+            context,
+            reporter,
+            fallback_uncertain=fallback_uncertain,
+        )
+        arrays = []
+
+    array_parts = split_top_level_product(raw_array, require_spaces=True)
+    if array_parts:
+        defaults = dimension_defaults(array_default, len(array_parts))
+        arrays.extend(
+            analyze_width(
+                part,
+                defaults[index],
+                f"{context} 数组第 {index + 1} 维",
+                reporter,
+                fallback_uncertain=fallback_uncertain,
+            )
+            for index, part in enumerate(array_parts)
+        )
+    return width, tuple(arrays)
+
+
+def template_values_in_row(sheet: Sheet, row: int) -> list[str]:
+    for column in range(1, sheet.max_column + 1):
+        text = clean(sheet.cell(row, column))
+        for match in re.finditer(r"(?<!\{)\{([^{}]+)\}(?!\})", text):
+            values = [item.strip() for item in re.split(r"[,，、;；]", match.group(1))]
+            if values and all(values) and len(values) == len(set(values)):
+                return values
+    return []
+
+
+def template_default_value(raw_default: Any, values: list[str], index: int) -> Any:
+    text = clean(raw_default)
+    if not text:
+        return raw_default
+    stripped = text[1:-1] if text.startswith("{") and text.endswith("}") else text
+    parts = [item.strip() for item in re.split(r"[,，、;；]", stripped)]
+    if len(parts) == len(values) and all(evaluate_int_expression(item) is not None for item in parts):
+        return parts[index]
+    return raw_default
 
 
 def find_module_header(sheet: Sheet) -> tuple[int, dict[str, int]] | None:
@@ -364,60 +605,119 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
     parameters: dict[str, str] = {}
     macros: dict[str, str] = {}
     seen: dict[str, Port] = {}
+    active_template_values: list[str] = []
+    category_column = columns["port"] - 1
     for row in range(header_row + 1, sheet.max_row + 1):
-        port_name = clean(sheet.cell(row, columns["port"]))
-        if not port_name:
+        raw_port_name = clean(sheet.cell(row, columns["port"]))
+        if not raw_port_name:
             continue
         context = f"页签 {sheet.name} 第 {row} 行"
-        if not IDENTIFIER_RE.fullmatch(port_name):
-            reporter.error(f"{context}: 端口名 {port_name!r} 不是合法 Verilog 标识符")
-            continue
-        if port_name in seen:
-            # A repeated row denotes the same physical port. This is useful when
-            # the integration table mentions that port in more than one logical
-            # group. Verilog may only declare a named port once, so the first
-            # occurrence owns its direction/width and later occurrences merge
-            # into it without producing a warning.
-            continue
-        direction = normalized_direction(sheet.cell(row, columns["direction"]))
-        if direction is None:
-            reporter.error(f"{context}: 无法识别 i/o 值 {sheet.cell(row, columns['direction'])!r}")
-            continue
-        width = analyze_width(
-            sheet.cell(row, columns["width"]),
-            sheet.cell(row, columns["value"]),
-            context,
-            reporter,
-        )
-        array: Width | None = None
-        if "array" in columns:
-            raw_array = sheet.cell(row, columns["array"])
-            if raw_array is not None and clean(raw_array):
-                array_default = (
-                    sheet.cell(row, columns["array_value"])
-                    if "array_value" in columns
-                    else None
-                )
-                array = analyze_width(raw_array, array_default, f"{context} 数组维度", reporter)
-        port = Port(port_name, direction, width, row, array)
-        seen[port_name] = port
-        ports.append(port)
-        for dimension in (width, array):
-            if dimension is None:
+        if category_column >= 1 and clean(sheet.cell(row, category_column)):
+            active_template_values = []
+        row_template_values = template_values_in_row(sheet, row)
+        if row_template_values:
+            active_template_values = row_template_values
+        if TEMPLATE_TOKEN in raw_port_name:
+            if not active_template_values:
+                reporter.error(f"{context}: 端口名包含 {TEMPLATE_TOKEN}，但未找到 i 的取值列表")
                 continue
-            if dimension.kind == "parameter":
-                old = parameters.setdefault(dimension.expression, dimension.default)
-                if old != dimension.default:
-                    reporter.error(
-                        f"页签 {sheet.name}: parameter {dimension.expression} 默认值冲突 ({old}/{dimension.default})"
+            expansions: list[str | None] = active_template_values
+        else:
+            expansions = [None]
+
+        for expansion_index, expansion in enumerate(expansions):
+            port_name = (
+                raw_port_name.replace(TEMPLATE_TOKEN, expansion)
+                if expansion is not None
+                else raw_port_name
+            )
+            expanded_context = (
+                f"{context} (i={expansion})" if expansion is not None else context
+            )
+            if not IDENTIFIER_RE.fullmatch(port_name):
+                reporter.error(
+                    f"{expanded_context}: 端口名 {port_name!r} 不是合法 Verilog 标识符"
+                )
+                continue
+            if port_name in seen:
+                # A repeated row denotes the same physical port. The first
+                # occurrence owns its type/direction and later rows merge into it.
+                continue
+
+            raw_width = sheet.cell(row, columns["width"])
+            raw_default = sheet.cell(row, columns["value"])
+            raw_array = sheet.cell(row, columns["array"]) if "array" in columns else None
+            raw_array_default = (
+                sheet.cell(row, columns["array_value"])
+                if "array_value" in columns
+                else None
+            )
+            if expansion is not None:
+                raw_width = clean(raw_width).replace(TEMPLATE_TOKEN, expansion)
+                raw_array = clean(raw_array).replace(TEMPLATE_TOKEN, expansion)
+                raw_default = template_default_value(
+                    raw_default, active_template_values, expansion_index
+                )
+                raw_array_default = template_default_value(
+                    raw_array_default, active_template_values, expansion_index
+                )
+
+            listed_direction = normalized_direction(
+                sheet.cell(row, columns["direction"])
+            )
+            interface_type = clean(raw_width) if INTERFACE_TYPE_RE.fullmatch(clean(raw_width)) else None
+            if interface_type:
+                direction = "interface"
+                if listed_direction not in {None, "interface"}:
+                    reporter.warning(
+                        f"{expanded_context}: interface {interface_type} 忽略 i/o 值 "
+                        f"{sheet.cell(row, columns['direction'])!r}"
                     )
-            elif dimension.kind == "macro":
-                macro_name = dimension.expression[1:]
-                old = macros.setdefault(macro_name, dimension.default)
-                if old != dimension.default:
+                width = Width("literal", "1", "1")
+                _, arrays = analyze_port_dimensions(
+                    1,
+                    1,
+                    raw_array,
+                    raw_array_default,
+                    expanded_context,
+                    reporter,
+                    fallback_uncertain=expansion is not None,
+                )
+            else:
+                direction = listed_direction or ""
+                if direction not in {"input", "output", "inout"}:
                     reporter.error(
-                        f"页签 {sheet.name}: 宏 `{macro_name} 默认值冲突 ({old}/{dimension.default})"
+                        f"{expanded_context}: 无法识别 i/o 值 "
+                        f"{sheet.cell(row, columns['direction'])!r}"
                     )
+                    continue
+                width, arrays = analyze_port_dimensions(
+                    raw_width,
+                    raw_default,
+                    raw_array,
+                    raw_array_default,
+                    expanded_context,
+                    reporter,
+                    fallback_uncertain=expansion is not None,
+                )
+
+            port = Port(port_name, direction, width, row, arrays, interface_type)
+            seen[port_name] = port
+            ports.append(port)
+            for dimension in (width, *arrays):
+                if dimension.kind == "parameter":
+                    old = parameters.setdefault(dimension.expression, dimension.default)
+                    if old != dimension.default:
+                        reporter.error(
+                            f"页签 {sheet.name}: parameter {dimension.expression} 默认值冲突 ({old}/{dimension.default})"
+                        )
+                elif dimension.kind == "macro":
+                    macro_name = dimension.expression[1:]
+                    old = macros.setdefault(macro_name, dimension.default)
+                    if old != dimension.default:
+                        reporter.error(
+                            f"页签 {sheet.name}: 宏 `{macro_name} 默认值冲突 ({old}/{dimension.default})"
+                        )
     if not ports:
         reporter.error(f"页签 {sheet.name}: 没有可生成的端口")
     return Module(module_name, sheet.name, ports, parameters, macros)
@@ -516,6 +816,12 @@ def array_range(array: Width | None, parameter_map: dict[str, str] | None = None
     return f" [{expression}-1:0]"
 
 
+def array_ranges(
+    arrays: tuple[Width, ...], parameter_map: dict[str, str] | None = None
+) -> str:
+    return "".join(array_range(array, parameter_map) for array in arrays)
+
+
 def zero_value(width: Width, parameter_map: dict[str, str] | None = None) -> str:
     expression = width_expression(width, parameter_map)
     if width.kind == "literal":
@@ -524,7 +830,7 @@ def zero_value(width: Width, parameter_map: dict[str, str] | None = None) -> str
 
 
 def connection_zero_value(port: Port, parameter_map: dict[str, str] | None = None) -> str:
-    if port.array is not None:
+    if port.arrays:
         return "'{default:'0}"
     return zero_value(port.width, parameter_map)
 
@@ -536,19 +842,28 @@ def append_zero_assignment(
     indent: str = "    ",
 ) -> None:
     """Append a scalar/vector assignment or an element-wise array generate loop."""
-    if port.array is None:
+    if not port.arrays:
         lines.append(f"{indent}assign {port.name} = {zero_value(port.width, parameter_map)};")
         return
-    index = safe_name(f"gen_zero_{port.name}")
-    depth = width_expression(port.array, parameter_map)
+    indices: list[str] = []
+    current_indent = indent
+    for dimension_index, array in enumerate(port.arrays):
+        suffix = f"_{dimension_index}" if len(port.arrays) > 1 else ""
+        index = safe_name(f"gen_zero_{port.name}{suffix}")
+        indices.append(index)
+        depth = width_expression(array, parameter_map)
+        lines.append(
+            f"{current_indent}for (genvar {index} = 0; {index} < {depth}; "
+            f"{index} = {index} + 1) begin : g_zero_{safe_name(port.name)}{suffix}"
+        )
+        current_indent += "    "
+    indexed_port = port.name + "".join(f"[{index}]" for index in indices)
     lines.append(
-        f"{indent}for (genvar {index} = 0; {index} < {depth}; "
-        f"{index} = {index} + 1) begin : g_zero_{safe_name(port.name)}"
+        f"{current_indent}assign {indexed_port} = {zero_value(port.width, parameter_map)};"
     )
-    lines.append(
-        f"{indent}    assign {port.name}[{index}] = {zero_value(port.width, parameter_map)};"
-    )
-    lines.append(f"{indent}end")
+    for _ in reversed(port.arrays):
+        current_indent = current_indent[:-4]
+        lines.append(f"{current_indent}end")
 
 
 def render_macros(macros: dict[str, str]) -> list[str]:
@@ -575,16 +890,22 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
         lines.append(") (")
     else:
         lines.append(f"module {module.name} (")
-    direction_width = max(len(port.direction) for port in module.ports)
-    packed_ranges = [width_range(port.width) for port in module.ports]
+    regular_ports = [port for port in module.ports if not port.is_interface]
+    direction_width = max((len(port.direction) for port in regular_ports), default=0)
+    packed_ranges = [width_range(port.width) for port in regular_ports]
     packed_width = max((len(item) for item in packed_ranges), default=0)
     for index, port in enumerate(module.ports):
         comma = "," if index < len(module.ports) - 1 else ""
+        if port.is_interface:
+            lines.append(
+                f"    {port.interface_type} {port.name}{array_ranges(port.arrays)}{comma}"
+            )
+            continue
         packed = width_range(port.width)
         packed_field = f"{packed:<{packed_width}} " if packed_width else ""
         lines.append(
             f"    {port.direction:<{direction_width}} wire {packed_field}"
-            f"{port.name}{array_range(port.array)}{comma}"
+            f"{port.name}{array_ranges(port.arrays)}{comma}"
         )
     lines.append(");")
     return lines
@@ -623,8 +944,9 @@ def unique_name(base: str, used: set[str]) -> str:
 class Wire:
     name: str
     width: Width
-    array: Width | None
+    arrays: tuple[Width, ...]
     parameter_map: dict[str, str]
+    interface_type: str | None = None
 
 
 def render_integration(
@@ -635,7 +957,6 @@ def render_integration(
 ) -> str:
     top = modules[integration.top_name]
     children = [modules[name] for name in integration.child_names if name in modules]
-    children_by_name = {module.name: module for module in children}
     top_ports = top.port_map
 
     all_macros: dict[str, str] = {}
@@ -667,6 +988,7 @@ def render_integration(
 
     bindings: dict[str, dict[str, str | None]] = {child.name: {} for child in children}
     top_driven_outputs: set[str] = set()
+    top_output_drivers: dict[str, list[str]] = {}
     wires: list[Wire] = []
     used_signals = set(top_ports)
 
@@ -680,6 +1002,50 @@ def render_integration(
                 f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有端口 {port_name}"
             )
         return port
+
+    def get_ports(module_name: str, reference: str, row: int) -> list[Port]:
+        if TEMPLATE_TOKEN not in reference:
+            port = get_port(module_name, reference, row)
+            return [port] if port else []
+        module = modules.get(module_name)
+        if module is None:
+            return []
+        pattern = re.compile(
+            "^"
+            + re.escape(reference).replace(re.escape(TEMPLATE_TOKEN), r"(.+?)")
+            + "$"
+        )
+        ports = [port for port in module.ports if pattern.fullmatch(port.name)]
+        if not ports:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有与模板端口 {reference} 匹配的展开端口"
+            )
+        return ports
+
+    def aligned_expansions(
+        expanded: list[tuple[IntegrationBlock, list[Port]]], row: int
+    ) -> list[list[tuple[IntegrationBlock, Port]]]:
+        if not expanded:
+            return []
+        non_single_counts = {len(ports) for _, ports in expanded if len(ports) > 1}
+        if len(non_single_counts) > 1:
+            details = ", ".join(
+                f"{block.module_name}={len(ports)}" for block, ports in expanded
+            )
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {TEMPLATE_TOKEN} 展开数量不一致 ({details})"
+            )
+            return []
+        count = next(iter(non_single_counts), 1)
+        result: list[list[tuple[IntegrationBlock, Port]]] = []
+        for index in range(count):
+            row_items: list[tuple[IntegrationBlock, Port]] = []
+            for block, ports in expanded:
+                if not ports:
+                    continue
+                row_items.append((block, ports[0] if len(ports) == 1 else ports[index]))
+            result.append(row_items)
+        return result
 
     def validate_sheet_direction(block: IntegrationBlock, port: Port, row: int) -> None:
         raw_direction = sheet.cell(row, block.direction_column)
@@ -720,8 +1086,7 @@ def render_integration(
                 f"集成页签 {sheet.name} 第 {row} 行: TOP 端口为空，子模块端口按未连接处理"
             )
             for block, child_port_name in row_entries:
-                child_port = get_port(block.module_name, child_port_name, row)
-                if child_port:
+                for child_port in get_ports(block.module_name, child_port_name, row):
                     validate_sheet_direction(block, child_port, row)
                     expression = (
                         connection_zero_value(
@@ -732,30 +1097,46 @@ def render_integration(
                     )
                     bind(block.module_name, child_port, expression, row)
             continue
-        top_port = get_port(top.name, top_port_name, row)
-        if top_port is None:
-            continue
-        validate_sheet_direction(top_block, top_port, row)
-        for block, child_port_name in row_entries:
-            child_port = get_port(block.module_name, child_port_name, row)
-            if child_port is None:
+        expanded = [(top_block, get_ports(top.name, top_port_name, row))]
+        expanded.extend(
+            (block, get_ports(block.module_name, child_port_name, row))
+            for block, child_port_name in row_entries
+        )
+        for aligned in aligned_expansions(expanded, row):
+            if not aligned or aligned[0][0] != top_block:
                 continue
-            validate_sheet_direction(block, child_port, row)
-            if top_port.direction == "input" and child_port.direction == "output":
-                reporter.error(
-                    f"集成页签 {sheet.name} 第 {row} 行: TOP 输入 {top_port.name} 与子模块输出 {block.module_name}.{child_port.name} 方向冲突"
-                )
-            if top_port.direction == "output" and child_port.direction == "input":
-                reporter.error(
-                    f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 {top_port.name} 不能作为子模块输入的驱动"
-                )
-            if top_port.shape != child_port.shape:
-                reporter.warning(
-                    f"{top.name}.{top_port.name}信号和{block.module_name}.{child_port.name}信号应该连接，但是其位宽不匹配"
-                )
-            bind(block.module_name, child_port, top_port.name, row)
-            if top_port.direction == "output" and child_port.direction in {"output", "inout"}:
-                top_driven_outputs.add(top_port.name)
+            _, top_port = aligned[0]
+            validate_sheet_direction(top_block, top_port, row)
+            for block, child_port in aligned[1:]:
+                validate_sheet_direction(block, child_port, row)
+                if top_port.direction == "input" and child_port.direction == "output":
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: TOP 输入 {top_port.name} 与子模块输出 {block.module_name}.{child_port.name} 方向冲突"
+                    )
+                if top_port.direction == "output" and child_port.direction == "input":
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 {top_port.name} 不能作为子模块输入的驱动"
+                    )
+                if top_port.shape != child_port.shape:
+                    reporter.warning(
+                        f"{top.name}.{top_port.name}信号和{block.module_name}.{child_port.name}信号应该连接，但是其位宽不匹配"
+                    )
+                bind(block.module_name, child_port, top_port.name, row)
+                if top_port.direction == "output" and child_port.direction in {
+                    "output",
+                    "inout",
+                }:
+                    drivers = top_output_drivers.setdefault(top_port.name, [])
+                    driver_name = f"{block.module_name}.{child_port.name}"
+                    if driver_name not in drivers:
+                        drivers.append(driver_name)
+                    if len(drivers) == 2:
+                        reporter.warning(
+                            f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
+                            f"{top.name}.{top_port.name} 存在多个子模块驱动端 "
+                            f"({', '.join(drivers)})"
+                        )
+                    top_driven_outputs.add(top_port.name)
 
     for group_index, group in enumerate(integration.groups[1:], start=2):
         if len(group) == 1:
@@ -764,86 +1145,109 @@ def render_integration(
                 port_name = clean(sheet.cell(row, block.port_column))
                 if not port_name:
                     continue
-                port = get_port(block.module_name, port_name, row)
-                if port is None:
-                    continue
-                validate_sheet_direction(block, port, row)
-                if block.module_name == top.name:
-                    continue
-                expression = (
-                    connection_zero_value(port, parameter_maps.get(block.module_name))
-                    if port.direction == "input"
-                    else None
-                )
-                bind(block.module_name, port, expression, row)
-            continue
-
-        for row in range(integration.header_row + 1, sheet.max_row + 1):
-            entries: list[tuple[IntegrationBlock, Port]] = []
-            for block in group:
-                port_name = clean(sheet.cell(row, block.port_column))
-                if not port_name:
-                    continue
-                port = get_port(block.module_name, port_name, row)
-                if port:
+                for port in get_ports(block.module_name, port_name, row):
                     validate_sheet_direction(block, port, row)
-                    entries.append((block, port))
-            if not entries:
-                continue
-            if len(entries) == 1:
-                block, port = entries[0]
-                reporter.warning(
-                    f"集成页签 {sheet.name} 第 {row} 行: 内部连接只有 {block.module_name}.{port.name} 一端，按未连接处理"
-                )
-                if block.module_name != top.name:
+                    if block.module_name == top.name:
+                        continue
                     expression = (
                         connection_zero_value(port, parameter_maps.get(block.module_name))
                         if port.direction == "input"
                         else None
                     )
                     bind(block.module_name, port, expression, row)
-                continue
+            continue
 
-            drivers = [(block, port) for block, port in entries if port.direction == "output"]
-            if len(drivers) == 0:
-                reporter.warning(
-                    f"集成页签 {sheet.name} 第 {row} 行: 内部连接没有 output 驱动端"
-                )
-                width_source = entries[0]
-            elif len(drivers) > 1:
-                names = ", ".join(f"{block.module_name}.{port.name}" for block, port in drivers)
-                reporter.error(f"集成页签 {sheet.name} 第 {row} 行: 内部连接存在多个驱动端 ({names})")
-                width_source = drivers[0]
-            else:
-                width_source = drivers[0]
-            block, source_port = width_source
-            source_block, source_port_for_warning = width_source
-            source_shape = source_port_for_warning.shape
-            for item_block, port in entries:
-                if (item_block, port) == width_source or port.shape == source_shape:
+        for row in range(integration.header_row + 1, sheet.max_row + 1):
+            expanded: list[tuple[IntegrationBlock, list[Port]]] = []
+            for block in group:
+                port_name = clean(sheet.cell(row, block.port_column))
+                if not port_name:
                     continue
-                reporter.warning(
-                    f"{source_block.module_name}.{source_port_for_warning.name}信号和{item_block.module_name}.{port.name}信号应该连接，但是其位宽不匹配"
-                )
-            common_names = {port.name for _, port in entries}
-            signal_base = next(iter(common_names)) if len(common_names) == 1 else "_to_".join(
-                port.name for _, port in entries
-            )
-            signal_name = unique_name(f"w_{signal_base}", used_signals)
-            wires.append(
-                Wire(
-                    signal_name,
-                    source_port.width,
-                    source_port.array,
-                    parameter_maps.get(block.module_name, {}),
-                )
-            )
-            for item_block, port in entries:
-                if item_block.module_name == top.name:
-                    if port.direction == "output":
-                        top_driven_outputs.add(port.name)
+                ports = get_ports(block.module_name, port_name, row)
+                for port in ports:
+                    validate_sheet_direction(block, port, row)
+                expanded.append((block, ports))
+            for entries in aligned_expansions(expanded, row):
+                if not entries:
                     continue
-                bind(item_block.module_name, port, signal_name, row)
+                if len(entries) == 1:
+                    block, port = entries[0]
+                    reporter.warning(
+                        f"集成页签 {sheet.name} 第 {row} 行: 内部连接只有 {block.module_name}.{port.name} 一端，按未连接处理"
+                    )
+                    if block.module_name != top.name:
+                        expression = (
+                            connection_zero_value(
+                                port, parameter_maps.get(block.module_name)
+                            )
+                            if port.direction == "input"
+                            else None
+                        )
+                        bind(block.module_name, port, expression, row)
+                    continue
+
+                interface_flags = [port.is_interface for _, port in entries]
+                if any(interface_flags) and not all(interface_flags):
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: interface 不能与普通端口直接互连"
+                    )
+                    continue
+                if all(interface_flags):
+                    width_source = entries[0]
+                else:
+                    drivers = [
+                        (block, port)
+                        for block, port in entries
+                        if port.direction == "output"
+                    ]
+                    if len(drivers) == 0:
+                        reporter.warning(
+                            f"集成页签 {sheet.name} 第 {row} 行: 内部连接没有 output 驱动端"
+                        )
+                        width_source = entries[0]
+                    elif len(drivers) > 1:
+                        names = ", ".join(
+                            f"{block.module_name}.{port.name}" for block, port in drivers
+                        )
+                        reporter.error(
+                            f"集成页签 {sheet.name} 第 {row} 行: 内部连接存在多个驱动端 ({names})"
+                        )
+                        width_source = drivers[0]
+                    else:
+                        width_source = drivers[0]
+                block, source_port = width_source
+                source_block, source_port_for_warning = width_source
+                source_shape = source_port_for_warning.shape
+                for item_block, port in entries:
+                    if (item_block, port) == width_source or port.shape == source_shape:
+                        continue
+                    reporter.warning(
+                        f"{source_block.module_name}.{source_port_for_warning.name}信号和{item_block.module_name}.{port.name}信号应该连接，但是其位宽不匹配"
+                    )
+                common_names = {port.name for _, port in entries}
+                signal_base = (
+                    next(iter(common_names))
+                    if len(common_names) == 1
+                    else "_to_".join(port.name for _, port in entries)
+                )
+                signal_name = unique_name(f"w_{signal_base}", used_signals)
+                wires.append(
+                    Wire(
+                        signal_name,
+                        source_port.width,
+                        source_port.arrays,
+                        parameter_maps.get(block.module_name, {}),
+                        source_port.interface_type.rsplit(".", 1)[0]
+                        if source_port.interface_type
+                        else None,
+                    )
+                )
+                for item_block, port in entries:
+                    if item_block.module_name == top.name:
+                        if port.direction == "output":
+                            top_driven_outputs.add(port.name)
+                        continue
+                    bind(item_block.module_name, port, signal_name, row)
 
     # Named-port instantiations may omit ports, but explicitly tie/open all omitted
     # child ports to make the generated integration deterministic and lint-friendly.
@@ -869,11 +1273,16 @@ def render_integration(
         lines.append("")
         lines.append("    // Internal child-to-child connections.")
         for wire in wires:
+            if wire.interface_type:
+                lines.append(
+                    f"    {wire.interface_type} {wire.name}{array_ranges(wire.arrays, wire.parameter_map)}();"
+                )
+                continue
             packed = width_range(wire.width, wire.parameter_map)
             packed_prefix = f"{packed} " if packed else ""
             lines.append(
                 f"    wire {packed_prefix}{wire.name}"
-                f"{array_range(wire.array, wire.parameter_map)};"
+                f"{array_ranges(wire.arrays, wire.parameter_map)};"
             )
 
     undriven_outputs = [
