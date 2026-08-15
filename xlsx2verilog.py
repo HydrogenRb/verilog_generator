@@ -227,6 +227,8 @@ class Port:
     interface_type: str | None = None
     packed_dimensions: tuple[Width, ...] = ()
     direction_inferred: bool = False
+    template_source: str | None = None
+    template_values: tuple[str, ...] = ()
 
     @property
     def array(self) -> Width | None:
@@ -569,10 +571,10 @@ def template_values_in_row(
     result: dict[str, list[str]] = {}
     for column in range(1, sheet.max_column + 1):
         text = clean(sheet.cell(row, column))
-        for match in re.finditer(r"(?<!\{)\{([^{}]+)\}(?!\})", text):
+        for match in re.finditer(r"(?<!\{)\{([^{}]*)\}(?!\})", text):
             prefix = text[: match.start()]
             variable_match = re.search(
-                r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:的[^{}]*|[:：=]|\bin\s*)$",
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:的[^{}]*|是|为|[:：=]|\bin\s*)$",
                 prefix,
                 re.IGNORECASE,
             )
@@ -679,7 +681,11 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
         ]
         if missing_variables:
             names = "、".join(missing_variables)
-            reporter.error(f"{context}: 端口名模板变量 {names} 未找到取值列表")
+            example = missing_variables[0]
+            reporter.error(
+                f"{context}: 端口名模板变量 {names} 未找到取值列表；"
+                f"请在同一分类中使用 {example}是{{a,b}} 或 {example}={{a,b}}"
+            )
             continue
         if port_variables:
             expansions = [
@@ -812,6 +818,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 interface_type=interface_type,
                 packed_dimensions=packed_dimensions,
                 direction_inferred=direction_inferred,
+                template_source=raw_port_name if port_variables else None,
+                template_values=tuple(expansion[name] for name in port_variables),
             )
             seen[port_name] = port
             ports.append(port)
@@ -1156,22 +1164,11 @@ def render_integration(
         module = modules.get(module_name)
         if module is None:
             return []
-        pattern_parts = ["^"]
-        cursor = 0
-        seen_variables: set[str] = set()
-        for match in matches:
-            pattern_parts.append(re.escape(reference[cursor : match.start()]))
-            variable = match.group(1)
-            group_name = f"template_{variable}"
-            if variable in seen_variables:
-                pattern_parts.append(f"(?P={group_name})")
-            else:
-                pattern_parts.append(f"(?P<{group_name}>.+?)")
-                seen_variables.add(variable)
-            cursor = match.end()
-        pattern_parts.extend([re.escape(reference[cursor:]), "$"])
-        pattern = re.compile("".join(pattern_parts))
-        ports = [port for port in module.ports if pattern.fullmatch(port.name)]
+        # Match the template row that produced the port, not merely the final
+        # name. A regex for ``data_{{i}}`` would also consume an unrelated
+        # physical port such as ``data_debug`` and create false count/direction
+        # conflicts in the integration sheet.
+        ports = [port for port in module.ports if port.template_source == reference]
         if not ports:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有与模板端口 {reference} 匹配的展开端口"
@@ -1183,23 +1180,56 @@ def render_integration(
     ) -> list[list[tuple[IntegrationBlock, Port]]]:
         if not expanded:
             return []
-        non_single_counts = {len(ports) for _, ports in expanded if len(ports) > 1}
-        if len(non_single_counts) > 1:
-            details = ", ".join(
-                f"{block.module_name}={len(ports)}" for block, ports in expanded
+        templated = [
+            (block, ports)
+            for block, ports in expanded
+            if ports and ports[0].template_source is not None
+        ]
+        template_counts = {len(ports) for _, ports in templated}
+        if len(template_counts) > 1:
+            details = "; ".join(
+                f"{block.module_name}={len(ports)}[{', '.join(port.name for port in ports)}]"
+                for block, ports in expanded
             )
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: 模板端口展开数量不一致 ({details})"
             )
             return []
-        count = next(iter(non_single_counts), 1)
+
+        if templated:
+            _, reference_ports = templated[0]
+            ordered_values = [port.template_values for port in reference_ports]
+            reference_values = set(ordered_values)
+            for block, ports in templated[1:]:
+                current_values = {port.template_values for port in ports}
+                if current_values != reference_values:
+                    expected = ", ".join("/".join(values) for values in ordered_values)
+                    actual = ", ".join(
+                        "/".join(port.template_values) for port in ports
+                    )
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: 模板端口展开取值不一致 "
+                        f"(基准=[{expected}], {block.module_name}=[{actual}])"
+                    )
+                    return []
+
+        count = next(iter(template_counts), 1)
         result: list[list[tuple[IntegrationBlock, Port]]] = []
         for index in range(count):
             row_items: list[tuple[IntegrationBlock, Port]] = []
+            expansion_values = (
+                templated[0][1][index].template_values if templated else ()
+            )
             for block, ports in expanded:
                 if not ports:
                     continue
-                row_items.append((block, ports[0] if len(ports) == 1 else ports[index]))
+                if ports[0].template_source is None:
+                    port = ports[0]
+                else:
+                    port = next(
+                        item for item in ports if item.template_values == expansion_values
+                    )
+                row_items.append((block, port))
             result.append(row_items)
         return result
 

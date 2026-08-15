@@ -448,6 +448,68 @@ class GenerationTests(unittest.TestCase):
             self.assertTrue(any("i/o 为空" in item.message for item in reporter.items))
             self.assertTrue(any("模板花括号不完整" in item.message for item in reporter.items))
 
+    def test_template_provenance_prevents_false_direction_and_count_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "template-provenance.xlsx"
+            output = root / "generated"
+            top_rows = module_sheet(
+                "TOP",
+                [
+                    ("dir_{{i}}", 1, None, "i"),
+                    ("dir_debug", 1, None, "i"),
+                    ("count_{{i}}", 1, None, "i"),
+                    ("count_debug", 1, None, "i"),
+                ],
+            )
+            child_rows = module_sheet(
+                "CHILD",
+                [
+                    ("dir_{{i}}", 1, None, "i"),
+                    ("dir_debug", 1, None, "o"),
+                    ("count_{{i}}", 1, None, "i"),
+                ],
+            )
+            for rows, note in (
+                (top_rows, "i是{a,b}"),
+                (child_rows, "i是{b,a}"),
+            ):
+                set_cell(rows, 3, 1, "dir")
+                set_cell(rows, 3, 9, note)
+                set_cell(rows, 5, 1, "count")
+                set_cell(rows, 5, 9, note)
+            integration_rows = integration_sheet(
+                [
+                    (
+                        ["TOP", "CHILD"],
+                        [
+                            [("dir_{{i}}", "i"), ("dir_{{i}}", "i")],
+                            [("count_{{i}}", "i"), ("count_{{i}}", "i")],
+                        ],
+                    )
+                ]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    ("Integration", integration_rows),
+                    ("TOP", top_rows),
+                    ("CHILD", child_rows),
+                ],
+            )
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual({path.name for path in paths}, {"TOP.v", "CHILD.v"})
+            text = (output / "TOP.v").read_text(encoding="utf-8")
+            self.assertRegex(text, r"(?m)^\s*\.dir_b\s+\(dir_b\),$")
+            self.assertRegex(text, r"(?m)^\s*\.dir_a\s+\(dir_a\),$")
+            self.assertRegex(text, r"(?m)^\s*\.count_b\s+\(count_b\),$")
+            self.assertRegex(text, r"(?m)^\s*\.count_a\s+\(count_a\)$")
+            self.assertRegex(text, r"(?m)^\s*\.dir_debug\s+\(\),$")
+            self.assertFalse(any("展开数量不一致" in item.message for item in reporter.items))
+            self.assertFalse(any("方向冲突" in item.message for item in reporter.items))
+
     def test_integer_expression_evaluator_is_safe(self) -> None:
         self.assertEqual(evaluate_int_expression("2 + 3 * 4"), 14)
         self.assertEqual(evaluate_int_expression("(24 / 3) << 1"), 16)
