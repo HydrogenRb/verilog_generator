@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import itertools
 import re
 import sys
 import zipfile
@@ -25,7 +26,9 @@ INTERFACE_TYPE_RE = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_$]*::)*"
     r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$"
 )
-TEMPLATE_TOKEN = "{{i}}"
+TEMPLATE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+MISSING_TEMPLATE_OPEN_RE = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+MISSING_TEMPLATE_CLOSE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})")
 UNKNOWN_WIDTH = 114
 
 
@@ -223,6 +226,7 @@ class Port:
     arrays: tuple[Width, ...] = ()
     interface_type: str | None = None
     packed_dimensions: tuple[Width, ...] = ()
+    direction_inferred: bool = False
 
     @property
     def array(self) -> Width | None:
@@ -541,14 +545,57 @@ def analyze_port_dimensions(
     return width, tuple(packed_dimensions), tuple(arrays)
 
 
-def template_values_in_row(sheet: Sheet, row: int) -> list[str]:
+def normalize_template_text(value: Any, context: str, reporter: Reporter) -> str:
+    """Normalize a recoverable one-brace typo while preserving named templates."""
+    text = clean(value)
+    normalized = MISSING_TEMPLATE_OPEN_RE.sub(r"{{\1}}", text)
+    normalized = MISSING_TEMPLATE_CLOSE_RE.sub(r"{{\1}}", normalized)
+    if normalized != text:
+        reporter.warning(
+            f"{context}: 模板花括号不完整 {text!r}，按 {normalized!r} 处理；请修正 XLSX"
+        )
+    return normalized
+
+
+def template_variables(text: Any) -> list[str]:
+    """Return distinct template variable names in their first-seen order."""
+    return list(dict.fromkeys(TEMPLATE_RE.findall(clean(text))))
+
+
+def template_values_in_row(
+    sheet: Sheet, row: int, context: str, reporter: Reporter
+) -> dict[str, list[str]]:
+    """Read named domains such as ``j的范围是{a,b}`` from a row."""
+    result: dict[str, list[str]] = {}
     for column in range(1, sheet.max_column + 1):
         text = clean(sheet.cell(row, column))
         for match in re.finditer(r"(?<!\{)\{([^{}]+)\}(?!\})", text):
+            prefix = text[: match.start()]
+            variable_match = re.search(
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:的[^{}]*|[:：=]|\bin\s*)$",
+                prefix,
+                re.IGNORECASE,
+            )
+            if not variable_match:
+                continue
+            variable = variable_match.group(1)
             values = [item.strip() for item in re.split(r"[,，、;；]", match.group(1))]
-            if values and all(values) and len(values) == len(set(values)):
-                return values
-    return []
+            if not values or not all(values):
+                reporter.error(f"{context}: 模板变量 {variable} 的取值列表包含空值")
+                continue
+            if len(values) != len(set(values)):
+                reporter.error(f"{context}: 模板变量 {variable} 的取值列表包含重复值")
+                continue
+            previous = result.setdefault(variable, values)
+            if previous != values:
+                reporter.error(
+                    f"{context}: 模板变量 {variable} 在同一行定义了冲突的取值列表"
+                )
+    return result
+
+
+def substitute_template(text: Any, values: dict[str, str]) -> str:
+    return TEMPLATE_RE.sub(lambda match: values.get(match.group(1), match.group(0)), clean(text))
 
 
 def template_default_value(raw_default: Any, values: list[str], index: int) -> Any:
@@ -612,35 +659,57 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
     parameters: dict[str, str] = {}
     macros: dict[str, str] = {}
     seen: dict[str, Port] = {}
-    active_template_values: list[str] = []
+    active_template_values: dict[str, list[str]] = {}
     category_column = columns["port"] - 1
     for row in range(header_row + 1, sheet.max_row + 1):
         raw_port_name = clean(sheet.cell(row, columns["port"]))
         if not raw_port_name:
             continue
         context = f"页签 {sheet.name} 第 {row} 行"
+        raw_port_name = normalize_template_text(raw_port_name, context, reporter)
         if category_column >= 1 and clean(sheet.cell(row, category_column)):
-            active_template_values = []
-        row_template_values = template_values_in_row(sheet, row)
+            active_template_values = {}
+        row_template_values = template_values_in_row(sheet, row, context, reporter)
         if row_template_values:
-            active_template_values = row_template_values
-        if TEMPLATE_TOKEN in raw_port_name:
-            if not active_template_values:
-                reporter.error(f"{context}: 端口名包含 {TEMPLATE_TOKEN}，但未找到 i 的取值列表")
-                continue
-            expansions: list[str | None] = active_template_values
+            active_template_values.update(row_template_values)
+
+        port_variables = template_variables(raw_port_name)
+        missing_variables = [
+            variable for variable in port_variables if variable not in active_template_values
+        ]
+        if missing_variables:
+            names = "、".join(missing_variables)
+            reporter.error(f"{context}: 端口名模板变量 {names} 未找到取值列表")
+            continue
+        if port_variables:
+            expansions = [
+                dict(zip(port_variables, combination))
+                for combination in itertools.product(
+                    *(active_template_values[variable] for variable in port_variables)
+                )
+            ]
         else:
-            expansions = [None]
+            expansions = [{}]
+
+        base_width = normalize_template_text(
+            sheet.cell(row, columns["width"]), f"{context} 位宽", reporter
+        )
+        base_array = normalize_template_text(
+            sheet.cell(row, columns["array"]) if "array" in columns else None,
+            f"{context} 数组",
+            reporter,
+        )
+        base_default = sheet.cell(row, columns["value"])
+        base_array_default = (
+            sheet.cell(row, columns["array_value"])
+            if "array_value" in columns
+            else None
+        )
 
         for expansion_index, expansion in enumerate(expansions):
-            port_name = (
-                raw_port_name.replace(TEMPLATE_TOKEN, expansion)
-                if expansion is not None
-                else raw_port_name
-            )
-            expanded_context = (
-                f"{context} (i={expansion})" if expansion is not None else context
-            )
+            port_name = substitute_template(raw_port_name, expansion)
+            assignments = ", ".join(f"{name}={value}" for name, value in expansion.items())
+            expanded_context = f"{context} ({assignments})" if assignments else context
             if not IDENTIFIER_RE.fullmatch(port_name):
                 reporter.error(
                     f"{expanded_context}: 端口名 {port_name!r} 不是合法 Verilog 标识符"
@@ -651,27 +720,43 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 # occurrence owns its type/direction and later rows merge into it.
                 continue
 
-            raw_width = sheet.cell(row, columns["width"])
-            raw_default = sheet.cell(row, columns["value"])
-            raw_array = sheet.cell(row, columns["array"]) if "array" in columns else None
-            raw_array_default = (
-                sheet.cell(row, columns["array_value"])
-                if "array_value" in columns
-                else None
-            )
-            if expansion is not None:
-                raw_width = clean(raw_width).replace(TEMPLATE_TOKEN, expansion)
-                raw_array = clean(raw_array).replace(TEMPLATE_TOKEN, expansion)
+            raw_width = substitute_template(base_width, expansion)
+            raw_array = substitute_template(base_array, expansion)
+            raw_default = base_default
+            raw_array_default = base_array_default
+            if len(port_variables) == 1:
+                variable = port_variables[0]
+                domain = active_template_values[variable]
                 raw_default = template_default_value(
-                    raw_default, active_template_values, expansion_index
+                    raw_default, domain, expansion_index
                 )
                 raw_array_default = template_default_value(
-                    raw_array_default, active_template_values, expansion_index
+                    raw_array_default, domain, expansion_index
                 )
+            raw_default = substitute_template(raw_default, expansion)
+            raw_array_default = substitute_template(raw_array_default, expansion)
+
+            unresolved_width = template_variables(raw_width)
+            if unresolved_width:
+                names = "、".join(unresolved_width)
+                reporter.warning(
+                    f"{expanded_context}: 位宽引用未绑定模板变量 {names}，"
+                    f"使用占位值 {UNKNOWN_WIDTH}；请补充变量取值或修正变量名"
+                )
+                raw_width = str(UNKNOWN_WIDTH)
+            unresolved_array = template_variables(raw_array)
+            if unresolved_array:
+                names = "、".join(unresolved_array)
+                reporter.warning(
+                    f"{expanded_context}: 数组维度引用未绑定模板变量 {names}，"
+                    f"使用占位值 {UNKNOWN_WIDTH}；请补充变量取值或修正变量名"
+                )
+                raw_array = str(UNKNOWN_WIDTH)
 
             listed_direction = normalized_direction(
                 sheet.cell(row, columns["direction"])
             )
+            direction_inferred = False
             interface_type = clean(raw_width) if INTERFACE_TYPE_RE.fullmatch(clean(raw_width)) else None
             if interface_type:
                 direction = "interface"
@@ -688,14 +773,22 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     raw_array_default,
                     expanded_context,
                     reporter,
-                    fallback_uncertain=expansion is not None,
+                    fallback_uncertain=bool(expansion),
                 )
             else:
-                direction = listed_direction or ""
+                raw_direction = sheet.cell(row, columns["direction"])
+                if listed_direction is None and not clean(raw_direction):
+                    direction = "inout"
+                    direction_inferred = True
+                    reporter.warning(
+                        f"{expanded_context}: i/o 为空，暂按 inout 生成；请确认并补充方向"
+                    )
+                else:
+                    direction = listed_direction or ""
                 if direction not in {"input", "output", "inout"}:
                     reporter.error(
                         f"{expanded_context}: 无法识别 i/o 值 "
-                        f"{sheet.cell(row, columns['direction'])!r}"
+                        f"{raw_direction!r}"
                     )
                     continue
                 width, packed_dimensions, arrays = analyze_port_dimensions(
@@ -705,19 +798,20 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     raw_array_default,
                     expanded_context,
                     reporter,
-                    fallback_uncertain=expansion is not None,
+                    fallback_uncertain=bool(expansion),
                 )
 
             if interface_type:
                 packed_dimensions = ()
             port = Port(
-                port_name,
-                direction,
-                width,
-                row,
-                arrays,
-                interface_type,
-                packed_dimensions,
+                name=port_name,
+                direction=direction,
+                width=width,
+                row=row,
+                arrays=arrays,
+                interface_type=interface_type,
+                packed_dimensions=packed_dimensions,
+                direction_inferred=direction_inferred,
             )
             seen[port_name] = port
             ports.append(port)
@@ -949,6 +1043,11 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
         lines.append(
             f"    {port.direction:<{direction_width}} wire {packed_field}"
             f"{port.name}{array_ranges(port.arrays)}{comma}"
+            + (
+                "  /* TODO: XLSX i/o 为空，暂按 inout 生成；需处理方向缺失问题 */"
+                if port.direction_inferred
+                else ""
+            )
         )
     lines.append(");")
     return lines
@@ -1048,17 +1147,30 @@ def render_integration(
         return port
 
     def get_ports(module_name: str, reference: str, row: int) -> list[Port]:
-        if TEMPLATE_TOKEN not in reference:
+        context = f"集成页签 {sheet.name} 第 {row} 行"
+        reference = normalize_template_text(reference, context, reporter)
+        matches = list(TEMPLATE_RE.finditer(reference))
+        if not matches:
             port = get_port(module_name, reference, row)
             return [port] if port else []
         module = modules.get(module_name)
         if module is None:
             return []
-        pattern = re.compile(
-            "^"
-            + re.escape(reference).replace(re.escape(TEMPLATE_TOKEN), r"(.+?)")
-            + "$"
-        )
+        pattern_parts = ["^"]
+        cursor = 0
+        seen_variables: set[str] = set()
+        for match in matches:
+            pattern_parts.append(re.escape(reference[cursor : match.start()]))
+            variable = match.group(1)
+            group_name = f"template_{variable}"
+            if variable in seen_variables:
+                pattern_parts.append(f"(?P={group_name})")
+            else:
+                pattern_parts.append(f"(?P<{group_name}>.+?)")
+                seen_variables.add(variable)
+            cursor = match.end()
+        pattern_parts.extend([re.escape(reference[cursor:]), "$"])
+        pattern = re.compile("".join(pattern_parts))
         ports = [port for port in module.ports if pattern.fullmatch(port.name)]
         if not ports:
             reporter.error(
@@ -1077,7 +1189,7 @@ def render_integration(
                 f"{block.module_name}={len(ports)}" for block, ports in expanded
             )
             reporter.error(
-                f"集成页签 {sheet.name} 第 {row} 行: {TEMPLATE_TOKEN} 展开数量不一致 ({details})"
+                f"集成页签 {sheet.name} 第 {row} 行: 模板端口展开数量不一致 ({details})"
             )
             return []
         count = next(iter(non_single_counts), 1)
@@ -1095,8 +1207,21 @@ def render_integration(
         raw_direction = sheet.cell(row, block.direction_column)
         listed_direction = normalized_direction(raw_direction)
         if listed_direction is None:
+            if not clean(raw_direction):
+                listed_direction = "inout"
+                reporter.warning(
+                    f"集成页签 {sheet.name} 第 {row} 行: "
+                    f"{block.module_name}.{port.name} 的 i/o 为空，按 inout 校验；请补充方向"
+                )
+            else:
+                reporter.warning(
+                    f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的 i/o 值 {raw_direction!r} 无法识别"
+                )
+                return
+        if listed_direction != port.direction and port.direction_inferred:
             reporter.warning(
-                f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的 i/o 值 {raw_direction!r} 无法识别"
+                f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} "
+                f"由空 i/o 推断为 inout，与集成页签的 {listed_direction} 不同；请人工确认"
             )
         elif listed_direction != port.direction:
             reporter.error(

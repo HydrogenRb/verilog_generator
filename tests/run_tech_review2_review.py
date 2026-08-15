@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tests.run_review_matrix import run_matrix  # noqa: E402
-from xlsx2verilog import Reporter, TEMPLATE_TOKEN, generate, parse_workbook  # noqa: E402
+from xlsx2verilog import Reporter, TEMPLATE_RE, generate, parse_workbook  # noqa: E402
 
 
 SAMPLE = ROOT / "test.xlsx"
@@ -68,9 +68,15 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
             f"DW_{signal} 不确定位宽使用 114",
             f"DW_{signal} 未使用 114 占位",
         )
+        result.check(
+            f"test_bus2_{signal}_dat" in top
+            and f"test_bus2_{signal}_valid" in top,
+            f"{{{{j}}}} 已展开 {signal}，畸形 valid 模板已恢复",
+            f"缺少 {{{{j}}}} 展开端口 {signal}",
+        )
     result.check(
         "sky_cs_if.mst chi_if_risc" in top
-        and ".chi_if_risc         (chi_if_risc)" in top,
+        and re.search(r"(?m)^\s*\.chi_if_risc\s+\(chi_if_risc\),$", top),
         "interface 声明和实例连接正确",
         "interface 声明或连接缺失",
     )
@@ -80,13 +86,23 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
         "带空格乘号已按原顺序转换为多维 packed array",
         "多维 packed array 声明不符合预期",
     )
-    fallback_warnings = [
-        item for item in reporter.items if item.level == "警告" and "占位值 114" in item.message
+    legacy_fallback_warnings = [
+        item
+        for item in reporter.items
+        if item.level == "警告" and "位宽默认值无法确定" in item.message
     ]
     result.check(
-        len(fallback_warnings) == 9,
+        len(legacy_fallback_warnings) == 9,
         "9 个模板宏位宽均产生明确的 114 告警",
-        f"114 告警数量错误：{len(fallback_warnings)}",
+        f"旧模板 114 告警数量错误：{len(legacy_fallback_warnings)}",
+    )
+    unresolved_warnings = [
+        item for item in reporter.items if "未绑定模板变量 i" in item.message
+    ]
+    result.check(
+        len(unresolved_warnings) == 6,
+        "j 端口中的未绑定 i 位宽产生 6 个明确的 114 告警",
+        f"未绑定 i 告警数量错误：{len(unresolved_warnings)}",
     )
     return result, paths, reporter
 
@@ -196,9 +212,9 @@ def static_round(paths: list[Path]) -> RoundResult:
                 f"{child_name} 端口连接数量异常：{duplicates}",
             )
         result.check(
-            TEMPLATE_TOKEN not in top,
-            "生成代码中不再存在 {{i}} 占位符",
-            "生成代码仍包含 {{i}}",
+            TEMPLATE_RE.search(top) is None,
+            "生成代码中不再存在命名模板占位符",
+            "生成代码仍包含命名模板占位符",
         )
     result.check(
         not list(SAMPLE_OUTPUT.glob("*.tmp")),

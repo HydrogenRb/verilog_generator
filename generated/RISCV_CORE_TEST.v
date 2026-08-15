@@ -50,7 +50,16 @@ module RISCV_CORE_TEST #(
     output wire                                 test_bus_sig2_valid,
     output wire                                 test_bus_sig3_valid,
     sky_cs_if.mst chi_if_risc,
-    output wire [`LANE_NUM-1:0][`Test_size-1:0] array
+    output wire [`LANE_NUM-1:0][`Test_size-1:0] array,
+    input  wire [113:0]                         test_bus2_sig1_dat,
+    input  wire [113:0]                         test_bus2_sig2_dat,
+    input  wire [113:0]                         test_bus2_sig3_dat,
+    input  wire                                 test_bus2_sig1_ready,
+    input  wire                                 test_bus2_sig2_ready,
+    input  wire                                 test_bus2_sig3_ready,
+    output wire                                 test_bus2_sig1_valid,
+    output wire                                 test_bus2_sig2_valid,
+    output wire                                 test_bus2_sig3_valid
 );
 
     // Module placeholder: drive every output to zero.
@@ -65,5 +74,8 @@ module RISCV_CORE_TEST #(
     assign test_bus_sig2_valid = 1'b0;
     assign test_bus_sig3_valid = 1'b0;
     assign array = '0;
+    assign test_bus2_sig1_valid = 1'b0;
+    assign test_bus2_sig2_valid = 1'b0;
+    assign test_bus2_sig3_valid = 1'b0;
 
 endmodule

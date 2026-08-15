@@ -15,7 +15,13 @@ from xlsx2verilog import (
     generate,
     parse_workbook,
 )
-from tests.run_review_matrix import integration_sheet, module_sheet, run_matrix, write_xlsx
+from tests.run_review_matrix import (
+    integration_sheet,
+    module_sheet,
+    run_matrix,
+    set_cell,
+    write_xlsx,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +72,27 @@ class ReaderTests(unittest.TestCase):
             [item.expression for item in core_array.packed_dimensions], ["`LANE_NUM"]
         )
         self.assertEqual(core_array.arrays, ())
+        self.assertEqual(
+            [
+                port.name
+                for port in top.ports
+                if port.name.startswith("test_bus2_")
+            ],
+            [
+                "test_bus2_sig1_dat",
+                "test_bus2_sig2_dat",
+                "test_bus2_sig3_dat",
+                "test_bus2_sig1_ready",
+                "test_bus2_sig2_ready",
+                "test_bus2_sig3_ready",
+                "test_bus2_sig1_valid",
+                "test_bus2_sig2_valid",
+                "test_bus2_sig3_valid",
+            ],
+        )
+        self.assertEqual(top.port_map["test_bus2_sig1_dat"].width.expression, "114")
+        self.assertTrue(any("未绑定模板变量 i" in item.message for item in reporter.items))
+        self.assertTrue(any("模板花括号不完整" in item.message for item in reporter.items))
 
     def test_width_warning_uses_review_format(self) -> None:
         generated_reporter = generate(SAMPLE, Path("unused"), check_only=True)[1]
@@ -119,7 +146,7 @@ class GenerationTests(unittest.TestCase):
                 "wire [`LANE_NUM-1:0][`Test_size-1:0] w_array;", top
             )
             self.assertIn(".test_bus_sig3_dat   (test_bus_sig3_dat)", top)
-            self.assertIn(".chi_if_risc         (chi_if_risc)", top)
+            self.assertRegex(top, r"(?m)^\s*\.chi_if_risc\s+\(chi_if_risc\),$")
             self.assertIn(".array               (w_array)", top)
             self.assertIn(
                 "output wire [`LANE_NUM-1:0][`Test_size-1:0] array", core
@@ -387,6 +414,39 @@ class GenerationTests(unittest.TestCase):
                 "assign cube[gen_zero_cube_0][gen_zero_cube_1] = 8'b0;", text
             )
             self.assertTrue(any("占位值 114" in item.message for item in reporter.items))
+
+    def test_named_templates_cartesian_product_and_missing_io_note(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "named-templates.xlsx"
+            output = root / "generated"
+            rows = module_sheet(
+                "GENERIC",
+                [
+                    ("bus_{{j}}_{{z}}", "`W_{{j}}", None, "i"),
+                    ("done_{j}}", 1, None, "o"),
+                    ("needs_review", 1, None, None),
+                ],
+            )
+            set_cell(rows, 3, 9, "j的范围是{a,b}; z的范围是{x,y}")
+            set_cell(rows, 4, 1, None)
+            write_xlsx(workbook, [("GENERIC", rows)])
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual([path.name for path in paths], ["GENERIC.v"])
+            text = paths[0].read_text(encoding="utf-8")
+            for name in ("bus_a_x", "bus_a_y", "bus_b_x", "bus_b_y"):
+                self.assertIn(name, text)
+            self.assertIn("done_a", text)
+            self.assertIn("done_b", text)
+            self.assertRegex(text, r"(?m)^\s*inout\s+wire\s+needs_review")
+            self.assertIn(
+                "TODO: XLSX i/o 为空，暂按 inout 生成；需处理方向缺失问题",
+                text,
+            )
+            self.assertTrue(any("i/o 为空" in item.message for item in reporter.items))
+            self.assertTrue(any("模板花括号不完整" in item.message for item in reporter.items))
 
     def test_integer_expression_evaluator_is_safe(self) -> None:
         self.assertEqual(evaluate_int_expression("2 + 3 * 4"), 14)
