@@ -13,8 +13,8 @@ module RISCV_CORE_TEST #(
     // ----- ----- ----- ----- ----- -----
     // clk & rst
     // ----- ----- ----- ----- ----- -----
-    input  wire [`RST_LANE-1:0]                 n_rst,
-    input  wire [`CLK_LANE-1:0]                 clk,
+    input  wire                 [`RST_LANE-1:0] n_rst,
+    input  wire                 [`CLK_LANE-1:0] clk,
 
     // ----- ----- ----- ----- ----- -----
     // dft_sig
@@ -25,33 +25,33 @@ module RISCV_CORE_TEST #(
     // ----- ----- ----- ----- ----- -----
     // uid
     // ----- ----- ----- ----- ----- -----
-    input  wire [UID_SIZE-1:0]                  uid,
+    input  wire                  [UID_SIZE-1:0] uid,
 
     // ----- ----- ----- ----- ----- -----
     // AHB
     // ----- ----- ----- ----- ----- -----
     input  wire                                 ahb_test_1,
-    input  wire [1:0]                           ahb_test_2,
-    output wire [2:0]                           ahb_test_3,
-    output wire [3:0]                           ahb_test_4,
-    output wire [4:0]                           ahb_test_5,
+    input  wire                           [1:0] ahb_test_2,
+    output wire                           [2:0] ahb_test_3,
+    output wire                           [3:0] ahb_test_4,
+    output wire                           [4:0] ahb_test_5,
 
     // ----- ----- ----- ----- ----- -----
     // APB bus
     // ----- ----- ----- ----- ----- -----
-    input  wire [10:0]                          apb_1,
-    input  wire [11:0]                          apb_2,
-    output wire [12:0]                          apb_3,
-    output wire [13:0]                          apb_4,
-    output wire [14:0]                          apb_5,
-    output wire [15:0]                          apb_6,
+    input  wire                          [10:0] apb_1,
+    input  wire                          [11:0] apb_2,
+    output wire                          [12:0] apb_3,
+    output wire                          [13:0] apb_4,
+    output wire                          [14:0] apb_5,
+    output wire                          [15:0] apb_6,
 
     // ----- ----- ----- ----- ----- -----
     // test_bus
     // ----- ----- ----- ----- ----- -----
-    input  wire [`DW_sig1-1:0]                  test_bus_sig1_dat,
-    input  wire [`DW_sig2-1:0]                  test_bus_sig2_dat,
-    input  wire [`DW_sig3-1:0]                  test_bus_sig3_dat,
+    input  wire                  [`DW_sig1-1:0] test_bus_sig1_dat,
+    input  wire                  [`DW_sig2-1:0] test_bus_sig2_dat,
+    input  wire                  [`DW_sig3-1:0] test_bus_sig3_dat,
     input  wire                                 test_bus_sig1_ready,
     input  wire                                 test_bus_sig2_ready,
     input  wire                                 test_bus_sig3_ready,
@@ -72,9 +72,9 @@ module RISCV_CORE_TEST #(
     // ----- ----- ----- ----- ----- -----
     // test_bus2
     // ----- ----- ----- ----- ----- -----
-    input  wire [113:0]                         test_bus2_sig1_dat,
-    input  wire [113:0]                         test_bus2_sig2_dat,
-    input  wire [113:0]                         test_bus2_sig3_dat,
+    input  wire                         [113:0] test_bus2_sig1_dat,
+    input  wire                         [113:0] test_bus2_sig2_dat,
+    input  wire                         [113:0] test_bus2_sig3_dat,
     input  wire                                 test_bus2_sig1_ready,
     input  wire                                 test_bus2_sig2_ready,
     input  wire                                 test_bus2_sig3_ready,
@@ -84,6 +84,7 @@ module RISCV_CORE_TEST #(
 );
 
     // Module placeholder: drive every output to zero.
+    // 模块占位逻辑：所有输出均置零。
     assign ahb_test_3           = 3'b0;
     assign ahb_test_4           = 4'b0;
     assign ahb_test_5           = 5'b0;

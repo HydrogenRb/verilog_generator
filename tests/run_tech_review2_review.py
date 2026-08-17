@@ -76,17 +76,17 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
         )
     result.check(
         re.search(r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$", top)
-        and re.search(r"(?m)^\s*\.chi_if_risc\s+\(chi_if_risc\),$", top),
+        and re.search(r"(?m)^\s*\.chi_if_risc\s+\(chi_if_risc\s*\),$", top),
         "interface 声明和实例连接正确",
         "interface 声明或连接缺失",
     )
     result.check(
         re.search(
-            r"(?m)^\s*wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+w_array;$",
+            r"(?m)^\s*wire\s+\[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+w_array;$",
             top,
         )
         and re.search(
-            r"(?m)^\s*output wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+array,?$",
+            r"(?m)^\s*output wire\s+\[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+array,?$",
             core,
         ),
         "带空格乘号已按原顺序转换为多维 packed array",

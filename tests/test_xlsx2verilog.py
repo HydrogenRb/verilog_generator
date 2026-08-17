@@ -6,7 +6,9 @@ import unittest
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+import xlsx2verilog
 from xlsx2verilog import (
     Reporter,
     XlsxReader,
@@ -132,11 +134,11 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("parameter integer UID_SIZE = 5", top)
             self.assertRegex(top, r"(?m)^`define DFT_BUS\s+64$")
             self.assertRegex(top, r"(?m)^\s*wire\s+w_apb_1;$")
-            self.assertRegex(top, r"(?m)^\s*wire \[15:0\]\s+w_apb_6;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[15:0\]\s+w_apb_6;$")
             self.assertIn("RISCV_CORE_TEST #(", top)
             self.assertIn("MEM_PHY #(", top)
-            self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(1'b0\),$")
-            self.assertRegex(top, r"(?m)^\s*\.ahb_test_3\s+\(\),$")
+            self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(1'b0\s*\),$")
+            self.assertRegex(top, r"(?m)^\s*\.ahb_test_3\s+\(\s*\),$")
             self.assertRegex(top, r"(?m)^\s*assign ahb_test_6\s+= 6'b0;$")
             self.assertRegex(core, r"(?m)^\s*assign apb_6\s+= 16'b0;$")
             self.assertRegex(phy, r"(?m)^\s*assign apb_1\s+= 1'b0;$")
@@ -146,14 +148,41 @@ class GenerationTests(unittest.TestCase):
                 top,
                 r"(?m)^\s*wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+w_array;$",
             )
-            self.assertIn(".test_bus_sig3_dat   (test_bus_sig3_dat)", top)
-            self.assertRegex(top, r"(?m)^\s*\.chi_if_risc\s+\(chi_if_risc\),$")
-            self.assertIn(".array               (w_array)", top)
+            self.assertRegex(
+                top,
+                r"(?m)^\s*\.test_bus_sig3_dat\s+\(test_bus_sig3_dat\s*\),$",
+            )
+            self.assertRegex(top, r"(?m)^\s*\.chi_if_risc\s+\(chi_if_risc\s*\),$")
+            self.assertRegex(top, r"(?m)^\s*\.array\s+\(w_array\s*\),$")
             self.assertRegex(
                 core,
                 r"(?m)^\s*output wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+array,$",
             )
             self.assertRegex(core, r"(?m)^\s*assign array\s+= '0;$")
+            self.assertIn("// 子模块之间的内部连线。", top)
+            self.assertIn("// 没有有效子模块驱动的 TOP 输出在当前配置下置零。", top)
+            self.assertIn("// 模块占位逻辑：所有输出均置零。", core)
+
+            top_header = top[top.index("module RISCV_TOP") : top.index(");")]
+            ranged_ports = [
+                line
+                for line in top_header.splitlines()
+                if "[" in line and "]" in line and not line.lstrip().startswith("//")
+            ]
+            self.assertGreater(len(ranged_ports), 3)
+            self.assertEqual(len({line.rindex("]") for line in ranged_ports}), 1)
+            self.assertEqual(len({line.rindex(":") for line in ranged_ports}), 1)
+            symbolic_ranges = [line for line in ranged_ports if "-1" in line]
+            self.assertEqual(len({line.rindex("-") for line in symbolic_ranges}), 1)
+
+            wire_lines_with_ranges = [
+                line
+                for line in top.splitlines()
+                if re.match(r"^\s*wire\s+.*\]", line)
+            ]
+            self.assertEqual(
+                len({line.rindex("]") for line in wire_lines_with_ranges}), 1
+            )
 
             for child_name in ("RISCV_CORE_TEST", "MEM_PHY"):
                 instance_match = re.search(
@@ -255,6 +284,7 @@ class GenerationTests(unittest.TestCase):
                                 ("clk", 1, None, "i"),
                                 ("short", 1, None, "i"),
                                 ("much_longer", "WIDTH", 8, "i"),
+                                ("param_input", "LONG_PARAMETER", 16, "i"),
                                 ("result", "WIDTH", 8, "o"),
                             ],
                         ),
@@ -281,9 +311,27 @@ class GenerationTests(unittest.TestCase):
             ]
             self.assertEqual(len(set(name_columns)), 1)
 
-            self.assertRegex(top, r"(?m)^        \.WIDTH\s+\(WIDTH\)$")
-            self.assertRegex(top, r"(?m)^        \.short\s{7}\(1'b0\),$")
-            self.assertRegex(top, r"(?m)^        \.much_longer \(\{WIDTH\{1'b0\}\}\),$")
+            self.assertRegex(top, r"(?m)^        \.WIDTH\s+\(WIDTH\s*\),$")
+            self.assertRegex(top, r"(?m)^        \.short\s{7}\(1'b0\s*\),$")
+            self.assertRegex(
+                top,
+                r"(?m)^        \.much_longer \(\{WIDTH\{1'b0\}\}\s*\),$",
+            )
+            connection_lines = [
+                line
+                for line in top.splitlines()
+                if line.lstrip().startswith(
+                    (".clk", ".short", ".much_longer", ".param_input", ".result")
+                )
+            ]
+            self.assertEqual(len({line.rindex(")") for line in connection_lines}), 1)
+            parameter_lines = [
+                line
+                for line in top.splitlines()
+                if line.lstrip().startswith((".WIDTH", ".LONG_PARAMETER"))
+            ]
+            self.assertEqual(len(parameter_lines), 2)
+            self.assertEqual(len({line.rindex(")") for line in parameter_lines}), 1)
 
     def test_unpacked_array_declarations_connections_and_zero_drives(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -350,19 +398,25 @@ class GenerationTests(unittest.TestCase):
             source = (output / "ARRAY_SRC.v").read_text(encoding="utf-8")
             destination = (output / "ARRAY_DST.v").read_text(encoding="utf-8")
 
-            self.assertIn(
-                "output wire [DATA_WIDTH-1:0] monitor [DEPTH-1:0]", top
+            self.assertRegex(
+                top,
+                r"output wire\s+\[DATA_WIDTH-1:0\]\s+monitor\s+\[DEPTH-1:0\]",
             )
-            self.assertIn(
-                "output wire [DATA_WIDTH-1:0] data [DEPTH-1:0]", source
+            self.assertRegex(
+                source,
+                r"output wire\s+\[DATA_WIDTH-1:0\]\s+data\s+\[DEPTH-1:0\]",
             )
-            self.assertIn(
-                "input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]", destination
+            self.assertRegex(
+                destination,
+                r"input wire\s+\[DATA_WIDTH-1:0\]\s+data\s+\[DEPTH-1:0\]",
             )
-            self.assertIn(
-                "wire [DATA_WIDTH-1:0] w_data [DEPTH-1:0];", top
+            self.assertRegex(
+                top,
+                r"wire\s+\[DATA_WIDTH-1:0\]\s+w_data\s+\[DEPTH-1:0\];",
             )
-            self.assertRegex(top, r"(?m)^        \.spare \('\{default:'0\}\)$")
+            self.assertRegex(
+                top, r"(?m)^        \.spare \('\{default:'0\}\s*\)$"
+            )
             self.assertIn(
                 "for (genvar gen_zero_data = 0; gen_zero_data < DEPTH; "
                 "gen_zero_data = gen_zero_data + 1) begin : g_zero_data",
@@ -400,13 +454,14 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual([path.name for path in paths], ["ADVANCED.v"])
             text = paths[0].read_text(encoding="utf-8")
-            self.assertRegex(text, r"output wire \[13:0\]\s+calculated")
-            self.assertRegex(text, r"output wire \[113:0\]\s+uncertain")
+            self.assertRegex(text, r"output wire\s+\[13:0\]\s+calculated")
+            self.assertRegex(text, r"output wire\s+\[113:0\]\s+uncertain")
             self.assertRegex(
-                text, r"output wire \[`ROWS-1:0\]\[`COLS-1:0\]\s+matrix"
+                text, r"output wire\s+\[`ROWS-1:0\]\[`COLS-1:0\]\s+matrix"
             )
             self.assertRegex(
-                text, r"output wire \[7:0\]\s+cube \[`A-1:0\] \[`B-1:0\]"
+                text,
+                r"output wire\s+\[7:0\]\s+cube\s+\[`A-1:0\] \[`B-1:0\]",
             )
             self.assertRegex(text, r"(?m)^\s*sky_if\.slv\s+bus_if$")
             self.assertIn("`define ROWS 2", text)
@@ -504,11 +559,11 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual({path.name for path in paths}, {"TOP.v", "CHILD.v"})
             text = (output / "TOP.v").read_text(encoding="utf-8")
-            self.assertRegex(text, r"(?m)^\s*\.dir_b\s+\(dir_b\),$")
-            self.assertRegex(text, r"(?m)^\s*\.dir_a\s+\(dir_a\),$")
-            self.assertRegex(text, r"(?m)^\s*\.count_b\s+\(count_b\),$")
-            self.assertRegex(text, r"(?m)^\s*\.count_a\s+\(count_a\)$")
-            self.assertRegex(text, r"(?m)^\s*\.dir_debug\s+\(\),$")
+            self.assertRegex(text, r"(?m)^\s*\.dir_b\s+\(dir_b\s*\),$")
+            self.assertRegex(text, r"(?m)^\s*\.dir_a\s+\(dir_a\s*\),$")
+            self.assertRegex(text, r"(?m)^\s*\.count_b\s+\(count_b\s*\),$")
+            self.assertRegex(text, r"(?m)^\s*\.count_a\s+\(count_a\s*\)$")
+            self.assertRegex(text, r"(?m)^\s*\.dir_debug\s+\(\s*\),$")
             self.assertFalse(any("展开数量不一致" in item.message for item in reporter.items))
             self.assertFalse(any("方向冲突" in item.message for item in reporter.items))
 
@@ -595,6 +650,32 @@ class GenerationTests(unittest.TestCase):
                 any("TOP 输出" in item.message for item in reporter.items)
             )
 
+    def test_conditional_blocks_are_disabled_by_default(self) -> None:
+        self.assertFalse(xlsx2verilog.ENABLE_CONDITIONAL_BLOCKS)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "conditions-disabled.xlsx"
+            output = root / "generated"
+            rows = module_sheet(
+                "NO_CONDITIONS",
+                [("request", 1, None, "i"), ("response", 8, None, "o")],
+            )
+            set_cell(rows, 3, 1, "条件：FEATURE_REQUEST")
+            set_cell(rows, 4, 1, "条件：FEATURE_RESPONSE")
+            write_xlsx(workbook, [("NO_CONDITIONS", rows)])
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            text = paths[0].read_text(encoding="utf-8")
+            self.assertNotRegex(
+                text,
+                r"(?m)^`(?:ifn?def|elsif|else|endif|undef)\b",
+            )
+            self.assertNotIn("XLSX2VERILOG_INTERNAL_HAVE_CONNECTION", text)
+            self.assertRegex(text, r"(?m)^\s*input\s+wire\s+request,$")
+            self.assertRegex(text, r"(?m)^\s*output\s+wire \[7:0\]\s+response$")
+            self.assertRegex(text, r"(?m)^\s*assign response = 8'b0;$")
+
     def test_techreview3_groups_conditions_and_local_alignment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -620,7 +701,8 @@ class GenerationTests(unittest.TestCase):
                     set_cell(rows, row, column, value)
             write_xlsx(workbook, [("GROUPED", rows)])
 
-            paths, reporter = generate(workbook, output)
+            with patch("xlsx2verilog.ENABLE_CONDITIONAL_BLOCKS", True):
+                paths, reporter = generate(workbook, output)
             self.assertFalse(reporter.has_errors)
             self.assertEqual([path.name for path in paths], ["GROUPED.v"])
             text = paths[0].read_text(encoding="utf-8")
@@ -737,7 +819,7 @@ class GenerationTests(unittest.TestCase):
                     expected_assignments.add("y_signal")
                 self.assertEqual(active_assignments, expected_assignments)
 
-    def test_conditional_instance_connections_keep_valid_commas(self) -> None:
+    def test_every_child_port_can_be_conditionally_compiled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workbook = root / "conditional-integration.xlsx"
@@ -759,7 +841,7 @@ class GenerationTests(unittest.TestCase):
                 ],
             )
             for rows in (top_rows, child_rows):
-                set_cell(rows, 3, 1, "base")
+                set_cell(rows, 3, 1, "条件：FEATURE_CLK")
                 set_cell(rows, 4, 1, "条件：FEATURE_X")
                 set_cell(rows, 5, 1, "条件：FEATURE_Y")
             integration_rows = integration_sheet(
@@ -779,7 +861,8 @@ class GenerationTests(unittest.TestCase):
                 [("Integration", integration_rows), ("TOP", top_rows), ("CHILD", child_rows)],
             )
 
-            paths, reporter = generate(workbook, output)
+            with patch("xlsx2verilog.ENABLE_CONDITIONAL_BLOCKS", True):
+                paths, reporter = generate(workbook, output)
             self.assertFalse(reporter.has_errors)
             self.assertEqual({path.name for path in paths}, {"TOP.v", "CHILD.v"})
             text = (output / "TOP.v").read_text(encoding="utf-8")
@@ -821,12 +904,36 @@ class GenerationTests(unittest.TestCase):
                 return result
 
             for defined, expected_connections in (
-                (set(), 1),
-                ({"FEATURE_X"}, 2),
-                ({"FEATURE_Y"}, 2),
-                ({"FEATURE_X", "FEATURE_Y"}, 3),
+                (set(), 0),
+                ({"FEATURE_CLK"}, 1),
+                ({"FEATURE_X"}, 1),
+                ({"FEATURE_Y"}, 1),
+                ({"FEATURE_X", "FEATURE_Y"}, 2),
+                ({"FEATURE_CLK", "FEATURE_X", "FEATURE_Y"}, 3),
             ):
                 active_lines = preprocess(defined)
+                module_start = next(
+                    index
+                    for index, line in enumerate(active_lines)
+                    if line.startswith("module TOP ")
+                )
+                module_end = next(
+                    index
+                    for index in range(module_start + 1, len(active_lines))
+                    if active_lines[index].strip() == ");"
+                )
+                header_lines = active_lines[module_start + 1 : module_end]
+                declarations = [
+                    line
+                    for line in header_lines
+                    if line.strip().startswith(("input ", "output ", "inout "))
+                ]
+                self.assertEqual(len(declarations), expected_connections)
+                self.assertEqual(
+                    sum(line.count(",") for line in header_lines),
+                    max(expected_connections - 1, 0),
+                )
+
                 start = next(
                     index
                     for index, line in enumerate(active_lines)
@@ -841,9 +948,12 @@ class GenerationTests(unittest.TestCase):
                 associations = [line for line in instance_lines if line.strip().startswith(".")]
                 commas = sum(line.count(",") for line in instance_lines)
                 self.assertEqual(len(associations), expected_connections)
-                self.assertEqual(commas, expected_connections - 1)
+                self.assertEqual(commas, max(expected_connections - 1, 0))
+                self.assertFalse(
+                    any("XLSX2VERILOG_INTERNAL" in line for line in active_lines)
+                )
 
-    def test_conditional_child_driver_cannot_leave_top_output_undriven(self) -> None:
+    def test_conditional_child_driver_gets_zero_fallback_when_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workbook = root / "conditional-driver-mismatch.xlsx"
@@ -863,12 +973,19 @@ class GenerationTests(unittest.TestCase):
                 [("Integration", integration_rows), ("TOP", top_rows), ("CHILD", child_rows)],
             )
 
-            paths, reporter = generate(workbook, root / "generated")
-            self.assertEqual(paths, [])
-            self.assertTrue(reporter.has_errors)
-            self.assertTrue(
-                any("驱动端" in item.message and "条件不一致" in item.message for item in reporter.items)
+            with patch("xlsx2verilog.ENABLE_CONDITIONAL_BLOCKS", True):
+                paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual({path.name for path in paths}, {"TOP.v", "CHILD.v"})
+            text = (root / "generated" / "TOP.v").read_text(encoding="utf-8")
+            self.assertRegex(
+                text,
+                r"(?s)`ifdef FEATURE_RESULT\n"
+                r"\s*// Active child output drives this TOP port\.\n"
+                r"\s*// 子模块输出当前有效，不启用备用置零赋值。\n"
+                r"`else\n\s*assign result = 8'b0;\n`endif",
             )
+            self.assertRegex(text, r"(?m)^\s*\.result\s+\(result\)$")
 
     def test_techreview3_module_prefix_bilingual_comment_and_wire_alignment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

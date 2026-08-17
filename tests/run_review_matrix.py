@@ -521,24 +521,26 @@ class ReviewResult:
     generated_files: list[str]
 
 
-EXPECTED_SNIPPETS: dict[str, list[tuple[str, str]]] = {
+EXPECTED_PATTERNS: dict[str, list[tuple[str, str]]] = {
     "01_basic": [
-        ("TOP_BASIC.v", ".done  (done)"),
-        ("TOP_BASIC.v", ".spare (1'b0)"),
-        ("TOP_BASIC.v", ".debug ()"),
+        ("TOP_BASIC.v", r"\.done\s+\(done\s*\)"),
+        ("TOP_BASIC.v", r"\.spare\s+\(1'b0\s*\)"),
+        ("TOP_BASIC.v", r"\.debug\s+\(\s*\)"),
     ],
     "02_parameter_macro_shifted": [
-        ("TOP_PARAM.v", "`define RST_LANE 1"),
-        ("TOP_PARAM.v", "parameter integer WIDTH = 8"),
-        ("TOP_PARAM.v", "wire [WIDTH-1:0] w_bus;"),
-        ("TOP_PARAM.v", ".WIDTH (WIDTH)"),
+        ("TOP_PARAM.v", r"`define RST_LANE\s+1"),
+        ("TOP_PARAM.v", r"parameter integer WIDTH\s+= 8"),
+        ("TOP_PARAM.v", r"wire\s+\[WIDTH-1:0\]\s+w_bus;"),
+        ("TOP_PARAM.v", r"\.WIDTH\s+\(WIDTH\s*\)"),
     ],
     "03_duplicate_port_rows": [
-        ("TOP_DUP.v", "input  wire [1:0] aaa"),
-        ("TOP_DUP.v", ".aaa    (2'b0)"),
+        ("TOP_DUP.v", r"input\s+wire\s+\[1:0\]\s+aaa"),
+        ("TOP_DUP.v", r"\.aaa\s+\(2'b0\s*\)"),
     ],
-    "05_unused_inout": [("TOP_IO.v", ".pad ()")],
-    "06_width_mismatch": [("TOP_WIDTH.v", "wire [7:0] w_payload;")],
+    "05_unused_inout": [("TOP_IO.v", r"\.pad\s+\(\s*\)")],
+    "06_width_mismatch": [
+        ("TOP_WIDTH.v", r"wire\s+\[7:0\]\s+w_payload;")
+    ],
 }
 
 
@@ -568,10 +570,15 @@ def run_matrix(destination: Path) -> list[ReviewResult]:
                 audit_problems.append("非法位宽没有阻止生成")
         else:
             audit_problems = inspect_generated(workbook, output, paths, reporter)
-            for file_name, snippet in EXPECTED_SNIPPETS.get(case.directory, []):
+            for file_name, pattern in EXPECTED_PATTERNS.get(case.directory, []):
                 generated_path = output / file_name
-                if not generated_path.exists() or snippet not in generated_path.read_text(encoding="utf-8"):
-                    audit_problems.append(f"{file_name}: 缺少预期内容 {snippet}")
+                generated_text = (
+                    generated_path.read_text(encoding="utf-8")
+                    if generated_path.exists()
+                    else ""
+                )
+                if re.search(pattern, generated_text) is None:
+                    audit_problems.append(f"{file_name}: 缺少预期模式 {pattern}")
             warning_ok = case.expected_warning is None or case.expected_warning in raw_diagnostics
             passed = not reporter.has_errors and not audit_problems and warning_ok
             if not warning_ok:

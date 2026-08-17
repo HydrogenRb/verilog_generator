@@ -14,47 +14,47 @@ module MEM_PHY #(
     // ----- ----- ----- ----- ----- -----
     // clk & rst
     // ----- ----- ----- ----- ----- -----
-    input  wire [`RST_LANE-1:0]            n_rst,
-    input  wire [`CLK_LANE-1:0]            clk,
+    input  wire            [`RST_LANE-1:0] n_rst,
+    input  wire            [`CLK_LANE-1:0] clk,
 
     // ----- ----- ----- ----- ----- -----
     // dft_sig
     // ----- ----- ----- ----- ----- -----
-    input  wire [`DFT_BUS-1:0]             dft_bus,
-    input  wire [`DFT_BUS-1:0]             dft_addr,
+    input  wire             [`DFT_BUS-1:0] dft_bus,
+    input  wire             [`DFT_BUS-1:0] dft_addr,
     input  wire                            dft_test_en,
     input  wire                            dft_out_en,
 
     // ----- ----- ----- ----- ----- -----
     // uid
     // ----- ----- ----- ----- ----- -----
-    input  wire [UID_SIZE-1:0]             uid,
+    input  wire             [UID_SIZE-1:0] uid,
 
     // ----- ----- ----- ----- ----- -----
     // APB bus
     // ----- ----- ----- ----- ----- -----
     output wire                            apb_1,
-    output wire [1:0]                      apb_2,
-    input  wire [2:0]                      apb_3,
-    input  wire [3:0]                      apb_4,
-    input  wire [4:0]                      apb_5,
-    input  wire [5:0]                      apb_6,
+    output wire                      [1:0] apb_2,
+    input  wire                      [2:0] apb_3,
+    input  wire                      [3:0] apb_4,
+    input  wire                      [4:0] apb_5,
+    input  wire                      [5:0] apb_6,
 
     // ----- ----- ----- ----- ----- -----
     // AHB
     // ----- ----- ----- ----- ----- -----
     input  wire                            ahb_test_1,
-    input  wire [1:0]                      ahb_test_2,
-    output wire [2:0]                      ahb_test_3,
-    output wire [3:0]                      ahb_test_4,
-    output wire [4:0]                      ahb_test_5,
+    input  wire                      [1:0] ahb_test_2,
+    output wire                      [2:0] ahb_test_3,
+    output wire                      [3:0] ahb_test_4,
+    output wire                      [4:0] ahb_test_5,
 
     // ----- ----- ----- ----- ----- -----
     // test_bus
     // ----- ----- ----- ----- ----- -----
-    input  wire [`DW_sig1-1:0]             test_bus_sig1_dat,
-    input  wire [`DW_sig2-1:0]             test_bus_sig2_dat,
-    input  wire [`DW_sig3-1:0]             test_bus_sig3_dat,
+    input  wire             [`DW_sig1-1:0] test_bus_sig1_dat,
+    input  wire             [`DW_sig2-1:0] test_bus_sig2_dat,
+    input  wire             [`DW_sig3-1:0] test_bus_sig3_dat,
     input  wire                            test_bus_sig1_ready,
     input  wire                            test_bus_sig2_ready,
     input  wire                            test_bus_sig3_ready,
@@ -69,6 +69,7 @@ module MEM_PHY #(
 );
 
     // Module placeholder: drive every output to zero.
+    // 模块占位逻辑：所有输出均置零。
     assign apb_1               = 1'b0;
     assign apb_2               = 2'b0;
     assign ahb_test_3          = 3'b0;

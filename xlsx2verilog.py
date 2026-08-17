@@ -19,6 +19,14 @@ from typing import Any, Callable, Iterable, TextIO
 from xml.etree import ElementTree as ET
 
 
+# ---------------------------------------------------------------------------
+# User configuration
+# ---------------------------------------------------------------------------
+# False (default): treat every port as unconditional and emit no `ifdef blocks.
+# True: honor “条件：MACRO” in category cells and emit conditional Verilog.
+ENABLE_CONDITIONAL_BLOCKS = False
+
+
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 CELL_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
 MACRO_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_$]*)$")
@@ -717,7 +725,7 @@ def parse_category(
     category = (
         text[: condition_match.start()] + " " + text[condition_match.end() :]
     ).strip(" \t,，;；:/：")
-    return category or condition, condition
+    return category or condition, condition if ENABLE_CONDITIONAL_BLOCKS else None
 
 
 def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
@@ -1115,6 +1123,58 @@ def append_conditioned_zero_assignment(
         lines.append("`endif")
 
 
+def append_fallback_zero_assignment(
+    lines: list[str],
+    port: Port,
+    driver_conditions: list[str | None],
+    parameter_map: dict[str, str] | None = None,
+    indent: str = "    ",
+    target_width: int = 0,
+) -> None:
+    """Tie a TOP output low only while none of its child drivers exists."""
+    if not driver_conditions:
+        append_conditioned_zero_assignment(
+            lines,
+            port,
+            parameter_map=parameter_map,
+            indent=indent,
+            target_width=target_width,
+        )
+        return
+
+    # An unconditional driver, or a driver guarded by the TOP port's own
+    # condition, exists whenever the TOP port exists and needs no fallback.
+    if any(
+        condition is None or condition == port.condition
+        for condition in driver_conditions
+    ):
+        return
+
+    conditions = list(
+        dict.fromkeys(
+            condition for condition in driver_conditions if condition is not None
+        )
+    )
+    if port.condition:
+        lines.append(f"`ifdef {port.condition}")
+    for index, condition in enumerate(conditions):
+        directive = "ifdef" if index == 0 else "elsif"
+        lines.append(f"`{directive} {condition}")
+        lines.append(f"{indent}// Active child output drives this TOP port.")
+        lines.append(f"{indent}// 子模块输出当前有效，不启用备用置零赋值。")
+    lines.append("`else")
+    append_zero_assignment(
+        lines,
+        port,
+        parameter_map=parameter_map,
+        indent=indent,
+        target_width=target_width,
+    )
+    lines.append("`endif")
+    if port.condition:
+        lines.append("`endif")
+
+
 def render_macros(macros: dict[str, str]) -> list[str]:
     if not macros:
         return []
@@ -1167,7 +1227,7 @@ def port_declaration_prefix(
     if port.is_interface:
         return port.interface_type or "interface"
     packed = packed_range(port.packed_dimensions, port.width)
-    packed_field = f" {packed:<{packed_width}}" if packed_width else ""
+    packed_field = f" {packed:>{packed_width}}" if packed_width else ""
     return f"{port.direction:<{direction_width}} wire{packed_field}"
 
 
@@ -1197,6 +1257,9 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
         for port in module.ports
     }
     prefix_width = max((len(prefix) for prefix in prefixes.values()), default=0)
+    port_name_width = max((len(port.name) for port in module.ports), default=0)
+    array_fields = {id(port): array_ranges(port.arrays) for port in module.ports}
+    array_width = max((len(field) for field in array_fields.values()), default=0)
     groups = port_groups(module.ports)
     has_conditions = any(group[0].condition is not None for group in groups)
     port_index = 0
@@ -1219,10 +1282,11 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
             else:
                 comma = "," if port_index < len(module.ports) - 1 else ""
             prefix = prefixes[id(port)]
-            line = (
-                f"    {prefix:<{prefix_width}} {port.name}"
-                f"{array_ranges(port.arrays)}{comma}"
+            declaration = (
+                f"    {prefix:<{prefix_width}} {port.name:<{port_name_width}}"
+                f"{array_fields[id(port)]:>{array_width}}"
             )
+            line = declaration.rstrip() + comma
             if port.direction_inferred:
                 line += "  /* TODO: XLSX i/o 为空，暂按 inout 生成；需处理方向缺失问题 */"
             lines.append(line)
@@ -1241,6 +1305,7 @@ def render_stub(module: Module) -> str:
     if output_ports:
         lines.append("")
         lines.append("    // Module placeholder: drive every output to zero.")
+        lines.append("    // 模块占位逻辑：所有输出均置零。")
         target_width = max(
             (len(port.name) for port in output_ports if not port.arrays), default=0
         )
@@ -1291,15 +1356,28 @@ def append_instance_connections(
     child_bindings: dict[str, Binding],
     reserved_macros: set[str],
 ) -> None:
-    """Append a named-port list whose commas remain valid after preprocessing."""
+    """Append a named-port list whose commas remain valid after preprocessing.
+
+    The temporary marker is necessary when every child port is conditional:
+    there may be no unconditional first association to anchor leading commas.
+    It is undefined before and after this one instance.
+    """
     ordered = [(port, child_bindings[port.name]) for port in child.ports]
     port_name_width = max((len(port.name) for port in child.ports), default=0)
+    expression_width = max(
+        (
+            len(binding.expression or "")
+            for _, binding in ordered
+        ),
+        default=0,
+    )
     if not any(binding.conditions for _, binding in ordered):
         for index, (port, binding) in enumerate(ordered):
             comma = "," if index < len(ordered) - 1 else ""
             rendered = "" if binding.expression is None else binding.expression
             lines.append(
-                f"        .{port.name:<{port_name_width}} ({rendered}){comma}"
+                f"        .{port.name:<{port_name_width}} "
+                f"({rendered:<{expression_width}}){comma}"
             )
         return
 
@@ -1327,7 +1405,10 @@ def append_instance_connections(
             ]
         )
         rendered = "" if binding.expression is None else binding.expression
-        lines.append(f"        .{port.name:<{port_name_width}} ({rendered})")
+        lines.append(
+            f"        .{port.name:<{port_name_width}} "
+            f"({rendered:<{expression_width}})"
+        )
         lines.extend("`endif" for _ in reversed(binding.conditions))
     lines.extend([f"`ifdef {marker}", f"`undef {marker}", "`endif"])
 
@@ -1370,8 +1451,8 @@ def render_integration(
         parameter_maps[child.name] = mapping
 
     bindings: dict[str, dict[str, Binding]] = {child.name: {} for child in children}
-    top_driven_outputs: set[str] = set()
     top_output_drivers: dict[str, list[str]] = {}
+    top_output_driver_conditions: dict[str, list[str | None]] = {}
     wires: list[Wire] = []
     used_signals = set(top_ports)
 
@@ -1577,28 +1658,19 @@ def render_integration(
                     "output",
                     "inout",
                 }:
-                    if (
-                        child_port.condition is not None
-                        and child_port.condition != top_port.condition
-                    ):
-                        reporter.error(
-                            f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
-                            f"{top.name}.{top_port.name} 的驱动端 "
-                            f"{block.module_name}.{child_port.name} 条件不一致 "
-                            f"({top_port.condition or '无条件'}/"
-                            f"{child_port.condition})"
-                        )
                     drivers = top_output_drivers.setdefault(top_port.name, [])
                     driver_name = f"{block.module_name}.{child_port.name}"
                     if driver_name not in drivers:
                         drivers.append(driver_name)
+                        top_output_driver_conditions.setdefault(
+                            top_port.name, []
+                        ).append(child_port.condition)
                     if len(drivers) == 2:
                         reporter.warning(
                             f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
                             f"{top.name}.{top_port.name} 存在多个子模块驱动端 "
                             f"({', '.join(drivers)})"
                         )
-                    top_driven_outputs.add(top_port.name)
 
     for group_index, group in enumerate(integration.groups[1:], start=2):
         if len(group) == 1:
@@ -1710,7 +1782,9 @@ def render_integration(
                 for item_block, port in entries:
                     if item_block.module_name == top.name:
                         if port.direction == "output":
-                            top_driven_outputs.add(port.name)
+                            top_output_driver_conditions.setdefault(
+                                port.name, []
+                            ).append(source_port.condition)
                         continue
                     bind(item_block.module_name, port, signal_name, row)
 
@@ -1744,36 +1818,65 @@ def render_integration(
     if wires:
         lines.append("")
         lines.append("    // Internal child-to-child connections.")
+        lines.append("    // 子模块之间的内部连线。")
+        wire_packed_ranges = [
+            ""
+            if wire.interface_type
+            else packed_range(
+                wire.packed_dimensions, wire.width, wire.parameter_map
+            )
+            for wire in wires
+        ]
+        wire_packed_width = max(
+            (len(item) for item in wire_packed_ranges), default=0
+        )
         wire_prefixes: list[str] = []
-        for wire in wires:
+        for wire, packed in zip(wires, wire_packed_ranges):
             if wire.interface_type:
                 wire_prefixes.append(wire.interface_type)
             else:
-                packed = packed_range(
-                    wire.packed_dimensions, wire.width, wire.parameter_map
-                )
-                wire_prefixes.append(f"wire {packed}".rstrip())
+                wire_prefixes.append(f"wire {packed:>{wire_packed_width}}".rstrip())
         wire_prefix_width = max(len(prefix) for prefix in wire_prefixes)
-        for wire, prefix in zip(wires, wire_prefixes):
+        wire_name_width = max(len(wire.name) for wire in wires)
+        wire_array_fields = [
+            array_ranges(wire.arrays, wire.parameter_map) for wire in wires
+        ]
+        wire_array_width = max(
+            (len(field) for field in wire_array_fields), default=0
+        )
+        for wire, prefix, array_field in zip(
+            wires, wire_prefixes, wire_array_fields
+        ):
             suffix = "();" if wire.interface_type else ";"
-            lines.append(
-                f"    {prefix:<{wire_prefix_width}} {wire.name}"
-                f"{array_ranges(wire.arrays, wire.parameter_map)}{suffix}"
+            declaration = (
+                f"    {prefix:<{wire_prefix_width}} {wire.name:<{wire_name_width}}"
+                f"{array_field:>{wire_array_width}}"
             )
+            lines.append(declaration.rstrip() + suffix)
 
-    undriven_outputs = [
-        port for port in top.ports if port.direction == "output" and port.name not in top_driven_outputs
+    fallback_outputs = [
+        port
+        for port in top.ports
+        if port.direction == "output"
+        and not any(
+            condition is None or condition == port.condition
+            for condition in top_output_driver_conditions.get(port.name, [])
+        )
     ]
-    if undriven_outputs:
+    if fallback_outputs:
         lines.append("")
-        lines.append("    // TOP outputs without a child driver are tied to zero.")
+        lines.append("    // TOP outputs without an active child driver are tied to zero.")
+        lines.append("    // 没有有效子模块驱动的 TOP 输出在当前配置下置零。")
         target_width = max(
-            (len(port.name) for port in undriven_outputs if not port.arrays),
+            (len(port.name) for port in fallback_outputs if not port.arrays),
             default=0,
         )
-        for port in undriven_outputs:
-            append_conditioned_zero_assignment(
-                lines, port, target_width=target_width
+        for port in fallback_outputs:
+            append_fallback_zero_assignment(
+                lines,
+                port,
+                top_output_driver_conditions.get(port.name, []),
+                target_width=target_width,
             )
 
     for child in children:
@@ -1783,10 +1886,14 @@ def render_integration(
             lines.append(f"    {child.name} #(")
             items = list(child.parameters)
             parameter_name_width = max(len(name) for name in items)
+            parameter_value_width = max(
+                len(parameter_map[name]) for name in items
+            )
             for index, name in enumerate(items):
                 comma = "," if index < len(items) - 1 else ""
                 lines.append(
-                    f"        .{name:<{parameter_name_width}} ({parameter_map[name]}){comma}"
+                    f"        .{name:<{parameter_name_width}} "
+                    f"({parameter_map[name]:<{parameter_value_width}}){comma}"
                 )
             lines.append(f"    ) u_{child.name.lower()} (")
         else:

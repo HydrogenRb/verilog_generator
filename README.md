@@ -25,6 +25,16 @@ python .\xlsx2verilog.py .\test.xlsx --check --strict
 
 正常生成的返回码为 `0`，校验失败为 `2`。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会被原子替换，输出目录内其他文件不会被删除。
 
+## 文件顶部配置
+
+条件编译块默认关闭。若项目需要根据分类中的`条件：MACRO`生成 `` `ifdef``，编辑 `xlsx2verilog.py` 开头的用户配置：
+
+```python
+ENABLE_CONDITIONAL_BLOCKS = True
+```
+
+保持默认的 `False` 时，`条件：MACRO`只用于整理分类名称，相关端口、assign 和实例连接全部按无条件内容生成；输出中不会出现由该功能产生的 `` `ifdef/`elsif/`else/`endif`` 或 `XLSX2VERILOG_INTERNAL_HAVE_CONNECTION_*`临时标记。该设置是脚本级配置，对一次运行中的所有页签和模块统一生效。
+
 ## XLSX 规则
 
 脚本按表头识别内容，不要求模块端口从固定行开始。空行和合并的“分类”单元格不影响解析。
@@ -107,7 +117,18 @@ input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]
 
 ## 生成代码格式
 
-生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；同一组宏定义的值、wire 名、assign 等号、localparam 等号分别对齐；模块实例的参数连接与端口连接中，左括号纵向对齐。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
+生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；packed/unpacked 范围从右侧对齐，使末尾右方括号、冒号及符号范围中的 `-1` 运算符纵向对齐；同一组宏定义的值、wire 名、assign 等号、localparam 等号分别对齐；模块实例的参数连接与端口连接中，左、右圆括号均纵向对齐。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
+
+```verilog
+input wire   [`SHORT-1:0] short_bus,
+input wire [`LONG_NAME-1:0] long_bus,
+input wire            [7:0] literal_bus
+
+.short_port (a_signal        ),
+.long_port  (long_signal_name)
+```
+
+生成的 localparam、内部 wire 和自动 assign 代码块均同时输出英文与中文说明，便于中英文项目成员直接阅读生成文件。
 
 模块端口按“分类”分组，每组生成三行标题。合并单元格在首行给出的分类会由后续连续端口继承；完全没有分类的连续端口使用 `no group`：
 
@@ -119,7 +140,7 @@ input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]
     input wire rst_n
 ```
 
-分类中可加入 `条件：宏名`。例如 `CFG bus 条件：FEATURE_CFG` 显示分类名 `CFG bus`，并把整组端口放入 `` `ifdef FEATURE_CFG``；仅写 `条件：FEATURE_CFG` 时，显示分类名就是 `FEATURE_CFG`。也接受 ``条件：`FEATURE_CFG``。条件宏由外部编译环境控制，生成器不会因为分类条件在文件开头创建对应 `` `define``。条件会同步应用到端口声明、桩模块的 output 赋零以及集成模块的实例连接；多个条件组关闭、单独开启或同时开启时，生成器都会按预处理分支放置分隔逗号，保证端口列表和实例连接列表结构成立。若条件化子模块 output/inout 驱动一个在相同配置下仍存在的 TOP output，双方条件必须一致，否则生成器报错，防止部分配置下 TOP 信号悬空。
+分类中可加入 `条件：宏名`。例如 `CFG bus 条件：FEATURE_CFG` 显示分类名 `CFG bus`；仅写 `条件：FEATURE_CFG` 时，显示分类名就是 `FEATURE_CFG`。也接受 ``条件：`FEATURE_CFG``。默认配置不生成条件块。仅当文件顶部 `ENABLE_CONDITIONAL_BLOCKS = True` 时，整组端口才放入 `` `ifdef FEATURE_CFG``；条件会同步应用到端口声明、桩模块的 output 赋零以及集成模块的实例连接。条件宏由外部编译环境控制，生成器不会在文件开头创建对应 `` `define``。多个条件组关闭、单独开启或同时开启时，生成器都会按预处理分支放置分隔逗号。即使 CORE 的每个端口都有 `ifdef` 且当前没有任何条件开启，生成的空端口列表和空实例连接列表仍保持合法。条件化子模块 output/inout 驱动无条件或不同条件的 TOP output 时，驱动端存在的配置使用子模块输出，其余配置自动把 TOP output 置零，避免信号悬空。
 
 ### 集成页签
 
@@ -177,4 +198,4 @@ python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\01_core_layer.xlsx -
 python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xlsx --check --strict
 ```
 
-测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。`run_tech_review2_review.py` 会顺序执行新功能、历史回归、生成 Verilog 静态结构三轮检视，并写入 `review_test_cases/TechReview2检视报告.md`。Tech Review 3 的需求追踪、条件组合验证和整体代码审查记录见 `review_test_cases/TechReview3检视报告.md`；后续可视化连线软件的独立 specification 见 `可视化集成页签生成器需求文档.md`。
+测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。`run_tech_review2_review.py` 会顺序执行新功能、历史回归、生成 Verilog 静态结构三轮检视，并写入 `review_test_cases/TechReview2检视报告.md`。Tech Review 3 的需求追踪、条件组合验证和整体代码审查记录见 `review_test_cases/TechReview3检视报告.md`；代码分层、关键不变量和常见修改入口见 `代码结构与维护指南.md`；后续可视化连线软件的独立 specification 见 `可视化集成页签生成器需求文档.md`。
