@@ -21,8 +21,8 @@ module RISCV_TOP #(
     // ----- ----- ----- ----- ----- -----
     // dft_sig
     // ----- ----- ----- ----- ----- -----
-    input  wire  [`DFT_BUS-1:0] dft_bus,
-    input  wire  [`DFT_BUS-1:0] dft_addr,
+    input  wire [ `DFT_BUS-1:0] dft_bus,
+    input  wire [ `DFT_BUS-1:0] dft_addr,
     input  wire                 dft_test_en,
     input  wire                 dft_out_en,
     input  wire                 dft_rd,
@@ -30,24 +30,24 @@ module RISCV_TOP #(
     // ----- ----- ----- ----- ----- -----
     // uid
     // ----- ----- ----- ----- ----- -----
-    output wire  [UID_SIZE-1:0] uid,
+    output wire [ UID_SIZE-1:0] uid,
 
     // ----- ----- ----- ----- ----- -----
     // AHB_top
     // ----- ----- ----- ----- ----- -----
     input  wire                 ahb_test_1,
-    input  wire           [1:0] ahb_test_2,
-    output wire           [2:0] ahb_test_3,
-    output wire           [3:0] ahb_test_4,
-    output wire           [4:0] ahb_test_5,
-    output wire           [5:0] ahb_test_6,
+    input  wire [          1:0] ahb_test_2,
+    output wire [          2:0] ahb_test_3,
+    output wire [          3:0] ahb_test_4,
+    output wire [          4:0] ahb_test_5,
+    output wire [          5:0] ahb_test_6,
 
     // ----- ----- ----- ----- ----- -----
     // test_bus
     // ----- ----- ----- ----- ----- -----
-    input  wire  [`DW_sig1-1:0] test_bus_sig1_dat,
-    input  wire  [`DW_sig2-1:0] test_bus_sig2_dat,
-    input  wire  [`DW_sig3-1:0] test_bus_sig3_dat,
+    input  wire [ `DW_sig1-1:0] test_bus_sig1_dat,
+    input  wire [ `DW_sig2-1:0] test_bus_sig2_dat,
+    input  wire [ `DW_sig3-1:0] test_bus_sig3_dat,
     input  wire                 test_bus_sig1_ready,
     input  wire                 test_bus_sig2_ready,
     input  wire                 test_bus_sig3_ready,
@@ -63,9 +63,9 @@ module RISCV_TOP #(
     // ----- ----- ----- ----- ----- -----
     // test_bus2
     // ----- ----- ----- ----- ----- -----
-    input  wire         [113:0] test_bus2_sig1_dat,
-    input  wire         [113:0] test_bus2_sig2_dat,
-    input  wire         [113:0] test_bus2_sig3_dat,
+    input  wire [        113:0] test_bus2_sig1_dat,
+    input  wire [        113:0] test_bus2_sig2_dat,
+    input  wire [        113:0] test_bus2_sig3_dat,
     input  wire                 test_bus2_sig1_ready,
     input  wire                 test_bus2_sig2_ready,
     input  wire                 test_bus2_sig3_ready,
@@ -77,11 +77,11 @@ module RISCV_TOP #(
     // Internal child-to-child connections.
     // 子模块之间的内部连线。
     wire                                 w_apb_1;
-    wire                           [1:0] w_apb_2;
-    wire                          [12:0] w_apb_3;
-    wire                          [13:0] w_apb_4;
-    wire                          [14:0] w_apb_5;
-    wire                          [15:0] w_apb_6;
+    wire [          1:0]                 w_apb_2;
+    wire [         12:0]                 w_apb_3;
+    wire [         13:0]                 w_apb_4;
+    wire [         14:0]                 w_apb_5;
+    wire [         15:0]                 w_apb_6;
     wire [`LANE_NUM-1:0][`Test_size-1:0] w_array;
 
     // TOP outputs without an active child driver are tied to zero.

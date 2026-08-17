@@ -134,7 +134,7 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("parameter integer UID_SIZE = 5", top)
             self.assertRegex(top, r"(?m)^`define DFT_BUS\s+64$")
             self.assertRegex(top, r"(?m)^\s*wire\s+w_apb_1;$")
-            self.assertRegex(top, r"(?m)^\s*wire\s+\[15:0\]\s+w_apb_6;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[\s*15:0\]\s+w_apb_6;$")
             self.assertIn("RISCV_CORE_TEST #(", top)
             self.assertIn("MEM_PHY #(", top)
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(1'b0\s*\),$")
@@ -146,7 +146,7 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$")
             self.assertRegex(
                 top,
-                r"(?m)^\s*wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+w_array;$",
+                r"(?m)^\s*wire \[\s*`LANE_NUM-1:0\]\[\s*`Test_size-1:0\]\s+w_array;$",
             )
             self.assertRegex(
                 top,
@@ -156,7 +156,7 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*\.array\s+\(w_array\s*\),$")
             self.assertRegex(
                 core,
-                r"(?m)^\s*output wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+array,$",
+                r"(?m)^\s*output wire \[\s*`LANE_NUM-1:0\]\[\s*`Test_size-1:0\]\s+array,$",
             )
             self.assertRegex(core, r"(?m)^\s*assign array\s+= '0;$")
             self.assertIn("// 子模块之间的内部连线。", top)
@@ -170,10 +170,11 @@ class GenerationTests(unittest.TestCase):
                 if "[" in line and "]" in line and not line.lstrip().startswith("//")
             ]
             self.assertGreater(len(ranged_ports), 3)
-            self.assertEqual(len({line.rindex("]") for line in ranged_ports}), 1)
-            self.assertEqual(len({line.rindex(":") for line in ranged_ports}), 1)
+            self.assertEqual(len({line.index("[") for line in ranged_ports}), 1)
+            self.assertEqual(len({line.index("]") for line in ranged_ports}), 1)
+            self.assertEqual(len({line.index(":") for line in ranged_ports}), 1)
             symbolic_ranges = [line for line in ranged_ports if "-1" in line]
-            self.assertEqual(len({line.rindex("-") for line in symbolic_ranges}), 1)
+            self.assertEqual(len({line.index("-") for line in symbolic_ranges}), 1)
 
             wire_lines_with_ranges = [
                 line
@@ -181,7 +182,13 @@ class GenerationTests(unittest.TestCase):
                 if re.match(r"^\s*wire\s+.*\]", line)
             ]
             self.assertEqual(
-                len({line.rindex("]") for line in wire_lines_with_ranges}), 1
+                len({line.index("[") for line in wire_lines_with_ranges}), 1
+            )
+            self.assertEqual(
+                len({line.index("]") for line in wire_lines_with_ranges}), 1
+            )
+            self.assertEqual(
+                len({line.index(":") for line in wire_lines_with_ranges}), 1
             )
 
             for child_name in ("RISCV_CORE_TEST", "MEM_PHY"):
@@ -426,6 +433,88 @@ class GenerationTests(unittest.TestCase):
                 "assign data[gen_zero_data] = {DATA_WIDTH{1'b0}};", source
             )
 
+    def test_packed_dimension_columns_are_aligned_for_internal_wires(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "packed-wire-format.xlsx"
+            output = root / "generated"
+            write_xlsx(
+                workbook,
+                [
+                    (
+                        "Integration",
+                        integration_sheet(
+                            [
+                                (
+                                    ["PACKED_TOP", "PACKED_SRC", "PACKED_DST"],
+                                    [[("clk", "i"), ("clk", "i"), ("clk", "i")]],
+                                ),
+                                (
+                                    ["PACKED_SRC", "PACKED_DST"],
+                                    [
+                                        [
+                                            ("matrix_a", "o"),
+                                            ("matrix_a", "i"),
+                                        ],
+                                        [
+                                            ("matrix_b", "o"),
+                                            ("matrix_b", "i"),
+                                        ],
+                                    ],
+                                ),
+                            ]
+                        ),
+                    ),
+                    (
+                        "PACKED_TOP",
+                        module_sheet("PACKED_TOP", [("clk", 1, None, "i")]),
+                    ),
+                    (
+                        "PACKED_SRC",
+                        module_sheet(
+                            "PACKED_SRC",
+                            [
+                                ("clk", 1, None, "i"),
+                                ("matrix_a", "`SHORT * `SECOND", "4*8", "o"),
+                                ("matrix_b", "`MUCH_LONGER * `S", "16*2", "o"),
+                            ],
+                        ),
+                    ),
+                    (
+                        "PACKED_DST",
+                        module_sheet(
+                            "PACKED_DST",
+                            [
+                                ("clk", 1, None, "i"),
+                                ("matrix_a", "`SHORT * `SECOND", "4*8", "i"),
+                                ("matrix_b", "`MUCH_LONGER * `S", "16*2", "i"),
+                            ],
+                        ),
+                    ),
+                ],
+            )
+
+            paths, reporter = generate(workbook, output)
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual(len(paths), 3)
+            top = (output / "PACKED_TOP.v").read_text(encoding="utf-8")
+            wire_lines = [
+                line
+                for line in top.splitlines()
+                if re.search(r"\bw_matrix_[ab];$", line)
+            ]
+            self.assertEqual(len(wire_lines), 2)
+            for dimension_index in (0, 1):
+                for token in ("[", "-", ":", "]"):
+                    positions = [
+                        [
+                            match.start()
+                            for match in re.finditer(re.escape(token), line)
+                        ][dimension_index]
+                        for line in wire_lines
+                    ]
+                    self.assertEqual(len(set(positions)), 1)
+
     def test_expressions_multiple_dimensions_and_interface(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -442,6 +531,14 @@ class GenerationTests(unittest.TestCase):
                                 ("calculated", "2+3*4", None, "o", None, None),
                                 ("uncertain", "WIDTH+OFFSET", "unknown", "o", None, None),
                                 ("matrix", "`ROWS * `COLS", "2*8", "o", None, None),
+                                (
+                                    "tensor",
+                                    "`LONG_ROWS * `C",
+                                    "4*16",
+                                    "o",
+                                    None,
+                                    None,
+                                ),
                                 ("cube", 8, None, "o", "`A * `B", "2*3"),
                                 ("bus_if", "sky_if.slv", None, "NA", None, None),
                             ],
@@ -454,18 +551,50 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual([path.name for path in paths], ["ADVANCED.v"])
             text = paths[0].read_text(encoding="utf-8")
-            self.assertRegex(text, r"output wire\s+\[13:0\]\s+calculated")
-            self.assertRegex(text, r"output wire\s+\[113:0\]\s+uncertain")
+            self.assertRegex(text, r"output wire\s+\[\s*13:0\]\s+calculated")
+            self.assertRegex(text, r"output wire\s+\[\s*113:0\]\s+uncertain")
             self.assertRegex(
-                text, r"output wire\s+\[`ROWS-1:0\]\[`COLS-1:0\]\s+matrix"
+                text,
+                r"output wire\s+\[\s*`ROWS-1:0\]\[\s*`COLS-1:0\]\s+matrix",
             )
             self.assertRegex(
                 text,
-                r"output wire\s+\[7:0\]\s+cube\s+\[`A-1:0\] \[`B-1:0\]",
+                r"output wire\s+\[\s*`LONG_ROWS-1:0\]\[\s*`C-1:0\]\s+tensor",
             )
+            self.assertRegex(
+                text,
+                r"output wire\s+\[\s*7:0\]\s+cube\s+\[`A-1:0\] \[`B-1:0\]",
+            )
+
+            declarations = {
+                name: next(
+                    line
+                    for line in text.splitlines()
+                    if re.search(rf"\b{re.escape(name)},?$", line)
+                )
+                for name in ("calculated", "uncertain", "matrix", "tensor")
+            }
+            first_dimension_lines = list(declarations.values())
+            for token in ("[", ":", "]"):
+                self.assertEqual(
+                    len({line.index(token) for line in first_dimension_lines}), 1
+                )
+            symbolic_first_dimensions = [
+                declarations[name] for name in ("matrix", "tensor")
+            ]
+            self.assertEqual(
+                len({line.index("-") for line in symbolic_first_dimensions}), 1
+            )
+            second_dimension_lines = symbolic_first_dimensions
+            for token in ("[", "-", ":", "]"):
+                positions = [
+                    [match.start() for match in re.finditer(re.escape(token), line)][1]
+                    for line in second_dimension_lines
+                ]
+                self.assertEqual(len(set(positions)), 1)
             self.assertRegex(text, r"(?m)^\s*sky_if\.slv\s+bus_if$")
-            self.assertIn("`define ROWS 2", text)
-            self.assertIn("`define COLS 8", text)
+            self.assertRegex(text, r"(?m)^`define ROWS\s+2$")
+            self.assertRegex(text, r"(?m)^`define COLS\s+8$")
             self.assertRegex(text, r"(?m)^\s*assign matrix\s+= '0;$")
             self.assertIn(
                 "assign cube[gen_zero_cube_0][gen_zero_cube_1] = 8'b0;", text

@@ -1031,12 +1031,61 @@ def packed_range(
     width: Width,
     parameter_map: dict[str, str] | None = None,
 ) -> str:
-    if not packed_dimensions:
-        return width_range(width, parameter_map)
     return "".join(
+        packed_dimension_ranges(packed_dimensions, width, parameter_map)
+    )
+
+
+def packed_dimension_ranges(
+    packed_dimensions: tuple[Width, ...],
+    width: Width,
+    parameter_map: dict[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Return one compact Verilog range for every packed dimension."""
+    if not packed_dimensions:
+        item = width_range(width, parameter_map)
+        return (item,) if item else ()
+    return tuple(
         explicit_dimension_range(item, parameter_map)
         for item in (*packed_dimensions, width)
     )
+
+
+def packed_dimension_widths(
+    ranges_by_signal: list[tuple[str, ...]],
+) -> tuple[int, ...]:
+    """Compute independent display widths for each packed dimension column."""
+    dimension_count = max(
+        (len(ranges) for ranges in ranges_by_signal), default=0
+    )
+    return tuple(
+        max(
+            (
+                len(ranges[index])
+                for ranges in ranges_by_signal
+                if index < len(ranges)
+            ),
+            default=0,
+        )
+        for index in range(dimension_count)
+    )
+
+
+def align_packed_dimensions(
+    ranges: tuple[str, ...], dimension_widths: tuple[int, ...]
+) -> str:
+    """Align each ``[...:0]`` without moving that dimension's opening bracket."""
+    fields: list[str] = []
+    for index, field_width in enumerate(dimension_widths):
+        if index >= len(ranges):
+            fields.append(" " * field_width)
+            continue
+        range_text = ranges[index]
+        # Padding the range body, instead of the complete token, keeps both
+        # '[' and the ':0]' suffix in stable columns for this dimension.
+        body = range_text[1:-1]
+        fields.append(f"[{body:>{field_width - 2}}]")
+    return "".join(fields)
 
 
 def array_range(array: Width | None, parameter_map: dict[str, str] | None = None) -> str:
@@ -1222,12 +1271,15 @@ def append_conditional_comma(lines: list[str], future_groups: list[list[Port]]) 
 
 
 def port_declaration_prefix(
-    port: Port, direction_width: int, packed_width: int
+    port: Port,
+    direction_width: int,
+    dimension_widths: tuple[int, ...],
 ) -> str:
     if port.is_interface:
         return port.interface_type or "interface"
-    packed = packed_range(port.packed_dimensions, port.width)
-    packed_field = f" {packed:>{packed_width}}" if packed_width else ""
+    ranges = packed_dimension_ranges(port.packed_dimensions, port.width)
+    packed = align_packed_dimensions(ranges, dimension_widths)
+    packed_field = f" {packed}" if dimension_widths else ""
     return f"{port.direction:<{direction_width}} wire{packed_field}"
 
 
@@ -1248,12 +1300,13 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
         lines.append(f"module {module.name} (")
     regular_ports = [port for port in module.ports if not port.is_interface]
     direction_width = max((len(port.direction) for port in regular_ports), default=0)
-    packed_ranges = [
-        packed_range(port.packed_dimensions, port.width) for port in regular_ports
+    packed_ranges_by_port = [
+        packed_dimension_ranges(port.packed_dimensions, port.width)
+        for port in regular_ports
     ]
-    packed_width = max((len(item) for item in packed_ranges), default=0)
+    dimension_widths = packed_dimension_widths(packed_ranges_by_port)
     prefixes = {
-        id(port): port_declaration_prefix(port, direction_width, packed_width)
+        id(port): port_declaration_prefix(port, direction_width, dimension_widths)
         for port in module.ports
     }
     prefix_width = max((len(prefix) for prefix in prefixes.values()), default=0)
@@ -1820,22 +1873,25 @@ def render_integration(
         lines.append("    // Internal child-to-child connections.")
         lines.append("    // 子模块之间的内部连线。")
         wire_packed_ranges = [
-            ""
+            ()
             if wire.interface_type
-            else packed_range(
+            else packed_dimension_ranges(
                 wire.packed_dimensions, wire.width, wire.parameter_map
             )
             for wire in wires
         ]
-        wire_packed_width = max(
-            (len(item) for item in wire_packed_ranges), default=0
-        )
+        wire_dimension_widths = packed_dimension_widths(wire_packed_ranges)
         wire_prefixes: list[str] = []
-        for wire, packed in zip(wires, wire_packed_ranges):
+        for wire, packed_ranges in zip(wires, wire_packed_ranges):
             if wire.interface_type:
                 wire_prefixes.append(wire.interface_type)
             else:
-                wire_prefixes.append(f"wire {packed:>{wire_packed_width}}".rstrip())
+                packed = align_packed_dimensions(
+                    packed_ranges, wire_dimension_widths
+                )
+                wire_prefixes.append(
+                    f"wire {packed}" if wire_dimension_widths else "wire"
+                )
         wire_prefix_width = max(len(prefix) for prefix in wire_prefixes)
         wire_name_width = max(len(wire.name) for wire in wires)
         wire_array_fields = [
