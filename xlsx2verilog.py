@@ -30,6 +30,7 @@ ENABLE_CONDITIONAL_BLOCKS = False
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 CELL_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
 MACRO_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_$]*)$")
+MACRO_REFERENCE_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_$]*)")
 INTERFACE_TYPE_RE = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_$]*::)*"
     r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$"
@@ -659,6 +660,13 @@ def substitute_template(text: Any, values: dict[str, str]) -> str:
     return TEMPLATE_RE.sub(lambda match: values.get(match.group(1), match.group(0)), clean(text))
 
 
+def uppercase_macro_references(text: Any) -> str:
+    """Uppercase complete Verilog macro identifiers in an expanded expression."""
+    return MACRO_REFERENCE_RE.sub(
+        lambda match: f"`{match.group(1).upper()}", clean(text)
+    )
+
+
 def template_default_value(raw_default: Any, values: list[str], index: int) -> Any:
     text = clean(raw_default)
     if not text:
@@ -801,8 +809,23 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             else None
         )
 
+        expanded_names_in_row: dict[str, tuple[str, ...]] = {}
         for expansion_index, expansion in enumerate(expansions):
+            raw_expansion_values = tuple(
+                expansion[name] for name in port_variables
+            )
             port_name = substitute_template(raw_port_name, expansion)
+            if port_variables:
+                port_name = port_name.lower()
+                previous_values = expanded_names_in_row.setdefault(
+                    port_name, raw_expansion_values
+                )
+                if previous_values != raw_expansion_values:
+                    reporter.error(
+                        f"{context}: 模板展开值仅大小写不同，规范为小写后产生重复端口 "
+                        f"{port_name!r}"
+                    )
+                    continue
             assignments = ", ".join(f"{name}={value}" for name, value in expansion.items())
             expanded_context = f"{context} ({assignments})" if assignments else context
             if not IDENTIFIER_RE.fullmatch(port_name):
@@ -810,13 +833,34 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     f"{expanded_context}: 端口名 {port_name!r} 不是合法 Verilog 标识符"
                 )
                 continue
+            normalized_template_source = (
+                raw_port_name.lower() if port_variables else None
+            )
+            normalized_template_values = tuple(
+                expansion[name].lower() for name in port_variables
+            )
             if port_name in seen:
                 # A repeated row denotes the same physical port. The first
                 # occurrence owns its type/direction and later rows merge into it.
+                previous = seen[port_name]
+                if (
+                    previous.template_source is not None
+                    or normalized_template_source is not None
+                ) and (
+                    previous.template_source != normalized_template_source
+                    or previous.template_values != normalized_template_values
+                ):
+                    reporter.error(
+                        f"{expanded_context}: 模板大小写规范后与已有端口 "
+                        f"{port_name!r} 冲突"
+                    )
                 continue
 
             raw_width = substitute_template(base_width, expansion)
             raw_array = substitute_template(base_array, expansion)
+            if port_variables:
+                raw_width = uppercase_macro_references(raw_width)
+                raw_array = uppercase_macro_references(raw_array)
             raw_default = base_default
             raw_array_default = base_array_default
             if len(port_variables) == 1:
@@ -909,8 +953,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 interface_type=interface_type,
                 packed_dimensions=packed_dimensions,
                 direction_inferred=direction_inferred,
-                template_source=raw_port_name if port_variables else None,
-                template_values=tuple(expansion[name] for name in port_variables),
+                template_source=normalized_template_source,
+                template_values=normalized_template_values,
             )
             seen[port_name] = port
             ports.append(port)
@@ -1012,8 +1056,6 @@ def width_range(width: Width, parameter_map: dict[str, str] | None = None) -> st
     expression = width_expression(width, parameter_map)
     if width.kind == "literal" and expression == "1":
         return ""
-    if width.kind == "literal":
-        return f"[{int(expression) - 1}:0]"
     return f"[{expression}-1:0]"
 
 
@@ -1021,8 +1063,6 @@ def explicit_dimension_range(
     width: Width, parameter_map: dict[str, str] | None = None
 ) -> str:
     expression = width_expression(width, parameter_map)
-    if width.kind == "literal":
-        return f"[{int(expression) - 1}:0]"
     return f"[{expression}-1:0]"
 
 
@@ -1103,8 +1143,6 @@ def array_range(array: Width | None, parameter_map: dict[str, str] | None = None
     if array is None:
         return ""
     expression = width_expression(array, parameter_map)
-    if array.kind == "literal":
-        return f" [{int(expression) - 1}:0]"
     return f" [{expression}-1:0]"
 
 
@@ -1133,7 +1171,7 @@ def append_zero_assignment(
     lines: list[str],
     port: Port,
     parameter_map: dict[str, str] | None = None,
-    indent: str = "    ",
+    indent: str = "",
     target_width: int = 0,
 ) -> None:
     """Append a scalar/vector assignment or an element-wise array generate loop."""
@@ -1166,7 +1204,7 @@ def append_conditioned_zero_assignment(
     lines: list[str],
     port: Port,
     parameter_map: dict[str, str] | None = None,
-    indent: str = "    ",
+    indent: str = "",
     target_width: int = 0,
 ) -> None:
     """Drive an output only in configurations where that port exists."""
@@ -1188,7 +1226,7 @@ def append_fallback_zero_assignment(
     port: Port,
     driver_conditions: list[str | None],
     parameter_map: dict[str, str] | None = None,
-    indent: str = "    ",
+    indent: str = "",
     target_width: int = 0,
 ) -> None:
     """Tie a TOP output low only while none of its child drivers exists."""
@@ -1295,7 +1333,7 @@ def port_declaration_prefix(
 
 
 def render_module_header(module: Module, macros: dict[str, str] | None = None) -> list[str]:
-    lines = ["// Generated by xlsx2verilog.py. Do not edit by hand."]
+    lines = ["// Test header"]
     lines.extend(render_macros(macros if macros is not None else module.macros))
     if module.parameters:
         lines.append(f"module {module.name} #(")
@@ -1368,8 +1406,8 @@ def render_stub(module: Module) -> str:
     output_ports = [port for port in module.ports if port.direction == "output"]
     if output_ports:
         lines.append("")
-        lines.append("    // Module placeholder: drive every output to zero.")
-        lines.append("    // 模块占位逻辑：所有输出均置零。")
+        lines.append("// Module placeholder: drive every output to zero.")
+        lines.append("// 模块占位逻辑：所有输出均置零。")
         target_width = max(
             (len(port.name) for port in output_ports if not port.arrays), default=0
         )
@@ -1377,7 +1415,7 @@ def render_stub(module: Module) -> str:
             append_conditioned_zero_assignment(
                 lines, port, target_width=target_width
             )
-    lines.extend(["", "endmodule", ""])
+    lines.extend(["endmodule", ""])
     return "\n".join(lines)
 
 
@@ -1545,7 +1583,11 @@ def render_integration(
         # name. A regex for ``data_{{i}}`` would also consume an unrelated
         # physical port such as ``data_debug`` and create false count/direction
         # conflicts in the integration sheet.
-        ports = [port for port in module.ports if port.template_source == reference]
+        ports = [
+            port
+            for port in module.ports
+            if port.template_source == reference.lower()
+        ]
         if not ports:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有与模板端口 {reference} 匹配的展开端口"
@@ -1932,8 +1974,8 @@ def render_integration(
     ]
     if fallback_outputs:
         lines.append("")
-        lines.append("    // TOP outputs without an active child driver are tied to zero.")
-        lines.append("    // 没有有效子模块驱动的 TOP 输出在当前配置下置零。")
+        lines.append("// TOP outputs without an active child driver are tied to zero.")
+        lines.append("// 没有有效子模块驱动的 TOP 输出在当前配置下置零。")
         target_width = max(
             (len(port.name) for port in fallback_outputs if not port.arrays),
             default=0,
@@ -1976,7 +2018,7 @@ def render_integration(
             lines, child, bindings[child.name], reserved_macros
         )
         lines.append("    );")
-    lines.extend(["", "endmodule", ""])
+    lines.extend(["endmodule", ""])
     return "\n".join(lines)
 
 

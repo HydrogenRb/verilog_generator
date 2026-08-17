@@ -8,7 +8,7 @@ module TOP_WIDTH (
 
     // Internal child-to-child connections.
     // 子模块之间的内部连线。
-    wire [7:0] w_payload;
+    wire [8-1:0] w_payload;
 
     WIDTH_SRC u_width_src (
         .clk     (clk      ),
@@ -19,5 +19,4 @@ module TOP_WIDTH (
         .clk     (clk      ),
         .payload (w_payload)
     );
-
 endmodule

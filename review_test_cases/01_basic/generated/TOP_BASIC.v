@@ -13,5 +13,4 @@ module TOP_BASIC (
         .spare (1'b0),
         .debug (    )
     );
-
 endmodule

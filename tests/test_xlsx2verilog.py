@@ -134,15 +134,15 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("parameter integer UID_SIZE = 5", top)
             self.assertRegex(top, r"(?m)^`define DFT_BUS\s+64$")
             self.assertRegex(top, r"(?m)^\s*wire\s+w_apb_1;$")
-            self.assertRegex(top, r"(?m)^\s*wire\s+\[\s*15:0\]\s+w_apb_6;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[16\s*-1:0\]\s+w_apb_6;$")
             self.assertIn("RISCV_CORE_TEST #(", top)
             self.assertIn("MEM_PHY #(", top)
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(1'b0\s*\),$")
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_3\s+\(\s*\),$")
-            self.assertRegex(top, r"(?m)^\s*assign ahb_test_6\s+= 6'b0;$")
-            self.assertRegex(core, r"(?m)^\s*assign apb_6\s+= 16'b0;$")
-            self.assertRegex(phy, r"(?m)^\s*assign apb_1\s+= 1'b0;$")
-            self.assertRegex(top, r"(?m)^`define DW_sig1\s+114$")
+            self.assertRegex(top, r"(?m)^assign ahb_test_6\s+= 6'b0;$")
+            self.assertRegex(core, r"(?m)^assign apb_6\s+= 16'b0;$")
+            self.assertRegex(phy, r"(?m)^assign apb_1\s+= 1'b0;$")
+            self.assertRegex(top, r"(?m)^`define DW_SIG1\s+114$")
             self.assertRegex(top, r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$")
             self.assertRegex(
                 top,
@@ -158,7 +158,7 @@ class GenerationTests(unittest.TestCase):
                 core,
                 r"(?m)^\s*output wire \[`LANE_NUM\s*-1:0\]\[`Test_size\s*-1:0\]\s+array,$",
             )
-            self.assertRegex(core, r"(?m)^\s*assign array\s+= '0;$")
+            self.assertRegex(core, r"(?m)^assign array\s+= '0;$")
             self.assertIn("// 子模块之间的内部连线。", top)
             self.assertIn("// 没有有效子模块驱动的 TOP 输出在当前配置下置零。", top)
             self.assertIn("// 模块占位逻辑：所有输出均置零。", core)
@@ -233,6 +233,8 @@ class GenerationTests(unittest.TestCase):
                 self.assertEqual(content.count("module "), 1)
                 self.assertEqual(content.count("endmodule"), 1)
                 self.assertEqual(content.count("("), content.count(")"))
+                self.assertNotIn("\n\nendmodule", content)
+                self.assertNotRegex(content, r"(?m)^[ \t]+assign\s+[A-Za-z_$]")
 
     def test_strict_mode_rejects_sample_warnings_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -432,6 +434,7 @@ class GenerationTests(unittest.TestCase):
             self.assertIn(
                 "assign data[gen_zero_data] = {DATA_WIDTH{1'b0}};", source
             )
+            self.assertTrue(destination.endswith(");\nendmodule\n"))
 
     def test_packed_dimension_columns_are_aligned_for_internal_wires(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -562,8 +565,8 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual([path.name for path in paths], ["ADVANCED.v"])
             text = paths[0].read_text(encoding="utf-8")
-            self.assertRegex(text, r"output wire\s+\[\s*13:0\]\s+calculated")
-            self.assertRegex(text, r"output wire\s+\[\s*113:0\]\s+uncertain")
+            self.assertRegex(text, r"output wire\s+\[14\s*-1:0\]\s+calculated")
+            self.assertRegex(text, r"output wire\s+\[114\s*-1:0\]\s+uncertain")
             self.assertRegex(
                 text,
                 r"output wire\s+\[`ROWS\s*-1:0\]\[`COLS\s*-1:0\]\s+matrix",
@@ -574,8 +577,9 @@ class GenerationTests(unittest.TestCase):
             )
             self.assertRegex(
                 text,
-                r"output wire\s+\[\s*7:0\]\s+cube\s+\[`A-1:0\] \[`B-1:0\]",
+                r"output wire\s+\[8\s+-1:0\]\s+cube\s+\[`A-1:0\] \[`B-1:0\]",
             )
+            self.assertIn("[8         -1:0]", text)
 
             declarations = {
                 name: next(
@@ -590,6 +594,17 @@ class GenerationTests(unittest.TestCase):
                 self.assertEqual(
                     len({line.index(token) for line in first_dimension_lines}), 1
                 )
+            for name, expression in (
+                ("calculated", "14"),
+                ("uncertain", "114"),
+                ("matrix", "`ROWS"),
+                ("tensor", "`LONG_ROWS"),
+            ):
+                line = declarations[name]
+                self.assertEqual(line.index(expression), line.index("[") + 1)
+            self.assertEqual(
+                len({line.index("-") for line in first_dimension_lines}), 1
+            )
             symbolic_first_dimensions = [
                 declarations[name] for name in ("matrix", "tensor")
             ]
@@ -631,12 +646,12 @@ class GenerationTests(unittest.TestCase):
             rows = module_sheet(
                 "GENERIC",
                 [
-                    ("bus_{{j}}_{{z}}", "`W_{{j}}", None, "i"),
-                    ("done_{j}}", 1, None, "o"),
+                    ("BUS_{{j}}_{{z}}", "`w_{{j}}", None, "i"),
+                    ("DONE_{j}}", 1, None, "o"),
                     ("needs_review", 1, None, None),
                 ],
             )
-            set_cell(rows, 3, 9, "j的范围是{a,b}; z的范围是{x,y}")
+            set_cell(rows, 3, 9, "j的范围是{A,b}; z的范围是{X,y}")
             set_cell(rows, 4, 1, None)
             write_xlsx(workbook, [("GENERIC", rows)])
 
@@ -648,6 +663,9 @@ class GenerationTests(unittest.TestCase):
                 self.assertIn(name, text)
             self.assertIn("done_a", text)
             self.assertIn("done_b", text)
+            self.assertRegex(text, r"(?m)^`define W_A\s+114$")
+            self.assertRegex(text, r"(?m)^`define W_B\s+114$")
+            self.assertNotIn("`define W_a", text)
             self.assertRegex(text, r"(?m)^\s*inout\s+wire\s+needs_review")
             self.assertIn(
                 "TODO: XLSX i/o 为空，暂按 inout 生成；需处理方向缺失问题",
@@ -717,6 +735,26 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(text, r"(?m)^\s*\.dir_debug\s+\(\s*\),$")
             self.assertFalse(any("展开数量不一致" in item.message for item in reporter.items))
             self.assertFalse(any("方向冲突" in item.message for item in reporter.items))
+
+    def test_template_case_normalization_rejects_signal_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "case-collision.xlsx"
+            output = root / "generated"
+            rows = module_sheet(
+                "CASE_COLLISION",
+                [("signal_{{i}}", 1, None, "i")],
+            )
+            set_cell(rows, 3, 9, "i的范围是{A,a}")
+            write_xlsx(workbook, [("CASE_COLLISION", rows)])
+
+            paths, reporter = generate(workbook, output)
+            self.assertEqual(paths, [])
+            self.assertTrue(reporter.has_errors)
+            self.assertTrue(
+                any("规范为小写后产生重复端口" in item.message for item in reporter.items)
+            )
+            self.assertFalse(output.exists())
 
     def test_top_output_drives_child_input_and_change_columns_are_ignored(self) -> None:
         def module_rows(name: str, signal_direction: str) -> list[list[object]]:
@@ -824,8 +862,9 @@ class GenerationTests(unittest.TestCase):
             )
             self.assertNotIn("XLSX2VERILOG_INTERNAL_HAVE_CONNECTION", text)
             self.assertRegex(text, r"(?m)^\s*input\s+wire\s+request,$")
-            self.assertRegex(text, r"(?m)^\s*output\s+wire \[7:0\]\s+response$")
+            self.assertRegex(text, r"(?m)^\s*output\s+wire \[8\s*-1:0\]\s+response$")
             self.assertRegex(text, r"(?m)^\s*assign response = 8'b0;$")
+            self.assertNotIn("\n\nendmodule", text)
 
     def test_techreview3_groups_conditions_and_local_alignment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

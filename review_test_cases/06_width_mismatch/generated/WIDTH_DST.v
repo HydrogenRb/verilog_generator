@@ -3,8 +3,7 @@ module WIDTH_DST (
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input wire       clk,
-    input wire [3:0] payload
+    input wire         clk,
+    input wire [4-1:0] payload
 );
-
 endmodule

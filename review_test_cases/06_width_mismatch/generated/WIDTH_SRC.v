@@ -3,12 +3,11 @@ module WIDTH_SRC (
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire       clk,
-    output wire [7:0] payload
+    input  wire         clk,
+    output wire [8-1:0] payload
 );
 
-    // Module placeholder: drive every output to zero.
-    // 模块占位逻辑：所有输出均置零。
-    assign payload = 8'b0;
-
+// Module placeholder: drive every output to zero.
+// 模块占位逻辑：所有输出均置零。
+assign payload = 8'b0;
 endmodule

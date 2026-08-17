@@ -15,13 +15,13 @@
 - PASS：最新 test.xlsx 无错误生成 3 个模块
 - PASS：生成文件数为 3
 - PASS：{{i}} 已展开 sig1
-- PASS：DW_sig1 不确定位宽使用 114
+- PASS：DW_SIG1 不确定位宽使用 114
 - PASS：{{j}} 已展开 sig1，畸形 valid 模板已恢复
 - PASS：{{i}} 已展开 sig2
-- PASS：DW_sig2 不确定位宽使用 114
+- PASS：DW_SIG2 不确定位宽使用 114
 - PASS：{{j}} 已展开 sig2，畸形 valid 模板已恢复
 - PASS：{{i}} 已展开 sig3
-- PASS：DW_sig3 不确定位宽使用 114
+- PASS：DW_SIG3 不确定位宽使用 114
 - PASS：{{j}} 已展开 sig3，畸形 valid 模板已恢复
 - PASS：interface 声明和实例连接正确
 - PASS：带空格乘号已按原顺序转换为多维 packed array
@@ -30,7 +30,7 @@
 
 ## 第二轮：历史功能和 real_test 回归
 
-- PASS：unittest 24/24 通过
+- PASS：unittest 25/25 通过
 - PASS：Tech Review 1 matrix 6/6 通过
 - PASS：review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --strict 通过
 - PASS：review_test_cases\08_real_test_2\01_core_layer.xlsx --strict 通过

@@ -70,7 +70,7 @@ ENABLE_CONDITIONAL_BLOCKS = True
 备注:    i的列表是{sig1,sig2,sig3}
 ```
 
-会展开为 `test_bus_sig1_dat`、`test_bus_sig2_dat`和 `test_bus_sig3_dat`，对应宏为 `` `DW_sig1``～`` `DW_sig3``。若模板宏/parameter 的`数值`无法可靠计算，脚本输出 warning 并使用 `114` 作为明确的待确认占位值。集成页签中保留原始 `{{i}}` 写法即可，脚本会按模块已展开端口逐项连接。
+会展开为 `test_bus_sig1_dat`、`test_bus_sig2_dat`和 `test_bus_sig3_dat`，对应宏为 `` `DW_SIG1``～`` `DW_SIG3``。模板生成的最终信号标识符统一转换为小写，展开后的反引号宏标识符统一转换为大写；模板取值本身仍用于跨模块逐项对齐。若模板宏/parameter 的`数值`无法可靠计算，脚本输出 warning 并使用 `114` 作为明确的待确认占位值。集成页签中保留原始 `{{i}}` 写法即可，脚本会按模块已展开端口逐项连接。
 
 变量按名称绑定：`{{j}}` 只使用 `j的范围是{...}`，不会自动套用 `i` 的列表。同一端口名包含多个变量时采用笛卡尔积，例如 `bus_{{j}}_{{z}}` 配合 `j={a,b}`、`z={x,y}` 会生成 `bus_a_x`、`bus_a_y`、`bus_b_x`、`bus_b_y`。如果位宽或数组维度引用了未被端口名绑定的其他变量，脚本不会猜测变量之间的关系，而是 warning 后使用 `114`；如果端口名本身的变量没有取值列表，则报错且不生成该行。
 
@@ -92,16 +92,16 @@ ENABLE_CONDITIONAL_BLOCKS = True
 | XLSX `位宽` | XLSX `数值` | 生成结果 | 说明 |
 |---|---:|---|---|
 | 空白或 `1` | 空白或 `1` | `input wire sig` | 标量 |
-| `8` | 空白 | `input wire [7:0] sig` | 固定 8 bit 向量 |
-| `2+3*4` | 空白 | `input wire [13:0] sig` | 纯数字表达式先计算为 14 |
+| `8` | 空白 | `input wire [8-1:0] sig` | 固定 8 bit 向量；参与列对齐时在 `8` 与 `-1:0]` 之间补空格 |
+| `2+3*4` | 空白 | `input wire [14-1:0] sig` | 纯数字表达式先计算为 14，再保留 `14-1:0` 形式 |
 | `` `DATA_W`` | `32` | `` `define DATA_W 32``，端口为 ``[`DATA_W-1:0]`` | 单个宏；宏定义直接输出，不加保护 |
 | `DATA_WIDTH` | `32` | `parameter integer DATA_WIDTH = 32`，端口为 `[DATA_WIDTH-1:0]` | 单个 parameter |
-| `` `LANE_NUM*DATA_WIDTH`` | `4*32` | `[127:0] sig` | `*` 两侧没有空格，按一个算术位宽计算为 128；不会保留两个符号，也不会由该行生成宏/parameter |
+| `` `LANE_NUM*DATA_WIDTH`` | `4*32` | `[128-1:0] sig` | `*` 两侧没有空格，按一个算术位宽计算为 128；不会保留两个符号，也不会由该行生成宏/parameter |
 | `` `LANE_NUM * DATA_WIDTH`` | `4*32` | ``[`LANE_NUM-1:0][DATA_WIDTH-1:0] sig`` | ` * ` 两侧有空格，按两个 packed 维度解释；同时生成宏 `LANE_NUM=4` 和 parameter `DATA_WIDTH=32` |
 | `DATA_WIDTH`，`数组=DEPTH` | `32`，`数组数值=4` | `input wire [DATA_WIDTH-1:0] sig [DEPTH-1:0]` | packed 元素宽度加 unpacked 数组深度 |
 | `sky_bus_if.mst` | 空白 | `sky_bus_if.mst sig` | interface modport，不生成 `wire` |
 
-复杂项目示例：若需要 4 lane、每 lane 32 bit 的二维 packed 端口，应写 `` `LANE_NUM * DATA_WIDTH``（乘号两侧有空格）和数值 `4*32`；若需要单根 128 bit 扁平总线，则写 `` `LANE_NUM*DATA_WIDTH``（无空格）和数值 `4*32`。无空格的符号表达式若没有可计算的纯数字默认值，会 warning 并使用 `[113:0]`，即 114 bit 待确认占位值；若希望稳定保留一个符号宽度，建议在表中使用单独的 `TOTAL_WIDTH` parameter 并把数值写为 `128`。
+复杂项目示例：若需要 4 lane、每 lane 32 bit 的二维 packed 端口，应写 `` `LANE_NUM * DATA_WIDTH``（乘号两侧有空格）和数值 `4*32`；若需要单根 128 bit 扁平总线，则写 `` `LANE_NUM*DATA_WIDTH``（无空格）和数值 `4*32`。无空格的符号表达式若没有可计算的纯数字默认值，会 warning 并使用 `[114-1:0]`，即 114 bit 待确认占位值；若希望稳定保留一个符号宽度，建议在表中使用单独的 `TOTAL_WIDTH` parameter 并把数值写为 `128`。
 
 `位宽` 描述每个元素的 packed width，`数组` 描述端口名之后的第二维 unpacked depth。例如 `DATA_WIDTH` 的数值为 `32`、`DEPTH` 的数组数值为 `4` 时生成：
 
@@ -117,7 +117,7 @@ input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]
 
 ## 生成代码格式
 
-生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；packed 范围按维度建立独立列，每一维的左方括号固定，参数名或宏名紧跟 `[` 并左对齐，所需空格放在表达式与减号之间，使该维的 `-1:0]` 仍然纵向对齐，第二维及后续维度使用相同规则；unpacked 范围的右方括号使用独立字段对齐；同一组宏定义的值、wire 名、assign 等号、localparam 等号分别对齐；模块实例的参数连接与端口连接中，左、右圆括号均纵向对齐。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
+生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；packed 范围按维度建立独立列，每一维的左方括号固定，数字、参数名或宏名紧跟 `[` 并左对齐，所需空格放在表达式与减号之间，使该维的 `-1:0]` 仍然纵向对齐，第二维及后续维度使用相同规则；unpacked 范围的右方括号使用独立字段对齐；同一组宏定义的值、wire 名、assign 等号、localparam 等号分别对齐；模块实例的参数连接与端口连接中，左、右圆括号均纵向对齐。模块级 `assign` 和对应说明注释从第 1 列开始，数组 generate 内部的 `assign` 仍按循环层级缩进。模块主体结束后直接生成 `endmodule`，不在其前方保留空白行。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
 
 ```verilog
 input wire [`SHORT    -1:0][`LANE   -1:0] matrix_a,
@@ -171,9 +171,9 @@ input wire [`LONG_NAME-1:0][`CHANNEL-1:0] matrix_b
 - `RISCV_TOP.v`：TOP 端口、APB 内部 wire、`RISCV_CORE_TEST` 和 `MEM_PHY` 实例；
 - `RISCV_CORE_TEST.v`、`MEM_PHY.v`：端口定义及 output 赋零。
 
-最新样例还包含 `test_bus_{{i}}_*` 和 `test_bus2_{{j}}_*` 的 `sig1/sig2/sig3` 展开、`sky_cs_if.mst` interface，以及 `` `LANE_NUM * `Test_size`` 数组；后者生成 ``[`LANE_NUM-1:0][`Test_size-1:0] array``。`DW_sig1`～`DW_sig3` 的 XLSX 默认值为不完整的 `155、…`，因此按 Tech Review 2 规则告警并使用 `114`。
+最新样例还包含 `test_bus_{{i}}_*` 和 `test_bus2_{{j}}_*` 的 `sig1/sig2/sig3` 展开、`sky_cs_if.mst` interface，以及 `` `LANE_NUM * `Test_size`` 数组；后者生成 ``[`LANE_NUM-1:0][`Test_size-1:0] array``。模板宏按新规则生成 `DW_SIG1`～`DW_SIG3`；其 XLSX 默认值为不完整的 `155、…`，因此按 Tech Review 2 规则告警并使用 `114`。
 
-新增 `test_bus2` 样例刻意保留了两个表格问题用于验证边界：`dat` 的端口名使用 `j`、位宽却引用未绑定的 `i`，因此三个端口均生成 `[113:0]` 并告警；`valid` 写成 `{j}}`，脚本恢复为 `{{j}}` 后展开并要求修正 XLSX。这些 warning 是有意保留的待确认标记。
+新增 `test_bus2` 样例刻意保留了两个表格问题用于验证边界：`dat` 的端口名使用 `j`、位宽却引用未绑定的 `i`，因此三个端口均生成 `[114-1:0]` 并告警；`valid` 写成 `{j}}`，脚本恢复为 `{{j}}` 后展开并要求修正 XLSX。这些 warning 是有意保留的待确认标记。
 
 集成表中的三个 `test_bus_*_valid` 同时连接 `RISCV_CORE_TEST` 和 `MEM_PHY` 的 output，因此顶层 net 存在多驱动风险。脚本按表格生成并输出“多个子模块驱动端” warning；请在项目定义确定后修改 XLSX 方向或连接关系。
 

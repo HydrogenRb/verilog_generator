@@ -9,12 +9,11 @@ module PRODUCER #(
     // ----- ----- ----- ----- ----- -----
     input  wire [`RST_LANE-1:0] n_rst,
     output wire [WIDTH    -1:0] bus,
-    output wire [          1:0] debug
+    output wire [2        -1:0] debug
 );
 
-    // Module placeholder: drive every output to zero.
-    // 模块占位逻辑：所有输出均置零。
-    assign bus   = {WIDTH{1'b0}};
-    assign debug = 2'b0;
-
+// Module placeholder: drive every output to zero.
+// 模块占位逻辑：所有输出均置零。
+assign bus   = {WIDTH{1'b0}};
+assign debug = 2'b0;
 endmodule

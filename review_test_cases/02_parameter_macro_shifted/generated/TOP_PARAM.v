@@ -30,5 +30,4 @@ module TOP_PARAM #(
         .bus    (w_bus ),
         .result (result)
     );
-
 endmodule

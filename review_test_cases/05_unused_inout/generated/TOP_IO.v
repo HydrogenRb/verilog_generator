@@ -10,5 +10,4 @@ module TOP_IO (
         .clk (clk),
         .pad (   )
     );
-
 endmodule

@@ -2,9 +2,9 @@
 `define RST_LANE 1
 `define CLK_LANE 1
 `define DFT_BUS  64
-`define DW_sig1  114
-`define DW_sig2  114
-`define DW_sig3  114
+`define DW_SIG1  114
+`define DW_SIG2  114
+`define DW_SIG3  114
 `define LANE_NUM 3
 `define Test     100
 
@@ -34,27 +34,27 @@ module MEM_PHY #(
     // APB bus
     // ----- ----- ----- ----- ----- -----
     output wire                            apb_1,
-    output wire [          1:0]            apb_2,
-    input  wire [          2:0]            apb_3,
-    input  wire [          3:0]            apb_4,
-    input  wire [          4:0]            apb_5,
-    input  wire [          5:0]            apb_6,
+    output wire [2        -1:0]            apb_2,
+    input  wire [3        -1:0]            apb_3,
+    input  wire [4        -1:0]            apb_4,
+    input  wire [5        -1:0]            apb_5,
+    input  wire [6        -1:0]            apb_6,
 
     // ----- ----- ----- ----- ----- -----
     // AHB
     // ----- ----- ----- ----- ----- -----
     input  wire                            ahb_test_1,
-    input  wire [          1:0]            ahb_test_2,
-    output wire [          2:0]            ahb_test_3,
-    output wire [          3:0]            ahb_test_4,
-    output wire [          4:0]            ahb_test_5,
+    input  wire [2        -1:0]            ahb_test_2,
+    output wire [3        -1:0]            ahb_test_3,
+    output wire [4        -1:0]            ahb_test_4,
+    output wire [5        -1:0]            ahb_test_5,
 
     // ----- ----- ----- ----- ----- -----
     // test_bus
     // ----- ----- ----- ----- ----- -----
-    input  wire [`DW_sig1 -1:0]            test_bus_sig1_dat,
-    input  wire [`DW_sig2 -1:0]            test_bus_sig2_dat,
-    input  wire [`DW_sig3 -1:0]            test_bus_sig3_dat,
+    input  wire [`DW_SIG1 -1:0]            test_bus_sig1_dat,
+    input  wire [`DW_SIG2 -1:0]            test_bus_sig2_dat,
+    input  wire [`DW_SIG3 -1:0]            test_bus_sig3_dat,
     input  wire                            test_bus_sig1_ready,
     input  wire                            test_bus_sig2_ready,
     input  wire                            test_bus_sig3_ready,
@@ -68,15 +68,14 @@ module MEM_PHY #(
     input  wire [`LANE_NUM-1:0][`Test-1:0] array
 );
 
-    // Module placeholder: drive every output to zero.
-    // 模块占位逻辑：所有输出均置零。
-    assign apb_1               = 1'b0;
-    assign apb_2               = 2'b0;
-    assign ahb_test_3          = 3'b0;
-    assign ahb_test_4          = 4'b0;
-    assign ahb_test_5          = 5'b0;
-    assign test_bus_sig1_valid = 1'b0;
-    assign test_bus_sig2_valid = 1'b0;
-    assign test_bus_sig3_valid = 1'b0;
-
+// Module placeholder: drive every output to zero.
+// 模块占位逻辑：所有输出均置零。
+assign apb_1               = 1'b0;
+assign apb_2               = 2'b0;
+assign ahb_test_3          = 3'b0;
+assign ahb_test_4          = 4'b0;
+assign ahb_test_5          = 5'b0;
+assign test_bus_sig1_valid = 1'b0;
+assign test_bus_sig2_valid = 1'b0;
+assign test_bus_sig3_valid = 1'b0;
 endmodule

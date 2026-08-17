@@ -534,12 +534,12 @@ EXPECTED_PATTERNS: dict[str, list[tuple[str, str]]] = {
         ("TOP_PARAM.v", r"\.WIDTH\s+\(WIDTH\s*\)"),
     ],
     "03_duplicate_port_rows": [
-        ("TOP_DUP.v", r"input\s+wire\s+\[1:0\]\s+aaa"),
+        ("TOP_DUP.v", r"input\s+wire\s+\[2\s*-1:0\]\s+aaa"),
         ("TOP_DUP.v", r"\.aaa\s+\(2'b0\s*\)"),
     ],
     "05_unused_inout": [("TOP_IO.v", r"\.pad\s+\(\s*\)")],
     "06_width_mismatch": [
-        ("TOP_WIDTH.v", r"wire\s+\[7:0\]\s+w_payload;")
+        ("TOP_WIDTH.v", r"wire\s+\[8\s*-1:0\]\s+w_payload;")
     ],
 }
 

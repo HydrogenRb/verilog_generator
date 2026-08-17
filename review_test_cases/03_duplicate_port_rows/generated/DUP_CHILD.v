@@ -3,13 +3,12 @@ module DUP_CHILD (
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire       clk,
-    input  wire [1:0] aaa,
-    output wire       status
+    input  wire         clk,
+    input  wire [2-1:0] aaa,
+    output wire         status
 );
 
-    // Module placeholder: drive every output to zero.
-    // 模块占位逻辑：所有输出均置零。
-    assign status = 1'b0;
-
+// Module placeholder: drive every output to zero.
+// 模块占位逻辑：所有输出均置零。
+assign status = 1'b0;
 endmodule

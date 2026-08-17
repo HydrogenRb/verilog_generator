@@ -9,9 +9,8 @@ module BASIC_CHILD (
     output wire debug
 );
 
-    // Module placeholder: drive every output to zero.
-    // 模块占位逻辑：所有输出均置零。
-    assign done  = 1'b0;
-    assign debug = 1'b0;
-
+// Module placeholder: drive every output to zero.
+// 模块占位逻辑：所有输出均置零。
+assign done  = 1'b0;
+assign debug = 1'b0;
 endmodule

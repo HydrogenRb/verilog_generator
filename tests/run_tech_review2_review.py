@@ -58,15 +58,16 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
         else ""
     )
     for signal in ("sig1", "sig2", "sig3"):
+        macro_name = f"DW_{signal.upper()}"
         result.check(
             f"test_bus_{signal}_dat" in top,
             f"{{{{i}}}} 已展开 {signal}",
             f"缺少 {{{{i}}}} 展开端口 {signal}",
         )
         result.check(
-            re.search(rf"(?m)^`define DW_{signal}\s+114$", top) is not None,
-            f"DW_{signal} 不确定位宽使用 114",
-            f"DW_{signal} 未使用 114 占位",
+            re.search(rf"(?m)^`define {macro_name}\s+114$", top) is not None,
+            f"{macro_name} 不确定位宽使用 114",
+            f"{macro_name} 未使用 114 占位",
         )
         result.check(
             f"test_bus2_{signal}_dat" in top
