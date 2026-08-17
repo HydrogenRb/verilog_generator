@@ -64,7 +64,7 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
             f"缺少 {{{{i}}}} 展开端口 {signal}",
         )
         result.check(
-            f"`define DW_{signal} 114" in top,
+            re.search(rf"(?m)^`define DW_{signal}\s+114$", top) is not None,
             f"DW_{signal} 不确定位宽使用 114",
             f"DW_{signal} 未使用 114 占位",
         )
@@ -75,14 +75,20 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
             f"缺少 {{{{j}}}} 展开端口 {signal}",
         )
     result.check(
-        "sky_cs_if.mst chi_if_risc" in top
+        re.search(r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$", top)
         and re.search(r"(?m)^\s*\.chi_if_risc\s+\(chi_if_risc\),$", top),
         "interface 声明和实例连接正确",
         "interface 声明或连接缺失",
     )
     result.check(
-        "wire [`LANE_NUM-1:0][`Test_size-1:0] w_array;" in top
-        and "output wire [`LANE_NUM-1:0][`Test_size-1:0] array" in core,
+        re.search(
+            r"(?m)^\s*wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+w_array;$",
+            top,
+        )
+        and re.search(
+            r"(?m)^\s*output wire \[`LANE_NUM-1:0\]\[`Test_size-1:0\]\s+array,?$",
+            core,
+        ),
         "带空格乘号已按原顺序转换为多维 packed array",
         "多维 packed array 声明不符合预期",
     )
@@ -166,10 +172,18 @@ def static_round(paths: list[Path]) -> RoundResult:
             f"{path.name} 括号不平衡",
         )
         header = text[text.find("module ") : text.find(");")]
+        header_without_comments = "\n".join(
+            line.split("//", 1)[0] for line in header.splitlines()
+        )
         missing_ports = [
             port.name
             for port in module.ports
-            if len(re.findall(rf"\b{re.escape(port.name)}\b", header)) != 1
+            if len(
+                re.findall(
+                    rf"\b{re.escape(port.name)}\b", header_without_comments
+                )
+            )
+            != 1
         ]
         result.check(
             not missing_ports,

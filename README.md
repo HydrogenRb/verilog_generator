@@ -44,7 +44,7 @@ python .\xlsx2verilog.py .\test.xlsx --check --strict
 
 模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。
 
-- 宏位宽会生成带保护的 `` `define``，例如 `` `DFT_BUS = 64``。
+- 宏位宽会直接生成 `` `define``，例如 `` `define DFT_BUS 64``；按项目约定不添加 `` `ifndef/`endif`` 保护。
 - 非反引号符号位宽会生成模块 parameter。
 - 数字位宽 `N` 会生成 `[N-1:0]`；数字 `1` 生成标量。
 - 重复名称可以出现在多行或不同模块中。单个 Verilog 模块只声明一次同名端口；同一模块后续同名行合并到第一次定义。
@@ -75,6 +75,24 @@ python .\xlsx2verilog.py .\test.xlsx --check --strict
 - `*`前后都有空格时表示维度分隔；`位宽` `A * B` 按原顺序生成多维 packed array `[A-1:0][B-1:0] port`。`数组`列中的 `A * B` 仍生成端口名之后的两个 unpacked 维度。
 - 维度是宏/parameter 时，`数值`使用乘法表达式按位对应，如 `` `LANE_NUM * `Test_size`` 配合 `3*100`。
 
+#### 位宽写法 specification
+
+空格是位宽语义的一部分，尤其需要区分 `*` 与 ` * `：
+
+| XLSX `位宽` | XLSX `数值` | 生成结果 | 说明 |
+|---|---:|---|---|
+| 空白或 `1` | 空白或 `1` | `input wire sig` | 标量 |
+| `8` | 空白 | `input wire [7:0] sig` | 固定 8 bit 向量 |
+| `2+3*4` | 空白 | `input wire [13:0] sig` | 纯数字表达式先计算为 14 |
+| `` `DATA_W`` | `32` | `` `define DATA_W 32``，端口为 ``[`DATA_W-1:0]`` | 单个宏；宏定义直接输出，不加保护 |
+| `DATA_WIDTH` | `32` | `parameter integer DATA_WIDTH = 32`，端口为 `[DATA_WIDTH-1:0]` | 单个 parameter |
+| `` `LANE_NUM*DATA_WIDTH`` | `4*32` | `[127:0] sig` | `*` 两侧没有空格，按一个算术位宽计算为 128；不会保留两个符号，也不会由该行生成宏/parameter |
+| `` `LANE_NUM * DATA_WIDTH`` | `4*32` | ``[`LANE_NUM-1:0][DATA_WIDTH-1:0] sig`` | ` * ` 两侧有空格，按两个 packed 维度解释；同时生成宏 `LANE_NUM=4` 和 parameter `DATA_WIDTH=32` |
+| `DATA_WIDTH`，`数组=DEPTH` | `32`，`数组数值=4` | `input wire [DATA_WIDTH-1:0] sig [DEPTH-1:0]` | packed 元素宽度加 unpacked 数组深度 |
+| `sky_bus_if.mst` | 空白 | `sky_bus_if.mst sig` | interface modport，不生成 `wire` |
+
+复杂项目示例：若需要 4 lane、每 lane 32 bit 的二维 packed 端口，应写 `` `LANE_NUM * DATA_WIDTH``（乘号两侧有空格）和数值 `4*32`；若需要单根 128 bit 扁平总线，则写 `` `LANE_NUM*DATA_WIDTH``（无空格）和数值 `4*32`。无空格的符号表达式若没有可计算的纯数字默认值，会 warning 并使用 `[113:0]`，即 114 bit 待确认占位值；若希望稳定保留一个符号宽度，建议在表中使用单独的 `TOTAL_WIDTH` parameter 并把数值写为 `128`。
+
 `位宽` 描述每个元素的 packed width，`数组` 描述端口名之后的第二维 unpacked depth。例如 `DATA_WIDTH` 的数值为 `32`、`DEPTH` 的数组数值为 `4` 时生成：
 
 ```systemverilog
@@ -85,15 +103,27 @@ input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]
 
 ### Interface
 
-当`位宽`是 `interface_type.modport`（如 `sky_cs_if.mst`）且 `i/o` 为 `NA`时，生成 `sky_cs_if.mst chi_if_risc`形式的 SystemVerilog interface 端口。集成页签同样使用 `NA`，实例按名连接。生成器不生成 interface 本身的定义，编译时需由项目提供。
+当`位宽`是 `interface_type.modport`（如 `sky_cs_if.mst`）且 `i/o` 为 `NA`时，生成 `sky_cs_if.mst chi_if_risc`形式的 SystemVerilog interface 端口。interface 端口名与同一模块的普通 input/output/inout 端口名使用相同起始列。集成页签同样使用 `NA`，实例按名连接。生成器不生成 interface 本身的定义，编译时需由项目提供。
 
 ## 生成代码格式
 
-生成器会按当前模块中最长的字段统一排版：模块端口声明的方向、类型、packed 位宽和端口名按列对齐；模块实例的参数连接与端口连接中，左括号纵向对齐。该格式只改善可读性，不改变端口顺序或连接语义。
+生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；同一组宏定义的值、wire 名、assign 等号、localparam 等号分别对齐；模块实例的参数连接与端口连接中，左括号纵向对齐。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
+
+模块端口按“分类”分组，每组生成三行标题。合并单元格在首行给出的分类会由后续连续端口继承；完全没有分类的连续端口使用 `no group`：
+
+```verilog
+    // ----- ----- ----- ----- ----- -----
+    // CLK & RST
+    // ----- ----- ----- ----- ----- -----
+    input wire clk,
+    input wire rst_n
+```
+
+分类中可加入 `条件：宏名`。例如 `CFG bus 条件：FEATURE_CFG` 显示分类名 `CFG bus`，并把整组端口放入 `` `ifdef FEATURE_CFG``；仅写 `条件：FEATURE_CFG` 时，显示分类名就是 `FEATURE_CFG`。也接受 ``条件：`FEATURE_CFG``。条件宏由外部编译环境控制，生成器不会因为分类条件在文件开头创建对应 `` `define``。条件会同步应用到端口声明、桩模块的 output 赋零以及集成模块的实例连接；多个条件组关闭、单独开启或同时开启时，生成器都会按预处理分支放置分隔逗号，保证端口列表和实例连接列表结构成立。若条件化子模块 output/inout 驱动一个在相同配置下仍存在的 TOP output，双方条件必须一致，否则生成器报错，防止部分配置下 TOP 信号悬空。
 
 ### 集成页签
 
-同一行出现至少两组相邻的 `端口名`、`i/o` 表头时，该页签被识别为集成页签。每组的模块名位于 `端口名` 上方。
+同一行出现至少两组相邻的 `端口名`、`i/o` 表头时，该页签被识别为集成页签。每组的模块名位于 `端口名` 上方，既可以写 `RISCV_CORE`，也可以写 `module:RISCV_CORE`、`module：RISCV_CORE`；前缀不进入生成的模块名和实例名。
 
 连接区由一个或多个空列隔开：
 
@@ -147,4 +177,4 @@ python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\01_core_layer.xlsx -
 python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xlsx --check --strict
 ```
 
-测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。`run_tech_review2_review.py` 会顺序执行新功能、历史回归、生成 Verilog 静态结构三轮检视，并写入 `review_test_cases/TechReview2检视报告.md`。
+测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。`run_tech_review2_review.py` 会顺序执行新功能、历史回归、生成 Verilog 静态结构三轮检视，并写入 `review_test_cases/TechReview2检视报告.md`。Tech Review 3 的需求追踪、条件组合验证和整体代码审查记录见 `review_test_cases/TechReview3检视报告.md`；后续可视化连线软件的独立 specification 见 `可视化集成页签生成器需求文档.md`。

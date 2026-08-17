@@ -31,6 +31,12 @@ MISSING_TEMPLATE_OPEN_RE = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 MISSING_TEMPLATE_CLOSE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})")
 UNKNOWN_WIDTH = 114
 IGNORED_COLUMN_HEADERS = {"修改", "修改列"}
+GROUP_SEPARATOR = "// ----- ----- ----- ----- ----- -----"
+NO_GROUP = "no group"
+MODULE_LABEL_RE = re.compile(r"^module\s*[:：]\s*(.+)$", re.IGNORECASE)
+CONDITION_CATEGORY_RE = re.compile(
+    r"条件\s*[:：]\s*`?\s*([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE
+)
 
 
 def local_name(tag: str) -> str:
@@ -266,6 +272,8 @@ class Port:
     direction: str
     width: Width
     row: int
+    category: str = NO_GROUP
+    condition: str | None = None
     arrays: tuple[Width, ...] = ()
     interface_type: str | None = None
     packed_dimensions: tuple[Width, ...] = ()
@@ -686,8 +694,30 @@ def module_name_above_header(sheet: Sheet, header_row: int, port_column: int) ->
     for row in range(header_row - 1, 0, -1):
         value = clean(sheet.cell(row, port_column))
         if value:
-            return value
-    return sheet.name
+            match = MODULE_LABEL_RE.fullmatch(value)
+            return match.group(1).strip() if match else value
+    match = MODULE_LABEL_RE.fullmatch(sheet.name)
+    return match.group(1).strip() if match else sheet.name
+
+
+def parse_category(
+    raw_category: Any, context: str, reporter: Reporter
+) -> tuple[str, str | None]:
+    text = clean(raw_category)
+    if not text:
+        return NO_GROUP, None
+    condition_match = CONDITION_CATEGORY_RE.search(text)
+    if condition_match is None:
+        if re.search(r"条件\s*[:：]", text):
+            reporter.error(
+                f"{context}: 分类条件缺少合法宏名 {text!r}；示例：条件：FEATURE_X"
+            )
+        return text, None
+    condition = condition_match.group(1)
+    category = (
+        text[: condition_match.start()] + " " + text[condition_match.end() :]
+    ).strip(" \t,，;；:/：")
+    return category or condition, condition
 
 
 def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
@@ -705,6 +735,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
     macros: dict[str, str] = {}
     seen: dict[str, Port] = {}
     active_template_values: dict[str, list[str]] = {}
+    active_category = NO_GROUP
+    active_condition: str | None = None
     category_column = columns["port"] - 1
     for row in range(header_row + 1, sheet.max_row + 1):
         raw_port_name = clean(sheet.cell(row, columns["port"]))
@@ -712,7 +744,13 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             continue
         context = f"页签 {sheet.name} 第 {row} 行"
         raw_port_name = normalize_template_text(raw_port_name, context, reporter)
-        if category_column >= 1 and clean(sheet.cell(row, category_column)):
+        row_category = (
+            clean(sheet.cell(row, category_column)) if category_column >= 1 else ""
+        )
+        if row_category:
+            active_category, active_condition = parse_category(
+                row_category, context, reporter
+            )
             active_template_values = {}
         row_template_values = template_values_in_row(sheet, row, context, reporter)
         if row_template_values:
@@ -857,6 +895,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 direction=direction,
                 width=width,
                 row=row,
+                category=active_category,
+                condition=active_condition,
                 arrays=arrays,
                 interface_type=interface_type,
                 packed_dimensions=packed_dimensions,
@@ -1026,11 +1066,13 @@ def append_zero_assignment(
     port: Port,
     parameter_map: dict[str, str] | None = None,
     indent: str = "    ",
+    target_width: int = 0,
 ) -> None:
     """Append a scalar/vector assignment or an element-wise array generate loop."""
     if not port.arrays:
         value = "'0" if port.packed_dimensions else zero_value(port.width, parameter_map)
-        lines.append(f"{indent}assign {port.name} = {value};")
+        target = f"{port.name:<{target_width}}" if target_width else port.name
+        lines.append(f"{indent}assign {target} = {value};")
         return
     indices: list[str] = []
     current_indent = indent
@@ -1052,13 +1094,81 @@ def append_zero_assignment(
         lines.append(f"{current_indent}end")
 
 
+def append_conditioned_zero_assignment(
+    lines: list[str],
+    port: Port,
+    parameter_map: dict[str, str] | None = None,
+    indent: str = "    ",
+    target_width: int = 0,
+) -> None:
+    """Drive an output only in configurations where that port exists."""
+    if port.condition:
+        lines.append(f"`ifdef {port.condition}")
+    append_zero_assignment(
+        lines,
+        port,
+        parameter_map=parameter_map,
+        indent=indent,
+        target_width=target_width,
+    )
+    if port.condition:
+        lines.append("`endif")
+
+
 def render_macros(macros: dict[str, str]) -> list[str]:
-    lines: list[str] = []
-    for name, value in macros.items():
-        lines.extend([f"`ifndef {name}", f"`define {name} {value}", "`endif"])
+    if not macros:
+        return []
+    name_width = max(len(name) for name in macros)
+    lines = [f"`define {name:<{name_width}} {value}" for name, value in macros.items()]
     if lines:
         lines.append("")
     return lines
+
+
+def port_groups(ports: list[Port]) -> list[list[Port]]:
+    groups: list[list[Port]] = []
+    for port in ports:
+        identity = (port.category, port.condition)
+        if not groups or (groups[-1][0].category, groups[-1][0].condition) != identity:
+            groups.append([port])
+        else:
+            groups[-1].append(port)
+    return groups
+
+
+def category_comment(category: str) -> str:
+    text = re.sub(r"[\r\n]+", " ", clean(category)).strip()
+    return text or NO_GROUP
+
+
+def append_conditional_comma(lines: list[str], future_groups: list[list[Port]]) -> None:
+    """Emit one comma iff at least one later conditional group is enabled."""
+    if not future_groups:
+        return
+    if any(group[0].condition is None for group in future_groups):
+        lines.append("    ,")
+        return
+    conditions = list(
+        dict.fromkeys(
+            group[0].condition
+            for group in future_groups
+            if group[0].condition is not None
+        )
+    )
+    for index, condition in enumerate(conditions):
+        directive = "ifdef" if index == 0 else "elsif"
+        lines.extend([f"`{directive} {condition}", "    ,"])
+    lines.append("`endif")
+
+
+def port_declaration_prefix(
+    port: Port, direction_width: int, packed_width: int
+) -> str:
+    if port.is_interface:
+        return port.interface_type or "interface"
+    packed = packed_range(port.packed_dimensions, port.width)
+    packed_field = f" {packed:<{packed_width}}" if packed_width else ""
+    return f"{port.direction:<{direction_width}} wire{packed_field}"
 
 
 def render_module_header(module: Module, macros: dict[str, str] | None = None) -> list[str]:
@@ -1082,24 +1192,45 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
         packed_range(port.packed_dimensions, port.width) for port in regular_ports
     ]
     packed_width = max((len(item) for item in packed_ranges), default=0)
-    for index, port in enumerate(module.ports):
-        comma = "," if index < len(module.ports) - 1 else ""
-        if port.is_interface:
-            lines.append(
-                f"    {port.interface_type} {port.name}{array_ranges(port.arrays)}{comma}"
-            )
-            continue
-        packed = packed_range(port.packed_dimensions, port.width)
-        packed_field = f"{packed:<{packed_width}} " if packed_width else ""
-        lines.append(
-            f"    {port.direction:<{direction_width}} wire {packed_field}"
-            f"{port.name}{array_ranges(port.arrays)}{comma}"
-            + (
-                "  /* TODO: XLSX i/o 为空，暂按 inout 生成；需处理方向缺失问题 */"
-                if port.direction_inferred
-                else ""
-            )
+    prefixes = {
+        id(port): port_declaration_prefix(port, direction_width, packed_width)
+        for port in module.ports
+    }
+    prefix_width = max((len(prefix) for prefix in prefixes.values()), default=0)
+    groups = port_groups(module.ports)
+    has_conditions = any(group[0].condition is not None for group in groups)
+    port_index = 0
+    for group_index, group in enumerate(groups):
+        if group_index:
+            lines.append("")
+        condition = group[0].condition
+        if condition:
+            lines.append(f"`ifdef {condition}")
+        lines.extend(
+            [
+                f"    {GROUP_SEPARATOR}",
+                f"    // {category_comment(group[0].category)}",
+                f"    {GROUP_SEPARATOR}",
+            ]
         )
+        for group_port_index, port in enumerate(group):
+            if has_conditions:
+                comma = "," if group_port_index < len(group) - 1 else ""
+            else:
+                comma = "," if port_index < len(module.ports) - 1 else ""
+            prefix = prefixes[id(port)]
+            line = (
+                f"    {prefix:<{prefix_width}} {port.name}"
+                f"{array_ranges(port.arrays)}{comma}"
+            )
+            if port.direction_inferred:
+                line += "  /* TODO: XLSX i/o 为空，暂按 inout 生成；需处理方向缺失问题 */"
+            lines.append(line)
+            port_index += 1
+        if has_conditions and group_index < len(groups) - 1:
+            append_conditional_comma(lines, groups[group_index + 1 :])
+        if condition:
+            lines.append("`endif")
     lines.append(");")
     return lines
 
@@ -1110,8 +1241,13 @@ def render_stub(module: Module) -> str:
     if output_ports:
         lines.append("")
         lines.append("    // Module placeholder: drive every output to zero.")
+        target_width = max(
+            (len(port.name) for port in output_ports if not port.arrays), default=0
+        )
         for port in output_ports:
-            append_zero_assignment(lines, port)
+            append_conditioned_zero_assignment(
+                lines, port, target_width=target_width
+            )
     lines.extend(["", "endmodule", ""])
     return "\n".join(lines)
 
@@ -1141,6 +1277,59 @@ class Wire:
     parameter_map: dict[str, str]
     interface_type: str | None = None
     packed_dimensions: tuple[Width, ...] = ()
+
+
+@dataclass(frozen=True)
+class Binding:
+    expression: str | None
+    conditions: tuple[str, ...] = ()
+
+
+def append_instance_connections(
+    lines: list[str],
+    child: Module,
+    child_bindings: dict[str, Binding],
+    reserved_macros: set[str],
+) -> None:
+    """Append a named-port list whose commas remain valid after preprocessing."""
+    ordered = [(port, child_bindings[port.name]) for port in child.ports]
+    port_name_width = max((len(port.name) for port in child.ports), default=0)
+    if not any(binding.conditions for _, binding in ordered):
+        for index, (port, binding) in enumerate(ordered):
+            comma = "," if index < len(ordered) - 1 else ""
+            rendered = "" if binding.expression is None else binding.expression
+            lines.append(
+                f"        .{port.name:<{port_name_width}} ({rendered}){comma}"
+            )
+        return
+
+    marker_base = safe_name(
+        f"XLSX2VERILOG_INTERNAL_HAVE_CONNECTION_{child.name}"
+    ).upper()
+    marker = marker_base
+    suffix = 2
+    while marker in reserved_macros:
+        marker = f"{marker_base}_{suffix}"
+        suffix += 1
+    reserved_macros.add(marker)
+
+    lines.extend([f"`ifdef {marker}", f"`undef {marker}", "`endif"])
+    for port, binding in ordered:
+        for condition in binding.conditions:
+            lines.append(f"`ifdef {condition}")
+        lines.extend(
+            [
+                f"`ifdef {marker}",
+                "        ,",
+                "`else",
+                f"`define {marker}",
+                "`endif",
+            ]
+        )
+        rendered = "" if binding.expression is None else binding.expression
+        lines.append(f"        .{port.name:<{port_name_width}} ({rendered})")
+        lines.extend("`endif" for _ in reversed(binding.conditions))
+    lines.extend([f"`ifdef {marker}", f"`undef {marker}", "`endif"])
 
 
 def render_integration(
@@ -1180,7 +1369,7 @@ def render_integration(
                 local_parameters.append((local_name_candidate, value))
         parameter_maps[child.name] = mapping
 
-    bindings: dict[str, dict[str, str | None]] = {child.name: {} for child in children}
+    bindings: dict[str, dict[str, Binding]] = {child.name: {} for child in children}
     top_driven_outputs: set[str] = set()
     top_output_drivers: dict[str, list[str]] = {}
     wires: list[Wire] = []
@@ -1301,16 +1490,30 @@ def render_integration(
                 f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的方向与模块定义不一致 ({listed_direction}/{port.direction})"
             )
 
-    def bind(module_name: str, port: Port, expression: str | None, row: int) -> None:
+    def bind(
+        module_name: str,
+        port: Port,
+        expression: str | None,
+        row: int,
+        extra_conditions: tuple[str | None, ...] = (),
+    ) -> None:
         if module_name == top.name:
             return
         target = bindings.setdefault(module_name, {})
-        if port.name in target and target[port.name] != expression:
+        conditions = tuple(
+            dict.fromkeys(
+                condition
+                for condition in (port.condition, *extra_conditions)
+                if condition is not None
+            )
+        )
+        binding = Binding(expression, conditions)
+        if port.name in target and target[port.name] != binding:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: {module_name}.{port.name} 被重复连接"
             )
             return
-        target[port.name] = expression
+        target[port.name] = binding
 
     first_group = integration.groups[0]
     top_block = first_group[0]
@@ -1363,11 +1566,28 @@ def render_integration(
                     reporter.warning(
                         f"{top.name}.{top_port.name}信号和{block.module_name}.{child_port.name}信号应该连接，但是其位宽不匹配"
                     )
-                bind(block.module_name, child_port, top_port.name, row)
+                bind(
+                    block.module_name,
+                    child_port,
+                    top_port.name,
+                    row,
+                    extra_conditions=(top_port.condition,),
+                )
                 if top_port.direction == "output" and child_port.direction in {
                     "output",
                     "inout",
                 }:
+                    if (
+                        child_port.condition is not None
+                        and child_port.condition != top_port.condition
+                    ):
+                        reporter.error(
+                            f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
+                            f"{top.name}.{top_port.name} 的驱动端 "
+                            f"{block.module_name}.{child_port.name} 条件不一致 "
+                            f"({top_port.condition or '无条件'}/"
+                            f"{child_port.condition})"
+                        )
                     drivers = top_output_drivers.setdefault(top_port.name, [])
                     driver_name = f"{block.module_name}.{child_port.name}"
                     if driver_name not in drivers:
@@ -1502,34 +1722,43 @@ def render_integration(
                 reporter.warning(
                     f"集成页签 {sheet.name}: 未列出 {child.name}.{port.name}，自动按未连接端口处理"
                 )
-                bindings[child.name][port.name] = (
-                    connection_zero_value(port, parameter_maps[child.name])
-                    if port.direction == "input"
-                    else None
+                bindings[child.name][port.name] = Binding(
+                    (
+                        connection_zero_value(port, parameter_maps[child.name])
+                        if port.direction == "input"
+                        else None
+                    ),
+                    (port.condition,) if port.condition else (),
                 )
 
     lines = render_module_header(top, all_macros)
     if local_parameters:
         lines.append("")
         lines.append("    // Parameters local to child modules.")
+        lines.append("    // 子模块局部参数。")
+        local_name_width = max(len(name) for name, _ in local_parameters)
         for name, value in local_parameters:
-            lines.append(f"    localparam integer {name} = {value};")
+            lines.append(
+                f"    localparam integer {name:<{local_name_width}} = {value};"
+            )
     if wires:
         lines.append("")
         lines.append("    // Internal child-to-child connections.")
+        wire_prefixes: list[str] = []
         for wire in wires:
             if wire.interface_type:
-                lines.append(
-                    f"    {wire.interface_type} {wire.name}{array_ranges(wire.arrays, wire.parameter_map)}();"
+                wire_prefixes.append(wire.interface_type)
+            else:
+                packed = packed_range(
+                    wire.packed_dimensions, wire.width, wire.parameter_map
                 )
-                continue
-            packed = packed_range(
-                wire.packed_dimensions, wire.width, wire.parameter_map
-            )
-            packed_prefix = f"{packed} " if packed else ""
+                wire_prefixes.append(f"wire {packed}".rstrip())
+        wire_prefix_width = max(len(prefix) for prefix in wire_prefixes)
+        for wire, prefix in zip(wires, wire_prefixes):
+            suffix = "();" if wire.interface_type else ";"
             lines.append(
-                f"    wire {packed_prefix}{wire.name}"
-                f"{array_ranges(wire.arrays, wire.parameter_map)};"
+                f"    {prefix:<{wire_prefix_width}} {wire.name}"
+                f"{array_ranges(wire.arrays, wire.parameter_map)}{suffix}"
             )
 
     undriven_outputs = [
@@ -1538,8 +1767,14 @@ def render_integration(
     if undriven_outputs:
         lines.append("")
         lines.append("    // TOP outputs without a child driver are tied to zero.")
+        target_width = max(
+            (len(port.name) for port in undriven_outputs if not port.arrays),
+            default=0,
+        )
         for port in undriven_outputs:
-            append_zero_assignment(lines, port)
+            append_conditioned_zero_assignment(
+                lines, port, target_width=target_width
+            )
 
     for child in children:
         lines.append("")
@@ -1556,12 +1791,16 @@ def render_integration(
             lines.append(f"    ) u_{child.name.lower()} (")
         else:
             lines.append(f"    {child.name} u_{child.name.lower()} (")
-        port_name_width = max(len(port.name) for port in child.ports)
-        for index, port in enumerate(child.ports):
-            comma = "," if index < len(child.ports) - 1 else ""
-            expression = bindings[child.name].get(port.name)
-            rendered = "" if expression is None else expression
-            lines.append(f"        .{port.name:<{port_name_width}} ({rendered}){comma}")
+        reserved_macros = set(all_macros)
+        reserved_macros.update(
+            port.condition
+            for module in [top, *children]
+            for port in module.ports
+            if port.condition
+        )
+        append_instance_connections(
+            lines, child, bindings[child.name], reserved_macros
+        )
         lines.append("    );")
     lines.extend(["", "endmodule", ""])
     return "\n".join(lines)
