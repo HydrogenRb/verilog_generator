@@ -1074,17 +1074,28 @@ def packed_dimension_widths(
 def align_packed_dimensions(
     ranges: tuple[str, ...], dimension_widths: tuple[int, ...]
 ) -> str:
-    """Align each ``[...:0]`` without moving that dimension's opening bracket."""
+    """Left-align symbolic names while keeping each range boundary aligned."""
     fields: list[str] = []
     for index, field_width in enumerate(dimension_widths):
         if index >= len(ranges):
             fields.append(" " * field_width)
             continue
         range_text = ranges[index]
-        # Padding the range body, instead of the complete token, keeps both
-        # '[' and the ':0]' suffix in stable columns for this dimension.
         body = range_text[1:-1]
-        fields.append(f"[{body:>{field_width - 2}}]")
+        symbolic_suffix = "-1:0"
+        if body.endswith(symbolic_suffix):
+            expression = body[: -len(symbolic_suffix)]
+            expression_width = field_width - 2 - len(symbolic_suffix)
+            # Put padding between the expression and subtraction.  Verilog
+            # permits this whitespace, so the parameter/macro starts at '['
+            # while '-1:0]' remains in a stable column.
+            fields.append(
+                f"[{expression:<{expression_width}}{symbolic_suffix}]"
+            )
+        else:
+            # Literal ranges have no symbolic name to left-align.  Keep their
+            # ':0]' suffix aligned with symbolic ranges in the same dimension.
+            fields.append(f"[{body:>{field_width - 2}}]")
     return "".join(fields)
 
 

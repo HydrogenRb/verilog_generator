@@ -21,8 +21,8 @@ module RISCV_TOP #(
     // ----- ----- ----- ----- ----- -----
     // dft_sig
     // ----- ----- ----- ----- ----- -----
-    input  wire [ `DFT_BUS-1:0] dft_bus,
-    input  wire [ `DFT_BUS-1:0] dft_addr,
+    input  wire [`DFT_BUS -1:0] dft_bus,
+    input  wire [`DFT_BUS -1:0] dft_addr,
     input  wire                 dft_test_en,
     input  wire                 dft_out_en,
     input  wire                 dft_rd,
@@ -30,7 +30,7 @@ module RISCV_TOP #(
     // ----- ----- ----- ----- ----- -----
     // uid
     // ----- ----- ----- ----- ----- -----
-    output wire [ UID_SIZE-1:0] uid,
+    output wire [UID_SIZE -1:0] uid,
 
     // ----- ----- ----- ----- ----- -----
     // AHB_top
@@ -45,9 +45,9 @@ module RISCV_TOP #(
     // ----- ----- ----- ----- ----- -----
     // test_bus
     // ----- ----- ----- ----- ----- -----
-    input  wire [ `DW_sig1-1:0] test_bus_sig1_dat,
-    input  wire [ `DW_sig2-1:0] test_bus_sig2_dat,
-    input  wire [ `DW_sig3-1:0] test_bus_sig3_dat,
+    input  wire [`DW_sig1 -1:0] test_bus_sig1_dat,
+    input  wire [`DW_sig2 -1:0] test_bus_sig2_dat,
+    input  wire [`DW_sig3 -1:0] test_bus_sig3_dat,
     input  wire                 test_bus_sig1_ready,
     input  wire                 test_bus_sig2_ready,
     input  wire                 test_bus_sig3_ready,

@@ -146,7 +146,7 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$")
             self.assertRegex(
                 top,
-                r"(?m)^\s*wire \[\s*`LANE_NUM-1:0\]\[\s*`Test_size-1:0\]\s+w_array;$",
+                r"(?m)^\s*wire \[`LANE_NUM\s*-1:0\]\[`Test_size\s*-1:0\]\s+w_array;$",
             )
             self.assertRegex(
                 top,
@@ -156,7 +156,7 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*\.array\s+\(w_array\s*\),$")
             self.assertRegex(
                 core,
-                r"(?m)^\s*output wire \[\s*`LANE_NUM-1:0\]\[\s*`Test_size-1:0\]\s+array,$",
+                r"(?m)^\s*output wire \[`LANE_NUM\s*-1:0\]\[`Test_size\s*-1:0\]\s+array,$",
             )
             self.assertRegex(core, r"(?m)^\s*assign array\s+= '0;$")
             self.assertIn("// 子模块之间的内部连线。", top)
@@ -407,19 +407,19 @@ class GenerationTests(unittest.TestCase):
 
             self.assertRegex(
                 top,
-                r"output wire\s+\[DATA_WIDTH-1:0\]\s+monitor\s+\[DEPTH-1:0\]",
+                r"output wire\s+\[DATA_WIDTH\s*-1:0\]\s+monitor\s+\[DEPTH-1:0\]",
             )
             self.assertRegex(
                 source,
-                r"output wire\s+\[DATA_WIDTH-1:0\]\s+data\s+\[DEPTH-1:0\]",
+                r"output wire\s+\[DATA_WIDTH\s*-1:0\]\s+data\s+\[DEPTH-1:0\]",
             )
             self.assertRegex(
                 destination,
-                r"input wire\s+\[DATA_WIDTH-1:0\]\s+data\s+\[DEPTH-1:0\]",
+                r"input wire\s+\[DATA_WIDTH\s*-1:0\]\s+data\s+\[DEPTH-1:0\]",
             )
             self.assertRegex(
                 top,
-                r"wire\s+\[DATA_WIDTH-1:0\]\s+w_data\s+\[DEPTH-1:0\];",
+                r"wire\s+\[DATA_WIDTH\s*-1:0\]\s+w_data\s+\[DEPTH-1:0\];",
             )
             self.assertRegex(
                 top, r"(?m)^        \.spare \('\{default:'0\}\s*\)$"
@@ -504,6 +504,17 @@ class GenerationTests(unittest.TestCase):
                 if re.search(r"\bw_matrix_[ab];$", line)
             ]
             self.assertEqual(len(wire_lines), 2)
+            for line in wire_lines:
+                bracket_positions = [
+                    match.start() for match in re.finditer(r"\[", line)
+                ]
+                macro_positions = [
+                    match.start() for match in re.finditer(r"`", line)
+                ]
+                self.assertEqual(
+                    macro_positions,
+                    [position + 1 for position in bracket_positions],
+                )
             for dimension_index in (0, 1):
                 for token in ("[", "-", ":", "]"):
                     positions = [
@@ -555,11 +566,11 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(text, r"output wire\s+\[\s*113:0\]\s+uncertain")
             self.assertRegex(
                 text,
-                r"output wire\s+\[\s*`ROWS-1:0\]\[\s*`COLS-1:0\]\s+matrix",
+                r"output wire\s+\[`ROWS\s*-1:0\]\[`COLS\s*-1:0\]\s+matrix",
             )
             self.assertRegex(
                 text,
-                r"output wire\s+\[\s*`LONG_ROWS-1:0\]\[\s*`C-1:0\]\s+tensor",
+                r"output wire\s+\[`LONG_ROWS\s*-1:0\]\[`C\s*-1:0\]\s+tensor",
             )
             self.assertRegex(
                 text,
@@ -582,6 +593,17 @@ class GenerationTests(unittest.TestCase):
             symbolic_first_dimensions = [
                 declarations[name] for name in ("matrix", "tensor")
             ]
+            for line in symbolic_first_dimensions:
+                bracket_positions = [
+                    match.start() for match in re.finditer(r"\[", line)
+                ]
+                macro_positions = [
+                    match.start() for match in re.finditer(r"`", line)
+                ]
+                self.assertEqual(
+                    macro_positions,
+                    [position + 1 for position in bracket_positions],
+                )
             self.assertEqual(
                 len({line.index("-") for line in symbolic_first_dimensions}), 1
             )
