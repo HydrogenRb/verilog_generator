@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XVLink XLSX 信号可视化阅读器</title><link rel="stylesheet" href="common.css"><link rel="stylesheet" href="viewer.css"></head>
+<body>
+<header class="toolbar"><span class="brand">XVLink 信号可视化阅读器</span><input id="path" class="path" placeholder="打开已含集成页签的 XLSX"><button id="pick">XLSX</button><button id="load" class="primary">阅读</button><button id="openProject">打开 .xvlink.json</button><input id="search" placeholder="搜索信号"><button id="fit">适合窗口</button></header>
+<main class="viewer-grid">
+  <aside class="panel tree-panel"><h2>信号树 <span id="count" class="badge">0</span></h2><div id="tree" class="scroll"><div class="empty">请打开 XLSX</div></div></aside>
+  <section id="stage" class="stage"><svg id="arrows"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"></path></marker></defs></svg><div id="diagram" class="diagram"><div class="empty">大框表示 TOP，内部两个小框表示子模块。</div></div></section>
+  <aside class="panel detail-panel"><h2>信号详情</h2><div id="detail" class="empty">点击信号查看端点、方向、位宽与扇出。</div><h3>工作簿诊断</h3><div id="diagnostics" class="scroll"></div></aside>
+</main><div id="toast" class="toast hidden"></div><script src="viewer.js"></script></body></html>
+

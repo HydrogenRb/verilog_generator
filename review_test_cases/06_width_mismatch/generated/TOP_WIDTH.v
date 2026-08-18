@@ -16,7 +16,7 @@ module TOP_WIDTH (
     );
 
     WIDTH_DST u_width_dst (
-        .clk     (clk      ),
-        .payload (w_payload)
+        .clk     (clk             ),
+        .payload (w_payload[4-1:0])
     );
 endmodule

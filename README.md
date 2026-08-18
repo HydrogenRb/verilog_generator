@@ -74,7 +74,7 @@ ENABLE_CONDITIONAL_BLOCKS = True
 
 变量按名称绑定：`{{j}}` 只使用 `j的范围是{...}`，不会自动套用 `i` 的列表。同一端口名包含多个变量时采用笛卡尔积，例如 `bus_{{j}}_{{z}}` 配合 `j={a,b}`、`z={x,y}` 会生成 `bus_a_x`、`bus_a_y`、`bus_b_x`、`bus_b_y`。如果位宽或数组维度引用了未被端口名绑定的其他变量，脚本不会猜测变量之间的关系，而是 warning 后使用 `114`；如果端口名本身的变量没有取值列表，则报错且不生成该行。
 
-集成页签中的模板引用按“来源模板 + 展开取值”匹配，不按最终端口名做前缀通配。例如 `data_{{i}}` 只匹配由该模板生成的端口，不会误匹配普通端口 `data_debug`。不同模块的取值顺序可以不同，脚本按值连接；取值集合确实不同时才报告展开不一致，并在错误中列出各模块实际匹配的端口。
+集成页签中的模板引用按“来源模板 + 展开取值”匹配，不按最终端口名做前缀通配。例如 `data_{{i}}` 只匹配由该模板生成的端口，不会误匹配普通端口 `data_debug`。不同模块的取值顺序可以不同，脚本按值连接。V2 允许各模块展开集合不同：共有取值正常互连，仅存在于 TOP 或某个子模块的展开项按单端/未连接语义处理，并输出 `info` 说明，不再因数量或取值集合不同而中止生成。
 
 对于可明确恢复的单花括号拼写错误（例如 `{j}}` 或 `{{j}`），脚本会按 `{{j}}` 处理并告警，XLSX 仍应修正。`i/o` 空白是另一类待确认数据：声明会生成为 `inout`，并附加 `/* TODO: XLSX i/o 为空...需处理方向缺失问题 */` 备注，同时输出 warning；无法识别的非空方向仍然报错。
 
@@ -117,7 +117,7 @@ input wire [DATA_WIDTH-1:0] data [DEPTH-1:0]
 
 ## 生成代码格式
 
-生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；packed 范围按维度建立独立列，每一维的左方括号固定，数字、参数名或宏名紧跟 `[` 并左对齐，所需空格放在表达式与减号之间，使该维的 `-1:0]` 仍然纵向对齐，第二维及后续维度使用相同规则；unpacked 范围的右方括号使用独立字段对齐；同一组宏定义的值、wire 名、assign 等号、localparam 等号分别对齐；模块实例的参数连接与端口连接中，左、右圆括号均纵向对齐。模块级 `assign` 和对应说明注释从第 1 列开始，数组 generate 内部的 `assign` 仍按循环层级缩进。模块主体结束后直接生成 `endmodule`，不在其前方保留空白行。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
+生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；packed 范围按维度建立独立列，每一维的左方括号固定，数字、参数名或宏名紧跟 `[` 并左对齐，所需空格放在表达式与减号之间，使该维的 `-1:0]` 仍然纵向对齐，第二维及后续维度使用相同规则；unpacked 范围的右方括号使用独立字段对齐；同一组宏定义的值、parameter 名、wire 名和 assign 等号分别对齐；模块实例的参数连接与端口连接中，左、右圆括号均纵向对齐。模块级 `assign` 和对应说明注释从第 1 列开始，数组 generate 内部的 `assign` 仍按循环层级缩进。模块主体结束后直接生成 `endmodule`，不在其前方保留空白行。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
 
 ```verilog
 input wire [`SHORT    -1:0][`LANE   -1:0] matrix_a,
@@ -127,7 +127,7 @@ input wire [`LONG_NAME-1:0][`CHANNEL-1:0] matrix_b
 .long_port  (long_signal_name)
 ```
 
-生成的 localparam、内部 wire 和自动 assign 代码块均同时输出英文与中文说明，便于中英文项目成员直接阅读生成文件。
+生成的内部 wire、位宽适配和自动 assign 代码块均同时输出英文与中文说明，便于中英文项目成员直接阅读生成文件。
 
 模块端口按“分类”分组，每组生成三行标题。合并单元格在首行给出的分类会由后续连续端口继承；完全没有分类的连续端口使用 `no group`：
 
@@ -148,12 +148,20 @@ input wire [`LONG_NAME-1:0][`CHANNEL-1:0] matrix_b
 连接区由一个或多个空列隔开：
 
 1. 第一个连续区是 `TOP ↔ 子模块`。第一组是 TOP，后续组是子模块；同一行的端口互连。
-2. 后续包含至少两组模块的区是 `子模块 ↔ 子模块`。同一行生成一根内部 wire，wire 位宽取唯一 output 驱动端。
+2. 后续包含至少两组模块的区是 `子模块 ↔ 子模块`。同一行生成一根内部 wire。固定数字或可解析宏的位宽不一致时，wire 取所有端点的最大位宽；较窄端口连接低位，唯一窄 output 未驱动的高位显式补零。
 3. 后续只包含一组模块的区是“未连接端口”。子模块 input 接零，output/inout 使用空连接 `.port()`。
-4. 集成表中完全遗漏的子模块端口也会按未连接端口处理，并产生警告。
+4. 集成表中完全遗漏的子模块端口也会按未连接端口处理，并产生 `info`；该自动诊断不会令 `--strict` 失败。
 5. 未由子模块 output/inout 驱动的 TOP output 会在 TOP 内赋零；该 TOP output 可以同时连接一个或多个子模块 input，并以置零后的同一信号驱动它们。TOP input 始终只作为外部输入，不在模块内赋值。
 
 列位置可以扩展，不限于示例中的 B～Y；关键是每个区内的模块组相邻、不同区之间至少留一个空列。脚本同时检查集成页签的 `i/o` 与模块定义是否一致、多驱动、缺失端口及位宽差异。
+
+### V2 参数、宏和位宽裁决
+
+- 所有 parameter 都可从 TOP 上游覆盖。TOP 已有同名 parameter 时，子模块实例统一传入 TOP 参数；只存在于子模块的 parameter 会提升为 TOP parameter，不再生成子模块局部 `localparam`。默认值不同只记录 `info`，TOP/先提升的上层默认值生效。
+- parameter 参与的位宽不做“位宽不匹配”判断或固定切片，统一参数连接交给 SystemVerilog elaboration 解析。
+- 宏只在集成 TOP 文件定义。若多个层次给出相同宏的不同默认值，输出 warning，并按 `TOP → 子模块 A → 子模块 B` 的上层优先顺序保留第一个值；子模块桩文件不重复定义这些宏。
+- 可确定的固定/宏位宽不一致仍输出 warning，但 V2 会生成可读的适配：接收端较窄时只接 `[N-1:0]`，接收端较宽时高位补零；内部网络按最大位宽建线，窄驱动未覆盖的高位 assign 为零。数组、多维 packed 和 interface 只在能够安全确定语义时适配，否则保留形状诊断供人工处理。
+- `Reporter` 现在有 `info`、`warning`、`error` 三级。`--strict` 只把 warning 视为失败；info 用于记录模板子集、参数上提、自动未连接等确定性的生成决策。
 
 任意页签的表头行中若存在名为 `修改` 或 `修改列` 的列，读取 XLSX 时会先整列移除，再执行任何表头、模板、分类、方向和连接解析。该列可以插在业务列之间，其中所有内容均不会影响生成结果。
 
@@ -161,7 +169,7 @@ input wire [`LONG_NAME-1:0][`CHANNEL-1:0] matrix_b
 
 - `方向与模块定义不一致 (input/output)`：括号左侧是集成页签该模块列的 `i/o`，右侧是模块子页的定义；先按错误中的页签、行号和 `模块.端口` 核对这两个单元格。
 - `TOP 输入 ... 与子模块输出 ... 方向冲突`：表示 TOP 的外部 input 被子模块 output 反向驱动。通常 TOP input 应连接子模块 input；若信号应由子模块驱动到芯片外部，TOP 方向应为 output。
-- `模板端口展开数量/取值不一致`：检查错误列出的实际端口，以及各模块备注中的变量名、值集合和所属“分类”。`i是{a,b}` 与 `i是{b,a}` 允许顺序不同；缺值、多值或拼写不同才是不一致。
+- `模板端口展开不一致`（info）：诊断会列出各模块实际端口。V2 会按展开值取并集逐项处理；重点检查只存在于某一模块的展开项是否确实应按未连接语义生成。
 - 排查时先运行 `python .\xlsx2verilog.py 文件.xlsx --check`，保留完整的第一条 error。前面的解析错误可能造成后续连接错误，不应只看最后一条诊断。
 
 ## 当前样例的说明
@@ -177,13 +185,32 @@ input wire [`LONG_NAME-1:0][`CHANNEL-1:0] matrix_b
 
 集成表中的三个 `test_bus_*_valid` 同时连接 `RISCV_CORE_TEST` 和 `MEM_PHY` 的 output，因此顶层 net 存在多驱动风险。脚本按表格生成并输出“多个子模块驱动端” warning；请在项目定义确定后修改 XLSX 方向或连接关系。
 
-样例中两个子模块各有一个重复的 `ahb_test_5`，脚本按允许重复的规则合并到首次定义；APB 两端的数字位宽不同，脚本按驱动端位宽生成 wire，并输出如下形式的警告：
+样例中两个子模块各有一个重复的 `ahb_test_5`，脚本按允许重复的规则合并到首次定义；APB 两端的数字位宽不同，脚本按最大位宽生成 wire、较窄端口使用低位切片、未驱动高位补零，并输出如下形式的警告：
 
 ```text
 warning[RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是其位宽不匹配]
 ```
 
 修正 Excel 后可使用 `--strict` 作为自动化流水线的质量门禁。
+
+## 可视化附录工具
+
+`appendix/` 提供两个完全离线的本地 Web GUI。它们只使用 Python 标准库、只绑定 `127.0.0.1`，并直接复用 `xlsx2verilog.py` 的解析与校验逻辑。
+
+```powershell
+# 可视化集成页签设计器
+python .\appendix\run_designer.py
+
+# XLSX / .xvlink.json 信号可视化阅读器
+python .\appendix\run_viewer.py
+
+# 无浏览器自动打开的统一启动方式
+python -m appendix.server --mode designer --no-browser --port 8765
+```
+
+集成设计器支持选择 TOP/子模块 A/子模块 B、虚拟滚动端口列表、拖拽或键盘连线、可解释建议、高置信度批量接受、100 步撤销/重做、未连接确认、集成表预览及 `.xvlink.json` 工程保存。默认“另存为”；导出时先写临时 XLSX，再运行主生成器校验，成功后原子发布。原 module 页签的 OOXML 部件保持字节不变。
+
+阅读器使用大框表示 TOP、两个内部小框表示子模块，以箭头显示驱动方向和扇出；左侧信号树可搜索/高亮网络，右侧显示端点、位宽、分类和原始解析诊断。完整操作、架构、打包和已知限制见 [`appendix/README.md`](appendix/README.md)。
 
 ## 测试
 
@@ -195,6 +222,7 @@ python .\tests\run_tech_review2_review.py
 python .\xlsx2verilog.py .\review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --check --strict
 python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\01_core_layer.xlsx --check --strict
 python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xlsx --check --strict
+python .\xlsx2verilog.py .\review_test_cases\09_version_2\test.xlsx --check
 ```
 
-测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。`run_tech_review2_review.py` 会顺序执行新功能、历史回归、生成 Verilog 静态结构三轮检视，并写入 `review_test_cases/TechReview2检视报告.md`。Tech Review 3 的需求追踪、条件组合验证和整体代码审查记录见 `review_test_cases/TechReview3检视报告.md`；代码分层、关键不变量和常见修改入口见 `代码结构与维护指南.md`；后续可视化连线软件的独立 specification 见 `可视化集成页签生成器需求文档.md`。
+测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。V2 主项目与两个可视化工具的两轮检视报告位于 `doc/`。Tech Review 2/3 历史报告继续位于 `review_test_cases/`；代码分层、关键不变量和常见修改入口见 `代码结构与维护指南.md`。

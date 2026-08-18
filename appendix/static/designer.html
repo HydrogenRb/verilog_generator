@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XVLink 集成页签设计器</title><link rel="stylesheet" href="common.css"><link rel="stylesheet" href="designer.css"></head>
+<body>
+  <header class="toolbar">
+    <span class="brand">XVLink 集成页签设计器</span>
+    <input id="sourcePath" class="path" placeholder="选择包含 module 页签的 .xlsx">
+    <button id="pickSource">选择 XLSX</button><button id="loadSource" class="primary">导入</button>
+    <button id="undoBtn" title="Ctrl+Z">撤销</button><button id="redoBtn" title="Ctrl+Y">重做</button>
+    <button id="saveProject">保存工程</button><button id="loadProject">打开工程</button>
+  </header>
+  <section id="roles" class="rolebar hidden">
+    <label>TOP <select id="topRole"></select></label><label>子模块 A <select id="childARole"></select></label><label>子模块 B <select id="childBRole"></select></label>
+    <button id="applyRoles" class="primary">进入画布</button><span id="parseSummary" class="muted"></span>
+  </section>
+  <main class="workspace">
+    <aside class="left panel">
+      <h2>工具</h2>
+      <div class="controls"><input id="search" placeholder="搜索端口 / 分类"><select id="directionFilter"><option value="">全部方向</option><option>input</option><option>output</option><option>inout</option><option>interface</option></select>
+      <button id="suggestBtn">生成建议</button><button id="cancelSuggest" disabled>取消建议计算</button><button id="acceptHigh">批量接受高置信度</button><button id="validateBtn">全局校验</button><button id="confirmOpen">确认所有未连接</button>
+      <button id="batchNet">将多选端口建为一网</button><button id="swapChildren">交换子模块 A/B</button><button id="restoreAutosave">恢复自动保存</button>
+      <label>缩放 <input id="zoom" type="range" min="70" max="130" value="100"></label></div>
+      <h3>连接建议</h3><div id="suggestions" class="list scroll"></div>
+    </aside>
+    <section id="canvasWrap" class="canvas-wrap">
+      <svg id="wires" aria-label="连接线"></svg>
+      <div id="canvas" class="canvas"><div class="empty">请先导入 XLSX 并选择 TOP 与两个子模块。</div></div>
+    </section>
+    <aside class="right panel">
+      <h2>网络 <span id="netCount" class="badge">0</span></h2><div id="networks" class="list scroll"></div>
+      <h3>未连接端口</h3><div id="unconnected" class="list scroll"></div>
+      <h3>诊断</h3><div id="diagnostics" class="list scroll"></div>
+      <div class="export"><button id="previewBtn">预览集成页签</button><button id="exportBtn" class="primary">另存为 XLSX</button></div>
+    </aside>
+  </main>
+  <dialog id="previewDialog"><form method="dialog"><h2>集成页签预览</h2><div id="previewTable" class="preview scroll"></div><div class="dialog-actions"><button>关闭</button></div></form></dialog>
+  <div id="toast" class="toast hidden"></div>
+  <script src="designer.js"></script>
+</body></html>

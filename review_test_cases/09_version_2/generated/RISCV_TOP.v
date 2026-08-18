@@ -5,6 +5,7 @@
 `define DW_SIG1   114
 `define DW_SIG2   114
 `define DW_SIG3   114
+`define APB_1     4
 `define LANE_NUM  3
 `define Test_size 100
 `define Test      100
@@ -76,7 +77,7 @@ module RISCV_TOP #(
 
     // Internal child-to-child connections.
     // 子模块之间的内部连线。
-    wire [11       -1:0]                 w_apb_1;
+    wire [4        -1:0]                 w_apb_1;
     wire [12       -1:0]                 w_apb_2;
     wire [13       -1:0]                 w_apb_3;
     wire [14       -1:0]                 w_apb_4;
@@ -86,7 +87,6 @@ module RISCV_TOP #(
 
 // Width adapters: keep low bits and zero-fill undriven high bits.
 // 位宽适配：保留低位，未驱动的高位补零。
-assign w_apb_1[11-1:1] = '0;
 assign w_apb_2[12-1:2] = '0;
 
 // TOP outputs without an active child driver are tied to zero.
@@ -148,7 +148,7 @@ assign ahb_test_6 = 6'b0;
         .dft_test_en         (dft_test_en        ),
         .dft_out_en          (dft_out_en         ),
         .uid                 (uid                ),
-        .apb_1               (w_apb_1[0]         ),
+        .apb_1               (w_apb_1            ),
         .apb_2               (w_apb_2[2-1:0]     ),
         .apb_3               (w_apb_3[3-1:0]     ),
         .apb_4               (w_apb_4[4-1:0]     ),
@@ -161,13 +161,10 @@ assign ahb_test_6 = 6'b0;
         .ahb_test_5          (                   ),
         .test_bus_sig1_dat   (test_bus_sig1_dat  ),
         .test_bus_sig2_dat   (test_bus_sig2_dat  ),
-        .test_bus_sig3_dat   (test_bus_sig3_dat  ),
         .test_bus_sig1_ready (test_bus_sig1_ready),
         .test_bus_sig2_ready (test_bus_sig2_ready),
-        .test_bus_sig3_ready (test_bus_sig3_ready),
         .test_bus_sig1_valid (test_bus_sig1_valid),
         .test_bus_sig2_valid (test_bus_sig2_valid),
-        .test_bus_sig3_valid (test_bus_sig3_valid),
         .array               (w_array            )
     );
 endmodule

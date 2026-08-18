@@ -31,7 +31,7 @@ module RISCV_CORE_TEST #(
     // ----- ----- ----- ----- ----- -----
     // APB bus
     // ----- ----- ----- ----- ----- -----
-    input  wire [11       -1:0]                 apb_1,
+    input  wire [`APB_1   -1:0]                 apb_1,
     input  wire [12       -1:0]                 apb_2,
     output wire [13       -1:0]                 apb_3,
     output wire [14       -1:0]                 apb_4,
@@ -64,9 +64,9 @@ module RISCV_CORE_TEST #(
     // ----- ----- ----- ----- ----- -----
     // test_bus2
     // ----- ----- ----- ----- ----- -----
-    input  wire [`DW_SIG1 -1:0]                 test_bus2_sig1_dat,
-    input  wire [`DW_SIG2 -1:0]                 test_bus2_sig2_dat,
-    input  wire [`DW_SIG3 -1:0]                 test_bus2_sig3_dat,
+    input  wire [114      -1:0]                 test_bus2_sig1_dat,
+    input  wire [114      -1:0]                 test_bus2_sig2_dat,
+    input  wire [114      -1:0]                 test_bus2_sig3_dat,
     input  wire                                 test_bus2_sig1_ready,
     input  wire                                 test_bus2_sig2_ready,
     input  wire                                 test_bus2_sig3_ready,

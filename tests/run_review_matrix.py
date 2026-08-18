@@ -124,13 +124,25 @@ def write_xlsx(path: Path, sheets: list[tuple[str, list[list[Any]]]]) -> None:
             },
         )
 
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", xml_bytes(types))
-        archive.writestr("_rels/.rels", xml_bytes(package_relationships))
-        archive.writestr("xl/workbook.xml", xml_bytes(workbook))
-        archive.writestr("xl/_rels/workbook.xml.rels", xml_bytes(workbook_relationships))
+    def write_entry(archive: zipfile.ZipFile, name: str, content: bytes) -> None:
+        # Fixed metadata keeps generated review fixtures byte-for-byte stable
+        # across runs and prevents meaningless XLSX timestamp diffs.
+        info = zipfile.ZipInfo(name, date_time=(2024, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.external_attr = 0o600 << 16
+        archive.writestr(info, content)
+
+    with zipfile.ZipFile(path, "w") as archive:
+        write_entry(archive, "[Content_Types].xml", xml_bytes(types))
+        write_entry(archive, "_rels/.rels", xml_bytes(package_relationships))
+        write_entry(archive, "xl/workbook.xml", xml_bytes(workbook))
+        write_entry(archive, "xl/_rels/workbook.xml.rels", xml_bytes(workbook_relationships))
         for index, (_, rows) in enumerate(sheets, start=1):
-            archive.writestr(f"xl/worksheets/sheet{index}.xml", worksheet_xml(rows))
+            write_entry(
+                archive,
+                f"xl/worksheets/sheet{index}.xml",
+                worksheet_xml(rows),
+            )
 
 
 def set_cell(rows: list[list[Any]], row: int, column: int, value: Any) -> None:

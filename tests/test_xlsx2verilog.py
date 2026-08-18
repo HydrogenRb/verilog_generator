@@ -133,7 +133,7 @@ class GenerationTests(unittest.TestCase):
 
             self.assertIn("parameter integer UID_SIZE = 5", top)
             self.assertRegex(top, r"(?m)^`define DFT_BUS\s+64$")
-            self.assertRegex(top, r"(?m)^\s*wire\s+w_apb_1;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[11\s*-1:0\]\s+w_apb_1;$")
             self.assertRegex(top, r"(?m)^\s*wire\s+\[16\s*-1:0\]\s+w_apb_6;$")
             self.assertIn("RISCV_CORE_TEST #(", top)
             self.assertIn("MEM_PHY #(", top)
@@ -1239,8 +1239,8 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual({path.name for path in paths}, {"TOP.v", "SOURCE.v", "SINK.v"})
             text = (output / "TOP.v").read_text(encoding="utf-8")
-            self.assertIn("// Parameters local to child modules.", text)
-            self.assertIn("// 子模块局部参数。", text)
+            self.assertIn("parameter integer WIDTH = 8", text)
+            self.assertNotIn("localparam", text)
             self.assertIn("SOURCE #(", text)
             self.assertNotIn("module:SOURCE", text)
             wire_lines = [

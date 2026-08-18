@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+~$*.xlsx
+*.tmp
+.xvlink-check/
+out/
+

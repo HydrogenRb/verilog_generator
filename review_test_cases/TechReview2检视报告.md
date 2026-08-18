@@ -25,12 +25,12 @@
 - PASS：{{j}} 已展开 sig3，畸形 valid 模板已恢复
 - PASS：interface 声明和实例连接正确
 - PASS：带空格乘号已按原顺序转换为多维 packed array
-- PASS：9 个模板宏位宽均产生明确的 114 告警
-- PASS：j 端口中的未绑定 i 位宽产生 6 个明确的 114 告警
+- PASS：当前样例 12 个模板宏位宽均产生明确的 114 告警
+- PASS：当前 TOP 的 j 端口中未绑定 i 位宽产生 3 个明确的 114 告警
 
 ## 第二轮：历史功能和 real_test 回归
 
-- PASS：unittest 25/25 通过
+- PASS：unittest 35/35 通过
 - PASS：Tech Review 1 matrix 6/6 通过
 - PASS：review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --strict 通过
 - PASS：review_test_cases\08_real_test_2\01_core_layer.xlsx --strict 通过

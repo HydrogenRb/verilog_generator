@@ -24,7 +24,7 @@ module MEM_PHY #(
     // ----- ----- ----- ----- ----- -----
     // APB bus
     // ----- ----- ----- ----- ----- -----
-    output wire                            apb_1,
+    output wire [`APB_1   -1:0]            apb_1,
     output wire [2        -1:0]            apb_2,
     input  wire [3        -1:0]            apb_3,
     input  wire [4        -1:0]            apb_4,
@@ -45,13 +45,10 @@ module MEM_PHY #(
     // ----- ----- ----- ----- ----- -----
     input  wire [`DW_SIG1 -1:0]            test_bus_sig1_dat,
     input  wire [`DW_SIG2 -1:0]            test_bus_sig2_dat,
-    input  wire [`DW_SIG3 -1:0]            test_bus_sig3_dat,
     input  wire                            test_bus_sig1_ready,
     input  wire                            test_bus_sig2_ready,
-    input  wire                            test_bus_sig3_ready,
     output wire                            test_bus_sig1_valid,
     output wire                            test_bus_sig2_valid,
-    output wire                            test_bus_sig3_valid,
 
     // ----- ----- ----- ----- ----- -----
     // dyadic array
@@ -61,12 +58,11 @@ module MEM_PHY #(
 
 // Module placeholder: drive every output to zero.
 // 模块占位逻辑：所有输出均置零。
-assign apb_1               = 1'b0;
+assign apb_1               = {`APB_1{1'b0}};
 assign apb_2               = 2'b0;
 assign ahb_test_3          = 3'b0;
 assign ahb_test_4          = 4'b0;
 assign ahb_test_5          = 5'b0;
 assign test_bus_sig1_valid = 1'b0;
 assign test_bus_sig2_valid = 1'b0;
-assign test_bus_sig3_valid = 1'b0;
 endmodule

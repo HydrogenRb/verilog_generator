@@ -99,16 +99,16 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
         if item.level == "警告" and "位宽默认值无法确定" in item.message
     ]
     result.check(
-        len(legacy_fallback_warnings) == 9,
-        "9 个模板宏位宽均产生明确的 114 告警",
+        len(legacy_fallback_warnings) == 12,
+        "当前样例 12 个模板宏位宽均产生明确的 114 告警",
         f"旧模板 114 告警数量错误：{len(legacy_fallback_warnings)}",
     )
     unresolved_warnings = [
         item for item in reporter.items if "未绑定模板变量 i" in item.message
     ]
     result.check(
-        len(unresolved_warnings) == 6,
-        "j 端口中的未绑定 i 位宽产生 6 个明确的 114 告警",
+        len(unresolved_warnings) == 3,
+        "当前 TOP 的 j 端口中未绑定 i 位宽产生 3 个明确的 114 告警",
         f"未绑定 i 告警数量错误：{len(unresolved_warnings)}",
     )
     return result, paths, reporter
