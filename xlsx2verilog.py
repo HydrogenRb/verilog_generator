@@ -1147,6 +1147,32 @@ def find_integration(sheet: Sheet) -> Integration | None:
     return None
 
 
+def is_named_integration_sheet(name: str) -> bool:
+    """Whether a sheet uses the preferred 集成/集成_xxx naming convention."""
+    normalized = clean(name).casefold()
+    return (
+        normalized == "集成"
+        or normalized.startswith("集成_")
+        or normalized == "integration"
+        or normalized.startswith("integration_")
+    )
+
+
+def discover_integrations(workbook: Workbook) -> list[Integration]:
+    """Return valid integration sheets in workbook order.
+
+    Preferred names are used when present, while structural discovery remains
+    as a backward-compatible fallback for older workbooks.
+    """
+    integrations = [
+        item for sheet in workbook.sheets if (item := find_integration(sheet))
+    ]
+    named = [
+        item for item in integrations if is_named_integration_sheet(item.sheet_name)
+    ]
+    return named or integrations
+
+
 def resolve_hierarchy_defaults(
     modules: dict[str, Module],
     integration: Integration | None,
@@ -1239,18 +1265,57 @@ def resolve_hierarchy_defaults(
     finalize_modules()
 
 
-def parse_workbook(path: Path, reporter: Reporter) -> tuple[Workbook, dict[str, Module], Integration | None]:
+def parse_workbook(
+    path: Path,
+    reporter: Reporter,
+    integration_sheet: str | None = None,
+) -> tuple[Workbook, dict[str, Module], Integration | None]:
     workbook = XlsxReader().read(path)
-    integrations = [item for sheet in workbook.sheets if (item := find_integration(sheet))]
-    integration = integrations[0] if integrations else None
-    if len(integrations) > 1:
+    integrations = discover_integrations(workbook)
+    integration: Integration | None = None
+    if integration_sheet:
+        integration = next(
+            (
+                item
+                for item in integrations
+                if item.sheet_name.casefold() == integration_sheet.casefold()
+            ),
+            None,
+        )
+        if integration is None:
+            names = ", ".join(item.sheet_name for item in integrations) or "无"
+            reporter.error(
+                f"指定的集成页签 {integration_sheet!r} 不存在或格式无效；可选页签: {names}"
+            )
+    elif len(integrations) == 1:
+        integration = integrations[0]
+    elif len(integrations) > 1:
         names = ", ".join(item.sheet_name for item in integrations)
-        reporter.error(f"检测到多个集成页签 ({names})，当前规则只允许一个")
+        reporter.error(
+            f"检测到多个集成页签 ({names})；请在终端菜单选择，"
+            "或通过 --integration 指定"
+        )
 
     modules: dict[str, Module] = {}
+    integration_sheet_names = {item.sheet_name for item in integrations}
+    referenced = (
+        {integration.top_name, *integration.child_names}
+        if integration is not None
+        else None
+    )
     for sheet in workbook.sheets:
-        if integration and sheet.name == integration.sheet_name:
+        if sheet.name in integration_sheet_names:
             continue
+        if referenced is not None:
+            header = find_module_header(sheet)
+            if header is None:
+                continue
+            header_row, columns = header
+            candidate_name = module_name_above_header(
+                sheet, header_row, columns["port"]
+            ).upper()
+            if candidate_name not in referenced:
+                continue
         module = parse_module(sheet, reporter)
         if module is None:
             reporter.warning(f"页签 {sheet.name}: 未识别为模块定义，已跳过")
@@ -1260,17 +1325,39 @@ def parse_workbook(path: Path, reporter: Reporter) -> tuple[Workbook, dict[str, 
         else:
             modules[module.name] = module
 
-    if integration is None:
+    if integration is None and not integrations:
         reporter.warning("未检测到集成页签，将只生成模块桩文件")
-    else:
-        referenced = [integration.top_name, *integration.child_names]
-        for name in referenced:
+    elif integration is not None:
+        hierarchy_names = [integration.top_name, *integration.child_names]
+        for name in hierarchy_names:
             if name not in modules:
                 reporter.error(f"集成页签引用了不存在的模块定义 {name}")
     if not modules:
         reporter.error("工作簿中没有识别到模块定义页签")
     resolve_hierarchy_defaults(modules, integration, reporter)
     return workbook, modules, integration
+
+
+def inspect_all_integrations(path: Path) -> Reporter:
+    """Validate every hierarchy independently for workbook-wide edit modes."""
+    workbook = XlsxReader().read(path)
+    integrations = discover_integrations(workbook)
+    selectors: list[str | None] = (
+        [item.sheet_name for item in integrations]
+        if len(integrations) > 1
+        else [None]
+    )
+    combined = Reporter()
+    seen: set[tuple[str, str]] = set()
+    for selector in selectors:
+        current = Reporter()
+        parse_workbook(path, current, integration_sheet=selector)
+        for item in current.items:
+            key = (item.level, item.message)
+            if key not in seen:
+                seen.add(key)
+                combined.items.append(item)
+    return combined
 
 
 def width_expression(width: Width, parameter_map: dict[str, str] | None = None) -> str:
@@ -2549,9 +2636,12 @@ def generate(
     output_directory: Path,
     strict: bool = False,
     check_only: bool = False,
+    integration_sheet: str | None = None,
 ) -> tuple[list[Path], Reporter]:
     reporter = Reporter()
-    workbook, modules, integration = parse_workbook(workbook_path, reporter)
+    workbook, modules, integration = parse_workbook(
+        workbook_path, reporter, integration_sheet=integration_sheet
+    )
     if reporter.has_errors:
         return [], reporter
 
@@ -2880,8 +2970,7 @@ def diffuse_variable_value(
         available = ", ".join(target.expression for target in targets) or "无"
         raise ValueError(f"未找到可扩散变量 {variable!r}；可选值: {available}")
 
-    before = Reporter()
-    parse_workbook(path, before)
+    before = inspect_all_integrations(path)
     for item in discovery_reporter.items:
         before.items.append(item)
     workbook = XlsxReader().read(path, ignore_review_columns=False)
@@ -2930,8 +3019,7 @@ def diffuse_variable_value(
         suffix += 1
     shutil.copy2(path, backup_path)
     write_xlsx_cell_updates(path, updates)
-    after = Reporter()
-    parse_workbook(path, after)
+    after = inspect_all_integrations(path)
     return DiffusionResult(backup_path, edited_cells, before, after)
 
 
@@ -3042,6 +3130,30 @@ def choose_workbook() -> Path:
     return candidates[selected]
 
 
+def choose_integration_sheet(
+    workbook_path: Path,
+    *,
+    menu: Callable[[str, list[str]], int | None] = arrow_menu,
+) -> str | None:
+    """Select one hierarchy only when a workbook contains multiple candidates."""
+    workbook = XlsxReader().read(workbook_path)
+    integrations = discover_integrations(workbook)
+    if not integrations:
+        return None
+    if len(integrations) == 1:
+        return integrations[0].sheet_name
+    selected = menu(
+        "请选择集成页签（↑/↓，Enter 确认，Esc 返回）：",
+        [
+            f"{item.sheet_name}  →  TOP {item.top_name}"
+            for item in integrations
+        ],
+    )
+    if selected is None:
+        raise MenuCancelled("已取消选择集成页签")
+    return integrations[selected].sheet_name
+
+
 def interactive_main() -> int:
     actions = [
         "生成 Verilog",
@@ -3063,16 +3175,31 @@ def interactive_main() -> int:
         except ValueError as exc:
             print(f"错误: {exc}", file=sys.stderr)
             return 2
+        integration_arguments: list[str] = []
+        if selected in {0, 1, 2, 3}:
+            try:
+                integration_sheet = choose_integration_sheet(workbook)
+            except MenuCancelled:
+                continue
+            except (ValueError, OSError, ET.ParseError, KeyError) as exc:
+                print(f"错误: {exc}", file=sys.stderr)
+                return 2
+            if integration_sheet:
+                integration_arguments = ["--integration", integration_sheet]
         if selected == 0:
             response = input("输出目录 [generated]: ").strip()
             output = response or "generated"
-            return main([str(workbook), "--output", output])
+            return main(
+                [str(workbook), "--output", output, *integration_arguments]
+            )
         if selected == 1:
-            return main([str(workbook), "--list"])
+            return main([str(workbook), "--list", *integration_arguments])
         if selected == 2:
-            return main([str(workbook), "--check"])
+            return main([str(workbook), "--check", *integration_arguments])
         if selected == 3:
-            return main([str(workbook), "--check", "--strict"])
+            return main(
+                [str(workbook), "--check", "--strict", *integration_arguments]
+            )
         targets, discovery_reporter = list_diffusible_variables(workbook)
         discovery_reporter.print()
         if not targets:
@@ -3105,6 +3232,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strict", action="store_true", help="存在任何警告时也不写文件并返回失败")
     parser.add_argument("--list", action="store_true", help="列出识别结果，不生成文件")
     parser.add_argument(
+        "--integration",
+        metavar="SHEET",
+        help="多集成工作簿中选择一个集成页签；单个候选时可省略",
+    )
+    parser.add_argument(
         "--spread-value",
         nargs=2,
         metavar=("VARIABLE", "VALUE"),
@@ -3130,8 +3262,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             raise ValueError("输入文件必须是 .xlsx 格式")
         if args.spread_value:
             print("正在执行修改前完整检查……")
-            precheck = Reporter()
-            parse_workbook(workbook_path, precheck)
+            precheck = inspect_all_integrations(workbook_path)
             precheck.print()
             print(
                 f"预检查完成：{sum(item.level == '错误' for item in precheck.items)} 个 error，"
@@ -3155,8 +3286,21 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 0
         if args.list:
             reporter = Reporter()
-            workbook, modules, integration = parse_workbook(workbook_path, reporter)
+            workbook, modules, integration = parse_workbook(
+                workbook_path,
+                reporter,
+                integration_sheet=args.integration,
+            )
             print("页签: " + ", ".join(sheet.name for sheet in workbook.sheets))
+            candidates = discover_integrations(workbook)
+            if len(candidates) > 1:
+                print(
+                    "集成候选: "
+                    + ", ".join(
+                        f"{item.sheet_name}(TOP={item.top_name})"
+                        for item in candidates
+                    )
+                )
             print("模块: " + (", ".join(modules) or "无"))
             if integration:
                 print(f"TOP: {integration.top_name}")
@@ -3169,6 +3313,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             args.output.resolve(),
             strict=args.strict,
             check_only=args.check,
+            integration_sheet=args.integration,
         )
         reporter.print()
         failed = reporter.has_errors or (args.strict and reporter.has_warnings)

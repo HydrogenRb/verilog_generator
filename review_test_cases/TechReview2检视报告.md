@@ -30,7 +30,7 @@
 
 ## 第二轮：历史功能和 real_test 回归
 
-- PASS：unittest 40/40 通过
+- PASS：unittest 42/42 通过
 - PASS：Tech Review 1 matrix 6/6 通过
 - PASS：review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --strict 通过
 - PASS：review_test_cases\08_real_test_2\01_core_layer.xlsx --strict 通过

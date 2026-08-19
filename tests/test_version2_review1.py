@@ -10,6 +10,8 @@ from xlsx2verilog import (
     Reporter,
     XlsxReader,
     analyze_port_dimensions,
+    choose_integration_sheet,
+    discover_integrations,
     diffuse_variable_value,
     generate,
     list_diffusible_variables,
@@ -22,6 +24,119 @@ SPECIAL = ROOT / "review_test_cases" / "10_special_case" / "review2case.xlsx"
 
 
 class Version2TechReview1Tests(unittest.TestCase):
+    @staticmethod
+    def write_multi_integration_workbook(path: Path) -> None:
+        write_xlsx(
+            path,
+            [
+                (
+                    "集成_riscv_top",
+                    integration_sheet(
+                        [(["riscv_top", "core"], [[("clk", "i"), ("clk", "i")]])]
+                    ),
+                ),
+                (
+                    "集成_debug_top",
+                    integration_sheet(
+                        [(["debug_top", "trace"], [[("clk", "i"), ("clk", "i")]])]
+                    ),
+                ),
+                ("RISCV_TOP", module_sheet("riscv_top", [("clk", 1, None, "i")])),
+                ("CORE", module_sheet("core", [("clk", 1, None, "i")])),
+                ("DEBUG_TOP", module_sheet("debug_top", [("clk", 1, None, "i")])),
+                ("TRACE", module_sheet("trace", [("clk", 1, None, "i")])),
+            ],
+        )
+
+    def test_multiple_named_integrations_require_and_honor_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook_path = root / "multi.xlsx"
+            self.write_multi_integration_workbook(workbook_path)
+
+            workbook = XlsxReader().read(workbook_path)
+            self.assertEqual(
+                [item.sheet_name for item in discover_integrations(workbook)],
+                ["集成_riscv_top", "集成_debug_top"],
+            )
+
+            missing_selection = Reporter()
+            parse_workbook(workbook_path, missing_selection)
+            self.assertTrue(missing_selection.has_errors)
+            self.assertTrue(
+                any("检测到多个集成页签" in item.message for item in missing_selection.items)
+            )
+
+            selected_reporter = Reporter()
+            _, modules, integration = parse_workbook(
+                workbook_path,
+                selected_reporter,
+                integration_sheet="集成_RISCV_TOP",
+            )
+            self.assertFalse(selected_reporter.has_errors)
+            self.assertIsNotNone(integration)
+            assert integration is not None
+            self.assertEqual(integration.sheet_name, "集成_riscv_top")
+            self.assertEqual(set(modules), {"RISCV_TOP", "CORE"})
+
+            output = root / "generated"
+            paths, generated_reporter = generate(
+                workbook_path,
+                output,
+                integration_sheet="集成_debug_top",
+            )
+            self.assertFalse(generated_reporter.has_errors)
+            self.assertEqual(
+                {path.name for path in paths},
+                {"DEBUG_TOP.v", "TRACE.v"},
+            )
+            self.assertFalse((output / "RISCV_TOP.v").exists())
+            self.assertFalse((output / "CORE.v").exists())
+
+    def test_integration_menu_selects_only_when_multiple_candidates_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for sheet_name in ("集成", "集成_uart_top"):
+                with self.subTest(sheet_name=sheet_name):
+                    workbook_path = root / f"{sheet_name}.xlsx"
+                    write_xlsx(
+                        workbook_path,
+                        [
+                            (
+                                sheet_name,
+                                integration_sheet(
+                                    [(["uart_top", "uart"], [[("clk", "i"), ("clk", "i")]])]
+                                ),
+                            ),
+                            ("UART_TOP", module_sheet("uart_top", [("clk", 1, None, "i")])),
+                            ("UART", module_sheet("uart", [("clk", 1, None, "i")])),
+                        ],
+                    )
+
+                    def unexpected_menu(_title: str, _options: list[str]) -> int | None:
+                        self.fail("单个集成页签不应打开选择菜单")
+
+                    self.assertEqual(
+                        choose_integration_sheet(workbook_path, menu=unexpected_menu),
+                        sheet_name,
+                    )
+
+            multi_path = root / "multi.xlsx"
+            self.write_multi_integration_workbook(multi_path)
+            captured: list[tuple[str, list[str]]] = []
+
+            def select_second(title: str, options: list[str]) -> int | None:
+                captured.append((title, options))
+                return 1
+
+            self.assertEqual(
+                choose_integration_sheet(multi_path, menu=select_second),
+                "集成_debug_top",
+            )
+            self.assertEqual(len(captured), 1)
+            self.assertIn("集成_riscv_top", captured[0][1][0])
+            self.assertIn("TOP DEBUG_TOP", captured[0][1][1])
+
     def test_multiplication_is_dimension_separator_and_parentheses_keep_arithmetic(self) -> None:
         reporter = Reporter()
         width, packed, _ = analyze_port_dimensions(
