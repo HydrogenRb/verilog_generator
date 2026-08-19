@@ -3,7 +3,7 @@ module IO_CHILD (
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input wire         clk,
-    inout wire [4-1:0] pad
+    input wire          clk,
+    inout wire [4 -1:0] pad
 );
 endmodule

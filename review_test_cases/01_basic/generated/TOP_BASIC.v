@@ -7,10 +7,10 @@ module TOP_BASIC (
     output wire done
 );
 
-    BASIC_CHILD u_basic_child (
-        .clk   (clk ),
-        .done  (done),
-        .spare (1'b0),
-        .debug (    )
-    );
+BASIC_CHILD U_BASIC_CHILD (
+    .clk   (clk ),
+    .done  (done),
+    .spare (1'b0),
+    .debug (    )
+);
 endmodule

@@ -501,7 +501,7 @@ def inspect_generated(workbook: Path, output: Path, paths: list[Path], reporter:
         if declarations != expected_ports or len(declarations) != len(set(declarations)):
             problems.append(f"{path.name}: 端口声明与去重后的 XLSX 定义不一致")
         if integration and module.name != integration.top_name:
-            instance = re.search(rf"\bu_{module.name.lower()}\s*\((.*?)\n\s*\);", top_text, re.S)
+            instance = re.search(rf"\bU_{module.name.upper()}\s*\((.*?)\n\s*\);", top_text, re.S)
             if not instance:
                 problems.append(f"{integration.top_name}.v: 缺少 {module.name} 实例")
             else:

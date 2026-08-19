@@ -6,8 +6,8 @@ module TOP_IO (
     input wire clk
 );
 
-    IO_CHILD u_io_child (
-        .clk (clk),
-        .pad (   )
-    );
+IO_CHILD U_IO_CHILD (
+    .clk (clk),
+    .pad (   )
+);
 endmodule

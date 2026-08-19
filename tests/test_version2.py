@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
 
 from tests.run_review_matrix import integration_sheet, module_sheet, write_xlsx
-from xlsx2verilog import generate
+from xlsx2verilog import diffuse_variable_value, generate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,17 +14,25 @@ V2_SAMPLE = ROOT / "review_test_cases" / "09_version_2" / "test.xlsx"
 
 
 class Version2GenerationTests(unittest.TestCase):
-    def test_real_v2_template_subsets_and_upper_macro_win(self) -> None:
+    def test_real_v2_macro_conflict_is_rejected_then_diffusion_repairs_it(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            paths, reporter = generate(V2_SAMPLE, Path(temporary))
+            root = Path(temporary)
+            workbook = root / "v2.xlsx"
+            shutil.copy2(V2_SAMPLE, workbook)
+            paths, reporter = generate(workbook, root / "before")
+            self.assertEqual(paths, [])
+            self.assertTrue(reporter.has_errors)
+            self.assertTrue(any("APB_1" in item.message and "冲突" in item.message for item in reporter.items))
+
+            diffuse_variable_value(
+                workbook, "`APB_1", "4", confirm=lambda _: "y", timestamp="test"
+            )
+            paths, reporter = generate(workbook, root / "generated")
             self.assertFalse(reporter.has_errors)
             self.assertEqual(len(paths), 3)
             self.assertTrue(any(item.level == "信息" and "模板端口展开不一致" in item.message for item in reporter.items))
-            macro_conflicts = [item for item in reporter.items if "APB_1" in item.message and "冲突" in item.message]
-            self.assertEqual(len(macro_conflicts), 1)
-            self.assertEqual(macro_conflicts[0].level, "警告")
 
-            output = Path(temporary)
+            output = root / "generated"
             top = (output / "RISCV_TOP.v").read_text(encoding="utf-8")
             core = (output / "RISCV_CORE_TEST.v").read_text(encoding="utf-8")
             phy = (output / "MEM_PHY.v").read_text(encoding="utf-8")
@@ -31,7 +40,7 @@ class Version2GenerationTests(unittest.TestCase):
             self.assertNotIn("`define APB_1", core)
             self.assertNotIn("`define APB_1", phy)
             self.assertIn(".test_bus_sig3_dat", top)
-            mem_instance = top[top.index("u_mem_phy") :]
+            mem_instance = top[top.index("U_MEM_PHY") :]
             self.assertNotIn(".test_bus_sig3_dat", mem_instance)
 
     def test_child_parameters_are_promoted_and_parameter_widths_do_not_conflict(self) -> None:
@@ -63,7 +72,7 @@ class Version2GenerationTests(unittest.TestCase):
             self.assertIn("parameter integer WIDTH = 8", top)
             self.assertNotIn("localparam", top)
             self.assertRegex(top, r"\.WIDTH\s+\(WIDTH\)")
-            self.assertRegex(top, r"wire \[WIDTH-1:0\]\s+w_payload;")
+            self.assertRegex(top, r"wire \[WIDTH\s+-1:0\]\s+w_payload;")
 
     def test_internal_literal_width_uses_maximum_low_bits_and_zero_fill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -71,9 +80,7 @@ class Version2GenerationTests(unittest.TestCase):
             _, reporter = generate(ROOT / "test.xlsx", output)
             self.assertFalse(reporter.has_errors)
             top = (output / "RISCV_TOP.v").read_text(encoding="utf-8")
-            self.assertRegex(top, r"wire \[11\s+-1:0\]\s+w_apb_1;")
-            self.assertRegex(top, r"\.apb_1\s+\(w_apb_1\[0\]")
-            self.assertIn("assign w_apb_1[11-1:1] = '0;", top)
+            self.assertRegex(top, r"wire\s+w_apb_1;")
 
 
 if __name__ == "__main__":

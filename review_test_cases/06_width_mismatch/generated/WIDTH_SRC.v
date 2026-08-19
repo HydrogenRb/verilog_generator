@@ -3,8 +3,8 @@ module WIDTH_SRC (
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire         clk,
-    output wire [8-1:0] payload
+    input  wire          clk,
+    output wire [8 -1:0] payload
 );
 
 // Module placeholder: drive every output to zero.

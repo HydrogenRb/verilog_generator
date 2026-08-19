@@ -83,14 +83,14 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
     )
     result.check(
         re.search(
-            r"(?m)^\s*wire\s+\[`LANE_NUM\s*-1:0\]\[`Test_size\s*-1:0\]\s+w_array;$",
+            r"(?m)^\s*wire\s+\[`LANE_NUM\s+-1:0\]\[`TEST_SIZE\s+-1:0\]\s+w_array;$",
             top,
         )
         and re.search(
-            r"(?m)^\s*output wire\s+\[`LANE_NUM\s*-1:0\]\[`Test_size\s*-1:0\]\s+array,?$",
+            r"(?m)^\s*output wire\s+\[`LANE_NUM\s+-1:0\]\[`TEST_SIZE\s+-1:0\]\s+array,?$",
             core,
         ),
-        "带空格乘号已按原顺序转换为多维 packed array",
+        "乘号已按原顺序转换为多维 packed array，且宏规范为大写",
         "多维 packed array 声明不符合预期",
     )
     legacy_fallback_warnings = [
@@ -99,8 +99,8 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
         if item.level == "警告" and "位宽默认值无法确定" in item.message
     ]
     result.check(
-        len(legacy_fallback_warnings) == 12,
-        "当前样例 12 个模板宏位宽均产生明确的 114 告警",
+        len(legacy_fallback_warnings) == 9,
+        "当前样例 9 个模板宏位宽均产生明确的 114 告警",
         f"旧模板 114 告警数量错误：{len(legacy_fallback_warnings)}",
     )
     unresolved_warnings = [
@@ -208,12 +208,12 @@ def static_round(paths: list[Path]) -> RoundResult:
         for child_name in integration.child_names:
             child = modules[child_name]
             match = re.search(
-                rf"\bu_{re.escape(child_name.lower())}\s*\((.*?)\n\s*\);",
+                rf"\bU_{re.escape(child_name.upper())}\s*\((.*?)\n\s*\);",
                 top,
                 re.S,
             )
             if not match:
-                result.problems.append(f"缺少实例 u_{child_name.lower()}")
+                result.problems.append(f"缺少实例 U_{child_name.upper()}")
                 continue
             body = match.group(1)
             duplicates = [

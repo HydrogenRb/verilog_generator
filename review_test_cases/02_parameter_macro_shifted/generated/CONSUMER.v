@@ -5,9 +5,9 @@ module CONSUMER #(
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire [`RST_LANE-1:0] n_rst,
-    input  wire [WIDTH    -1:0] bus,
-    output wire [WIDTH    -1:0] result
+    input  wire [`RST_LANE -1:0] n_rst,
+    input  wire [WIDTH     -1:0] bus,
+    output wire [WIDTH     -1:0] result
 );
 
 // Module placeholder: drive every output to zero.

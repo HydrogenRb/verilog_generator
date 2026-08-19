@@ -5,9 +5,9 @@ module PRODUCER #(
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire [`RST_LANE-1:0] n_rst,
-    output wire [WIDTH    -1:0] bus,
-    output wire [2        -1:0] debug
+    input  wire [`RST_LANE -1:0] n_rst,
+    output wire [WIDTH     -1:0] bus,
+    output wire [2         -1:0] debug
 );
 
 // Module placeholder: drive every output to zero.

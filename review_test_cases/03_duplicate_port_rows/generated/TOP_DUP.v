@@ -3,14 +3,14 @@ module TOP_DUP (
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire         clk,
-    input  wire [2-1:0] aaa,
-    output wire         status
+    input  wire          clk,
+    input  wire [2 -1:0] aaa,
+    output wire          status
 );
 
-    DUP_CHILD u_dup_child (
-        .clk    (clk   ),
-        .aaa    (2'b0  ),
-        .status (status)
-    );
+DUP_CHILD U_DUP_CHILD (
+    .clk    (clk   ),
+    .aaa    (2'b0  ),
+    .status (status)
+);
 endmodule

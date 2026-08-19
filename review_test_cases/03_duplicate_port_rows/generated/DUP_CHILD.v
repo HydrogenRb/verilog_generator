@@ -3,9 +3,9 @@ module DUP_CHILD (
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire         clk,
-    input  wire [2-1:0] aaa,
-    output wire         status
+    input  wire          clk,
+    input  wire [2 -1:0] aaa,
+    output wire          status
 );
 
 // Module placeholder: drive every output to zero.

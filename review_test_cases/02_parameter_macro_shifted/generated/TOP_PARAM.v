@@ -7,27 +7,27 @@ module TOP_PARAM #(
     // ----- ----- ----- ----- ----- -----
     // test
     // ----- ----- ----- ----- ----- -----
-    input  wire [`RST_LANE-1:0] n_rst,
-    output wire [WIDTH    -1:0] result
+    input  wire [`RST_LANE -1:0] n_rst,
+    output wire [WIDTH     -1:0] result
 );
 
     // Internal child-to-child connections.
     // 子模块之间的内部连线。
-    wire [WIDTH-1:0] w_bus;
+    wire [WIDTH -1:0] w_bus;
 
-    PRODUCER #(
-        .WIDTH (WIDTH)
-    ) u_producer (
-        .n_rst (n_rst),
-        .bus   (w_bus),
-        .debug (     )
-    );
+PRODUCER #(
+    .WIDTH (WIDTH)
+) U_PRODUCER (
+    .n_rst (n_rst),
+    .bus   (w_bus),
+    .debug (     )
+);
 
-    CONSUMER #(
-        .WIDTH (WIDTH)
-    ) u_consumer (
-        .n_rst  (n_rst ),
-        .bus    (w_bus ),
-        .result (result)
-    );
+CONSUMER #(
+    .WIDTH (WIDTH)
+) U_CONSUMER (
+    .n_rst  (n_rst ),
+    .bus    (w_bus ),
+    .result (result)
+);
 endmodule

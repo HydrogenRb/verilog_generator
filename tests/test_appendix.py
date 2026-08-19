@@ -20,7 +20,7 @@ from xlsx2verilog import Reporter, parse_workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SAMPLE = ROOT / "review_test_cases" / "09_version_2" / "test.xlsx"
+SAMPLE = ROOT / "test.xlsx"
 
 
 class AppendixCoreTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class AppendixCoreTests(unittest.TestCase):
         core = next(module for module in self.model["modules"] if module["name"] == "RISCV_CORE_TEST")
         array = next(port for port in core["ports"] if port["name"] == "array")
         self.assertEqual(len(array["packed"]), 1)
-        self.assertEqual(array["width"]["expression"], "`Test_size")
+        self.assertEqual(array["width"]["expression"], "`TEST_SIZE")
         suggestions = connection_suggestions(self.model, self.roles)
         self.assertTrue(any(item["confidence"] == "high" for item in suggestions))
         self.assertTrue(all(item["reasons"] for item in suggestions))

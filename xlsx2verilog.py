@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime as dt
 import itertools
 import re
+import shutil
 import sys
+import tempfile
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, TextIO
 from xml.etree import ElementTree as ET
@@ -46,6 +49,7 @@ MODULE_LABEL_RE = re.compile(r"^module\s*[:：]\s*(.+)$", re.IGNORECASE)
 CONDITION_CATEGORY_RE = re.compile(
     r"条件\s*[:：]\s*`?\s*([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE
 )
+INDEX_MARKER_RE = re.compile(r"^(.*)\[([A-Za-z_][A-Za-z0-9_$]*)\]\s*$")
 
 
 def local_name(tag: str) -> str:
@@ -107,6 +111,8 @@ class Sheet:
     cells: dict[tuple[int, int], Any]
     max_row: int = 0
     max_column: int = 0
+    xml_path: str = ""
+    ignored_columns: frozenset[int] = frozenset()
 
     def cell(self, row: int, column: int) -> Any:
         return self.cells.get((row, column))
@@ -123,7 +129,7 @@ class Workbook:
 class XlsxReader:
     """Small OOXML reader supporting the cell types needed by the input format."""
 
-    def read(self, path: Path) -> Workbook:
+    def read(self, path: Path, *, ignore_review_columns: bool = True) -> Workbook:
         try:
             archive = zipfile.ZipFile(path)
         except (OSError, zipfile.BadZipFile) as exc:
@@ -158,7 +164,15 @@ class XlsxReader:
                     sheet_path = target
                 else:
                     sheet_path = "xl/" + target.lstrip("/")
-                sheets.append(self._read_sheet(archive, sheet_path, name, shared_strings))
+                sheets.append(
+                    self._read_sheet(
+                        archive,
+                        sheet_path,
+                        name,
+                        shared_strings,
+                        ignore_review_columns=ignore_review_columns,
+                    )
+                )
             return Workbook(sheets)
 
     @staticmethod
@@ -187,6 +201,8 @@ class XlsxReader:
         sheet_path: str,
         name: str,
         shared_strings: list[str],
+        *,
+        ignore_review_columns: bool,
     ) -> Sheet:
         root = ET.fromstring(archive.read(sheet_path))
         cells: dict[tuple[int, int], Any] = {}
@@ -253,7 +269,8 @@ class XlsxReader:
             if clean(cells.get((row, column))).lower().replace(" ", "")
             in IGNORED_COLUMN_HEADERS
         }
-        if ignored_columns:
+        raw_ignored_columns = frozenset(ignored_columns)
+        if ignored_columns and ignore_review_columns:
             retained_columns = [
                 column
                 for column in range(1, max_column + 1)
@@ -269,7 +286,15 @@ class XlsxReader:
                 if column in logical_column
             }
             max_column = len(retained_columns)
-        return Sheet(name=name, cells=cells, max_row=max_row, max_column=max_column)
+            raw_ignored_columns = frozenset()
+        return Sheet(
+            name=name,
+            cells=cells,
+            max_row=max_row,
+            max_column=max_column,
+            xml_path=sheet_path,
+            ignored_columns=raw_ignored_columns,
+        )
 
 
 @dataclass(frozen=True)
@@ -451,8 +476,15 @@ def evaluate_int_expression(value: Any) -> int | None:
     return result if result > 0 else None
 
 
-def split_top_level_product(value: Any, *, require_spaces: bool) -> list[str]:
-    """Split top-level multiplication, optionally requiring spaces around `*`."""
+def split_top_level_product(
+    value: Any, *, require_spaces: bool | None = None
+) -> list[str]:
+    """Split every top-level ``*``; parentheses explicitly keep arithmetic flat.
+
+    ``require_spaces`` is retained as an ignored compatibility argument for
+    callers from older integrations.  V2 Tech Review 1 deliberately makes
+    whitespace around ``*`` semantically irrelevant.
+    """
     text = clean(value)
     if not text:
         return []
@@ -465,11 +497,6 @@ def split_top_level_product(value: Any, *, require_spaces: bool) -> list[str]:
         elif character == ")":
             depth -= 1
         elif character == "*" and depth == 0:
-            spaced = index > 0 and index + 1 < len(text) and text[index - 1].isspace() and text[
-                index + 1
-            ].isspace()
-            if require_spaces and not spaced:
-                continue
             part = text[start:index].strip()
             if not part:
                 return [text]
@@ -484,12 +511,20 @@ def split_top_level_product(value: Any, *, require_spaces: bool) -> list[str]:
     return parts
 
 
-def dimension_defaults(raw_default: Any, count: int) -> list[Any]:
-    if count <= 1:
-        return [raw_default]
-    parts = split_top_level_product(raw_default, require_spaces=False)
+def dimension_defaults(
+    raw_default: Any,
+    count: int,
+    context: str,
+    reporter: Reporter,
+) -> list[Any]:
+    parts = split_top_level_product(raw_default)
+    if not parts:
+        return [None] * count
     if len(parts) == count:
         return parts
+    reporter.error(
+        f"{context}: 位宽与数值的 * 维度数量不匹配 ({count}/{len(parts)})"
+    )
     return [None] * count
 
 
@@ -503,13 +538,15 @@ def normalized_width_default(
     evaluated = evaluate_int_expression(default_value)
     if evaluated is not None:
         return str(evaluated)
+    if default_value is None or not clean(default_value):
+        # Missing values may be supplied by another use of the same symbol or
+        # by an upper module.  Resolution and the final diagnostic happen only
+        # after the whole hierarchy is known.
+        return ""
     if fallback_uncertain:
         reporter.warning(f"{context}: 位宽默认值无法确定，使用占位值 {UNKNOWN_WIDTH}")
         return str(UNKNOWN_WIDTH)
-    if default_value is None or not clean(default_value):
-        reporter.error(f"{context}: 缺少“数值”默认值")
-    else:
-        reporter.error(f"{context}: 无法计算默认值 {clean(default_value)!r}")
+    reporter.error(f"{context}: 无法计算默认值 {clean(default_value)!r}")
     return "1"
 
 
@@ -531,6 +568,7 @@ def analyze_width(
     text = clean(raw_width)
     macro_match = MACRO_RE.fullmatch(text)
     if macro_match:
+        text = f"`{macro_match.group(1).upper()}"
         default = normalized_width_default(
             default_value,
             f"{context}: 宏 {text}",
@@ -539,6 +577,7 @@ def analyze_width(
         )
         return Width("macro", text, default)
     if IDENTIFIER_RE.fullmatch(text):
+        text = text.upper()
         default = normalized_width_default(
             default_value,
             f"{context}: parameter {text}",
@@ -572,9 +611,11 @@ def analyze_port_dimensions(
     *,
     fallback_uncertain: bool,
 ) -> tuple[Width, tuple[Width, ...], tuple[Width, ...]]:
-    width_parts = split_top_level_product(raw_width, require_spaces=True)
+    width_parts = split_top_level_product(raw_width)
     if len(width_parts) > 1:
-        defaults = dimension_defaults(default_value, len(width_parts))
+        defaults = dimension_defaults(
+            default_value, len(width_parts), context, reporter
+        )
         dimensions = [
             analyze_width(
                 part,
@@ -589,9 +630,10 @@ def analyze_port_dimensions(
         packed_dimensions = dimensions[:-1]
         arrays: list[Width] = []
     else:
+        defaults = dimension_defaults(default_value, 1, context, reporter)
         width = analyze_width(
             raw_width,
-            default_value,
+            defaults[0],
             context,
             reporter,
             fallback_uncertain=fallback_uncertain,
@@ -599,9 +641,11 @@ def analyze_port_dimensions(
         packed_dimensions = []
         arrays = []
 
-    array_parts = split_top_level_product(raw_array, require_spaces=True)
+    array_parts = split_top_level_product(raw_array)
     if array_parts:
-        defaults = dimension_defaults(array_default, len(array_parts))
+        defaults = dimension_defaults(
+            array_default, len(array_parts), f"{context} 数组", reporter
+        )
         arrays.extend(
             analyze_width(
                 part,
@@ -638,6 +682,8 @@ def template_values_in_row(
     """Read named domains such as ``j的范围是{a,b}`` from a row."""
     result: dict[str, list[str]] = {}
     for column in range(1, sheet.max_column + 1):
+        if column in sheet.ignored_columns:
+            continue
         text = clean(sheet.cell(row, column))
         for match in re.finditer(r"(?<!\{)\{([^{}]*)\}(?!\})", text):
             prefix = text[: match.start()]
@@ -679,10 +725,21 @@ def template_default_value(raw_default: Any, values: list[str], index: int) -> A
     text = clean(raw_default)
     if not text:
         return raw_default
-    stripped = text[1:-1] if text.startswith("{") and text.endswith("}") else text
-    parts = [item.strip() for item in re.split(r"[,，、;；]", stripped)]
-    if len(parts) == len(values) and all(evaluate_int_expression(item) is not None for item in parts):
-        return parts[index]
+    # A template-specific default may either be the entire cell (``{1,2}``)
+    # or one factor in a multidimensional default
+    # (``范围是{32,64}*8``).  Double braces are accepted because production
+    # workbooks sometimes use them to visually mirror ``{{i}}``.
+    range_match = re.search(
+        r"(?:范围\s*(?:是|为|[:：=])\s*)?\{\{?([^{}]+)\}\}?",
+        text,
+    )
+    if range_match:
+        parts = [
+            item.strip()
+            for item in re.split(r"[,，、;；]", range_match.group(1))
+        ]
+        if len(parts) == len(values) and all(parts):
+            return text[: range_match.start()] + parts[index] + text[range_match.end() :]
     return raw_default
 
 
@@ -744,15 +801,73 @@ def parse_category(
     return category or condition, condition if ENABLE_CONDITIONAL_BLOCKS else None
 
 
+def port_dimensions(port: Port) -> tuple[Width, ...]:
+    return (*port.packed_dimensions, port.width, *port.arrays)
+
+
+def replace_port_dimensions(port: Port, transform: Callable[[Width], Width]) -> None:
+    """Apply one immutable-Width transformation to every dimension of a port."""
+    port.packed_dimensions = tuple(transform(item) for item in port.packed_dimensions)
+    port.width = transform(port.width)
+    port.arrays = tuple(transform(item) for item in port.arrays)
+
+
+def rebuild_module_symbols(module: Module) -> None:
+    parameters: dict[str, str] = {}
+    macros: dict[str, str] = {}
+    for port in module.ports:
+        for dimension in port_dimensions(port):
+            if dimension.kind == "parameter":
+                parameters.setdefault(dimension.expression, dimension.default)
+            elif dimension.kind == "macro":
+                macros.setdefault(dimension.expression.lstrip("`"), dimension.default)
+    module.parameters = parameters
+    module.macros = macros
+
+
+def resolve_module_local_defaults(module: Module, reporter: Reporter) -> None:
+    """Spread equal, non-empty defaults to blank uses inside one module."""
+    values: dict[tuple[str, str], set[str]] = {}
+    for port in module.ports:
+        for dimension in port_dimensions(port):
+            if dimension.kind in {"macro", "parameter"} and dimension.default:
+                values.setdefault(
+                    (dimension.kind, dimension.expression), set()
+                ).add(dimension.default)
+    for (kind, name), defaults in values.items():
+        if len(defaults) > 1:
+            label = f"宏 {name}" if kind == "macro" else f"parameter {name}"
+            reporter.error(
+                f"页签 {module.sheet_name}: {label} 默认值冲突 "
+                f"({'/'.join(sorted(defaults))})"
+            )
+    unambiguous = {
+        key: next(iter(defaults))
+        for key, defaults in values.items()
+        if len(defaults) == 1
+    }
+
+    def spread(width: Width) -> Width:
+        if width.kind not in {"macro", "parameter"} or width.default:
+            return width
+        default = unambiguous.get((width.kind, width.expression))
+        return replace(width, default=default) if default else width
+
+    for port in module.ports:
+        replace_port_dimensions(port, spread)
+    rebuild_module_symbols(module)
+
+
 def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
     header = find_module_header(sheet)
     if not header:
         return None
     header_row, columns = header
-    module_name = module_name_above_header(sheet, header_row, columns["port"])
-    if not IDENTIFIER_RE.fullmatch(module_name):
-        reporter.error(f"页签 {sheet.name}: 模块名 {module_name!r} 不是合法 Verilog 标识符")
+    source_module_name = module_name_above_header(sheet, header_row, columns["port"])
+    if not IDENTIFIER_RE.fullmatch(source_module_name):
+        reporter.error(f"页签 {sheet.name}: 模块名 {source_module_name!r} 不是合法 Verilog 标识符")
         return None
+    module_name = source_module_name.upper()
 
     ports: list[Port] = []
     parameters: dict[str, str] = {}
@@ -822,9 +937,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             raw_expansion_values = tuple(
                 expansion[name] for name in port_variables
             )
-            port_name = substitute_template(raw_port_name, expansion)
+            port_name = substitute_template(raw_port_name, expansion).lower()
             if port_variables:
-                port_name = port_name.lower()
                 previous_values = expanded_names_in_row.setdefault(
                     port_name, raw_expansion_values
                 )
@@ -866,9 +980,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
 
             raw_width = substitute_template(base_width, expansion)
             raw_array = substitute_template(base_array, expansion)
-            if port_variables:
-                raw_width = uppercase_macro_references(raw_width)
-                raw_array = uppercase_macro_references(raw_array)
+            raw_width = uppercase_macro_references(raw_width)
+            raw_array = uppercase_macro_references(raw_array)
             raw_default = base_default
             raw_array_default = base_array_default
             if len(port_variables) == 1:
@@ -966,23 +1079,11 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             )
             seen[port_name] = port
             ports.append(port)
-            for dimension in (*packed_dimensions, width, *arrays):
-                if dimension.kind == "parameter":
-                    old = parameters.setdefault(dimension.expression, dimension.default)
-                    if old != dimension.default:
-                        reporter.error(
-                            f"页签 {sheet.name}: parameter {dimension.expression} 默认值冲突 ({old}/{dimension.default})"
-                        )
-                elif dimension.kind == "macro":
-                    macro_name = dimension.expression[1:]
-                    old = macros.setdefault(macro_name, dimension.default)
-                    if old != dimension.default:
-                        reporter.error(
-                            f"页签 {sheet.name}: 宏 `{macro_name} 默认值冲突 ({old}/{dimension.default})"
-                        )
     if not ports:
         reporter.error(f"页签 {sheet.name}: 没有可生成的端口")
-    return Module(module_name, sheet.name, ports, parameters, macros)
+    module = Module(module_name, sheet.name, ports, parameters, macros)
+    resolve_module_local_defaults(module, reporter)
+    return module
 
 
 def find_integration(sheet: Sheet) -> Integration | None:
@@ -995,13 +1096,38 @@ def find_integration(sheet: Sheet) -> Integration | None:
         ]
         if len(port_columns) < 2:
             continue
+        # Some production integration sheets omit the repeated “端口名/i/o”
+        # labels for a later module block.  A module label immediately above
+        # a populated column is sufficient to recover that block; direction is
+        # then validated against the module definition.
+        for column in range(1, sheet.max_column + 1):
+            if column in port_columns or not clean(sheet.cell(row - 1, column)):
+                continue
+            if (column - port_columns[0]) % 2:
+                # Module blocks are port/direction pairs.  This prevents a
+                # title above a neighbouring category column from being
+                # mistaken for an omitted module header.
+                continue
+            if clean(sheet.cell(row, column)):
+                continue
+            recovered_name = module_name_above_header(sheet, row, column)
+            if not IDENTIFIER_RE.fullmatch(recovered_name):
+                continue
+            if any(
+                clean(sheet.cell(data_row, column))
+                for data_row in range(row + 1, sheet.max_row + 1)
+            ):
+                port_columns.append(column)
+        port_columns.sort()
         blocks: list[IntegrationBlock] = []
         for port_column in port_columns:
             direction_column = port_column + 1
             direction_header = clean(sheet.cell(row, direction_column)).lower().replace(" ", "")
-            if direction_header not in {"i/o", "io", "方向", "direction", "dir"}:
+            if direction_header and direction_header not in {
+                "i/o", "io", "方向", "direction", "dir"
+            }:
                 continue
-            module_name = module_name_above_header(sheet, row, port_column)
+            module_name = module_name_above_header(sheet, row, port_column).upper()
             blocks.append(IntegrationBlock(module_name, port_column, direction_column))
         if len(blocks) < 2:
             continue
@@ -1019,6 +1145,98 @@ def find_integration(sheet: Sheet) -> Integration | None:
                     child_names.append(block.module_name)
         return Integration(sheet.name, row, groups, top_name, child_names)
     return None
+
+
+def resolve_hierarchy_defaults(
+    modules: dict[str, Module],
+    integration: Integration | None,
+    reporter: Reporter,
+) -> None:
+    """Resolve blank macro/parameter defaults after the complete hierarchy is known."""
+    ordered = list(modules.values())
+    top = modules.get(integration.top_name) if integration else None
+
+    def finalize_modules() -> None:
+        # Only now are truly unresolved values diagnosed. Template-generated
+        # symbols retain the documented 114 placeholder so a usable review
+        # file can still be emitted; ordinary symbols are hard errors.
+        for module in ordered:
+            for port in module.ports:
+                def finalize(width: Width) -> Width:
+                    if width.kind not in {"macro", "parameter"} or width.default:
+                        return width
+                    label = (
+                        f"宏 {width.expression}"
+                        if width.kind == "macro"
+                        else f"parameter {width.expression}"
+                    )
+                    if port.template_source is not None:
+                        reporter.warning(
+                            f"页签 {module.sheet_name} 第 {port.row} 行: {label} "
+                            f"缺少可扩散数值，使用占位值 {UNKNOWN_WIDTH}"
+                        )
+                        return replace(width, default=str(UNKNOWN_WIDTH))
+                    reporter.error(
+                        f"页签 {module.sheet_name} 第 {port.row} 行: "
+                        f"{label} 缺少“数值”默认值"
+                    )
+                    return replace(width, default="1")
+
+                replace_port_dimensions(port, finalize)
+            rebuild_module_symbols(module)
+
+    if integration is None:
+        # Independent stub modules own independent macro namespaces.  Only
+        # same-module conflicts (already checked) apply without a hierarchy.
+        finalize_modules()
+        return
+
+    hierarchy = [
+        modules[name]
+        for name in [integration.top_name, *integration.child_names]
+        if name in modules
+    ]
+
+    macro_values: dict[str, set[str]] = {}
+    parameter_values: dict[str, set[str]] = {}
+    top_parameter_values: dict[str, str] = {}
+    for module in hierarchy:
+        for port in module.ports:
+            for width in port_dimensions(port):
+                if not width.default:
+                    continue
+                if width.kind == "macro":
+                    macro_values.setdefault(width.expression, set()).add(width.default)
+                elif width.kind == "parameter":
+                    parameter_values.setdefault(width.expression, set()).add(width.default)
+                    if module is top:
+                        top_parameter_values.setdefault(width.expression, width.default)
+
+    for name, values in macro_values.items():
+        if len(values) > 1:
+            reporter.error(
+                f"集成模块: 宏 {name} 默认值冲突 ({'/'.join(sorted(values))})"
+            )
+
+    def inherited(width: Width) -> Width:
+        if width.kind not in {"macro", "parameter"} or width.default:
+            return width
+        if width.kind == "macro":
+            candidates = macro_values.get(width.expression, set())
+        else:
+            top_value = top_parameter_values.get(width.expression)
+            if top_value:
+                return replace(width, default=top_value)
+            candidates = parameter_values.get(width.expression, set())
+        if len(candidates) == 1:
+            return replace(width, default=next(iter(candidates)))
+        return width
+
+    for module in hierarchy:
+        for port in module.ports:
+            replace_port_dimensions(port, inherited)
+
+    finalize_modules()
 
 
 def parse_workbook(path: Path, reporter: Reporter) -> tuple[Workbook, dict[str, Module], Integration | None]:
@@ -1051,6 +1269,7 @@ def parse_workbook(path: Path, reporter: Reporter) -> tuple[Workbook, dict[str, 
                 reporter.error(f"集成页签引用了不存在的模块定义 {name}")
     if not modules:
         reporter.error("工作簿中没有识别到模块定义页签")
+    resolve_hierarchy_defaults(modules, integration, reporter)
     return workbook, modules, integration
 
 
@@ -1064,14 +1283,14 @@ def width_range(width: Width, parameter_map: dict[str, str] | None = None) -> st
     expression = width_expression(width, parameter_map)
     if width.kind == "literal" and expression == "1":
         return ""
-    return f"[{expression}-1:0]"
+    return f"[{expression} -1:0]"
 
 
 def explicit_dimension_range(
     width: Width, parameter_map: dict[str, str] | None = None
 ) -> str:
     expression = width_expression(width, parameter_map)
-    return f"[{expression}-1:0]"
+    return f"[{expression} -1:0]"
 
 
 def packed_range(
@@ -1130,9 +1349,9 @@ def align_packed_dimensions(
             continue
         range_text = ranges[index]
         body = range_text[1:-1]
-        symbolic_suffix = "-1:0"
+        symbolic_suffix = " -1:0"
         if body.endswith(symbolic_suffix):
-            expression = body[: -len(symbolic_suffix)]
+            expression = body[: -len(symbolic_suffix)].rstrip()
             expression_width = field_width - 2 - len(symbolic_suffix)
             # Put padding between the expression and subtraction.  Verilog
             # permits this whitespace, so the parameter/macro starts at '['
@@ -1151,7 +1370,7 @@ def array_range(array: Width | None, parameter_map: dict[str, str] | None = None
     if array is None:
         return ""
     expression = width_expression(array, parameter_map)
-    return f" [{expression}-1:0]"
+    return f" [{expression} -1:0]"
 
 
 def array_ranges(
@@ -1220,7 +1439,7 @@ def comparable_port_shape(
 
 
 def low_bits(expression: str, width: int) -> str:
-    return f"{expression}[0]" if width == 1 else f"{expression}[{width}-1:0]"
+    return f"{expression}[0]" if width == 1 else f"{expression}[{width} -1:0]"
 
 
 def fit_source_width(expression: str, source_width: int, target_width: int) -> str:
@@ -1485,7 +1704,7 @@ def render_stub(module: Module, macros: dict[str, str] | None = None) -> str:
 
 
 def safe_name(text: str) -> str:
-    result = re.sub(r"[^A-Za-z0-9_$]+", "_", text).strip("_")
+    result = re.sub(r"[^A-Za-z0-9_$]+", "_", text).strip("_").lower()
     if not result or result[0].isdigit():
         result = "signal_" + result
     return result
@@ -1524,6 +1743,21 @@ class Assignment:
     conditions: tuple[str, ...] = ()
 
 
+@dataclass
+class GenerateSpec:
+    index: str
+    extents: list[int] = field(default_factory=list)
+
+
+def split_index_marker(reference: Any) -> tuple[str, str | None]:
+    """Return an integration reference without its trailing ``[i]`` marker."""
+    text = clean(reference)
+    match = INDEX_MARKER_RE.fullmatch(text)
+    if match is None:
+        return text, None
+    return match.group(1).strip(), match.group(2).lower()
+
+
 def append_instance_connections(
     lines: list[str],
     child: Module,
@@ -1550,7 +1784,7 @@ def append_instance_connections(
             comma = "," if index < len(ordered) - 1 else ""
             rendered = "" if binding.expression is None else binding.expression
             lines.append(
-                f"        .{port.name:<{port_name_width}} "
+                f"    .{port.name:<{port_name_width}} "
                 f"({rendered:<{expression_width}}){comma}"
             )
         return
@@ -1572,7 +1806,7 @@ def append_instance_connections(
         lines.extend(
             [
                 f"`ifdef {marker}",
-                "        ,",
+                "    ,",
                 "`else",
                 f"`define {marker}",
                 "`endif",
@@ -1580,7 +1814,7 @@ def append_instance_connections(
         )
         rendered = "" if binding.expression is None else binding.expression
         lines.append(
-            f"        .{port.name:<{port_name_width}} "
+            f"    .{port.name:<{port_name_width}} "
             f"({rendered:<{expression_width}})"
         )
         lines.extend("`endif" for _ in reversed(binding.conditions))
@@ -1602,9 +1836,9 @@ def render_integration(
         for name, value in module.macros.items():
             previous = all_macros.setdefault(name, value)
             if previous != value:
-                reporter.warning(
+                reporter.error(
                     f"集成模块: 宏 `{name} 默认值冲突 ({previous}/{value})，"
-                    f"按上层值 {previous} 生成"
+                    "上下层同名宏必须使用相同数值"
                 )
 
     parameter_maps: dict[str, dict[str, str]] = {
@@ -1629,11 +1863,37 @@ def render_integration(
         parameter_maps[child.name] = mapping
 
     bindings: dict[str, dict[str, Binding]] = {child.name: {} for child in children}
+    generate_specs: dict[str, GenerateSpec] = {}
     top_output_drivers: dict[str, list[str]] = {}
     top_output_driver_conditions: dict[str, list[str | None]] = {}
     wires: list[Wire] = []
     adapter_assignments: list[Assignment] = []
     used_signals = set(top_ports)
+
+    def register_generate_marker(
+        child_name: str,
+        index: str,
+        indexed_port: Port,
+        row: int,
+    ) -> None:
+        spec = generate_specs.setdefault(child_name, GenerateSpec(index))
+        if spec.index != index:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {child_name} 同时使用了 "
+                f"[{spec.index}] 和 [{index}]，无法生成同一个循环"
+            )
+            return
+        dimensions = (
+            (*indexed_port.packed_dimensions, indexed_port.width)
+            if not indexed_port.is_interface
+            else indexed_port.arrays
+        )
+        if not dimensions:
+            return
+        first = dimensions[0]
+        extent = evaluate_int_expression(first.default or first.expression)
+        if extent is not None:
+            spec.extents.append(extent)
 
     def add_assignment(
         target: str,
@@ -1657,6 +1917,7 @@ def render_integration(
         module = modules.get(module_name)
         if module is None:
             return None
+        port_name = port_name.lower()
         port = module.port_map.get(port_name)
         if port is None:
             reporter.error(
@@ -1666,7 +1927,7 @@ def render_integration(
 
     def get_ports(module_name: str, reference: str, row: int) -> list[Port]:
         context = f"集成页签 {sheet.name} 第 {row} 行"
-        reference = normalize_template_text(reference, context, reporter)
+        reference = normalize_template_text(reference, context, reporter).lower()
         matches = list(TEMPLATE_RE.finditer(reference))
         if not matches:
             port = get_port(module_name, reference, row)
@@ -1749,11 +2010,12 @@ def render_integration(
         listed_direction = normalized_direction(raw_direction)
         if listed_direction is None:
             if not clean(raw_direction):
-                listed_direction = "inout"
-                reporter.warning(
+                reporter.info(
                     f"集成页签 {sheet.name} 第 {row} 行: "
-                    f"{block.module_name}.{port.name} 的 i/o 为空，按 inout 校验；请补充方向"
+                    f"{block.module_name}.{port.name} 的 i/o 为空，"
+                    f"按模块定义 {port.direction} 校验"
                 )
+                return
             else:
                 reporter.warning(
                     f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的 i/o 值 {raw_direction!r} 无法识别"
@@ -1797,9 +2059,11 @@ def render_integration(
     first_group = integration.groups[0]
     top_block = first_group[0]
     for row in range(integration.header_row + 1, sheet.max_row + 1):
-        top_port_name = clean(sheet.cell(row, top_block.port_column))
+        top_port_name, top_index = split_index_marker(
+            sheet.cell(row, top_block.port_column)
+        )
         row_entries = [
-            (block, clean(sheet.cell(row, block.port_column)))
+            (block, *split_index_marker(sheet.cell(row, block.port_column)))
             for block in first_group[1:]
             if clean(sheet.cell(row, block.port_column))
         ]
@@ -1809,7 +2073,7 @@ def render_integration(
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: TOP 端口为空，子模块端口按未连接处理"
             )
-            for block, child_port_name in row_entries:
+            for block, child_port_name, _ in row_entries:
                 for child_port in get_ports(block.module_name, child_port_name, row):
                     validate_sheet_direction(block, child_port, row)
                     expression = (
@@ -1824,7 +2088,11 @@ def render_integration(
         expanded = [(top_block, get_ports(top.name, top_port_name, row))]
         expanded.extend(
             (block, get_ports(block.module_name, child_port_name, row))
-            for block, child_port_name in row_entries
+            for block, child_port_name, _ in row_entries
+        )
+        row_markers = {top_block.module_name: top_index}
+        row_markers.update(
+            {block.module_name: marker for block, _, marker in row_entries}
         )
         for aligned in aligned_expansions(expanded, row):
             if not aligned:
@@ -1865,7 +2133,21 @@ def render_integration(
                         f"{block.module_name}.{child_port.name}信号应该连接，"
                         "但是其位宽不匹配"
                     )
-                expression = top_port.name
+                child_index = row_markers.get(block.module_name)
+                marker = top_index or child_index
+                if top_index and child_index and top_index != child_index:
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: {top.name}.{top_port.name} "
+                        f"与 {block.module_name}.{child_port.name} 使用不同索引指示符"
+                    )
+                if marker:
+                    register_generate_marker(
+                        block.module_name,
+                        marker,
+                        top_port if top_index else child_port,
+                        row,
+                    )
+                expression = top_port.name + (f"[{marker}]" if top_index and marker else "")
                 top_width = simple_packed_width(top_port, all_macros)
                 child_width = simple_packed_width(child_port, all_macros)
                 if (
@@ -2114,6 +2396,23 @@ def render_integration(
                     (port.condition,) if port.condition else (),
                 )
 
+    generate_counts: dict[str, tuple[str, int]] = {}
+    for child_name, spec in generate_specs.items():
+        if spec.extents:
+            count = min(spec.extents)
+            detail = "/".join(str(value) for value in dict.fromkeys(spec.extents))
+            reporter.info(
+                f"集成模块: {child_name} 的 [{spec.index}] 可解析循环范围为 "
+                f"{detail}，generate 使用安全次数 {count}"
+            )
+        else:
+            count = 1
+            reporter.warning(
+                f"集成模块: {child_name} 的 [{spec.index}] 无法解析循环次数，"
+                "generate 默认使用 1"
+            )
+        generate_counts[child_name] = (spec.index, count)
+
     lines = render_module_header(top, all_macros)
     if wires:
         lines.append("")
@@ -2203,8 +2502,16 @@ def render_integration(
     for child in children:
         lines.append("")
         parameter_map = parameter_maps[child.name]
+        generate_spec = generate_counts.get(child.name)
+        if generate_spec:
+            index, count = generate_spec
+            lines.append("generate")
+            lines.append(
+                f"for (genvar {index} = 0; {index} < {count}; "
+                f"{index} = {index} + 1) begin : G_{child.name}"
+            )
         if child.parameters:
-            lines.append(f"    {child.name} #(")
+            lines.append(f"{child.name} #(")
             items = list(child.parameters)
             parameter_name_width = max(len(name) for name in items)
             parameter_value_width = max(
@@ -2213,12 +2520,12 @@ def render_integration(
             for index, name in enumerate(items):
                 comma = "," if index < len(items) - 1 else ""
                 lines.append(
-                    f"        .{name:<{parameter_name_width}} "
+                    f"    .{name:<{parameter_name_width}} "
                     f"({parameter_map[name]:<{parameter_value_width}}){comma}"
                 )
-            lines.append(f"    ) u_{child.name.lower()} (")
+            lines.append(f") U_{child.name} (")
         else:
-            lines.append(f"    {child.name} u_{child.name.lower()} (")
+            lines.append(f"{child.name} U_{child.name} (")
         reserved_macros = set(all_macros)
         reserved_macros.update(
             port.condition
@@ -2229,7 +2536,10 @@ def render_integration(
         append_instance_connections(
             lines, child, bindings[child.name], reserved_macros
         )
-        lines.append("    );")
+        lines.append(");")
+        if generate_spec:
+            lines.append("end")
+            lines.append("endgenerate")
     lines.extend(["endmodule", ""])
     return "\n".join(lines)
 
@@ -2282,6 +2592,347 @@ def generate(
                 stream.write(content)
             temporary.replace(path)
     return paths, reporter
+
+
+@dataclass(frozen=True)
+class DiffusionTarget:
+    kind: str
+    expression: str
+
+    @property
+    def label(self) -> str:
+        kind = "宏" if self.kind == "macro" else "parameter"
+        return f"{self.expression} ({kind})"
+
+
+@dataclass
+class DiffusionResult:
+    backup_path: Path | None
+    edited_cells: int
+    before: Reporter
+    after: Reporter
+    cancelled: bool = False
+
+
+def canonical_dimension_symbol(value: Any) -> DiffusionTarget | None:
+    text = clean(value)
+    macro = MACRO_RE.fullmatch(text)
+    if macro:
+        return DiffusionTarget("macro", f"`{macro.group(1).upper()}")
+    if IDENTIFIER_RE.fullmatch(text):
+        return DiffusionTarget("parameter", text.upper())
+    return None
+
+
+def iter_editable_module_rows(
+    workbook: Workbook, reporter: Reporter
+) -> Iterable[tuple[Sheet, int, dict[str, int], dict[str, list[str]]]]:
+    """Yield physical XLSX module rows while never consulting 修改 columns."""
+    for sheet in workbook.sheets:
+        header = find_module_header(sheet)
+        if header is None:
+            continue
+        header_row, columns = header
+        active_values: dict[str, list[str]] = {}
+        category_column = columns["port"] - 1
+        for row in range(header_row + 1, sheet.max_row + 1):
+            if not clean(sheet.cell(row, columns["port"])):
+                continue
+            category = (
+                clean(sheet.cell(row, category_column))
+                if category_column >= 1
+                and category_column not in sheet.ignored_columns
+                else ""
+            )
+            if category:
+                active_values = {}
+            context = f"页签 {sheet.name} 第 {row} 行"
+            active_values.update(template_values_in_row(sheet, row, context, reporter))
+            yield sheet, row, columns, dict(active_values)
+
+
+def expanded_factor_targets(
+    factor: str,
+    domains: dict[str, list[str]],
+) -> list[tuple[DiffusionTarget, int, int]]:
+    """Return target, expansion index and expansion count for one factor."""
+    variables = template_variables(factor)
+    if not variables:
+        target = canonical_dimension_symbol(uppercase_macro_references(factor))
+        return [(target, 0, 1)] if target else []
+    if any(variable not in domains for variable in variables):
+        return []
+    combinations = list(itertools.product(*(domains[name] for name in variables)))
+    result: list[tuple[DiffusionTarget, int, int]] = []
+    for index, combination in enumerate(combinations):
+        expansion = dict(zip(variables, combination))
+        text = uppercase_macro_references(substitute_template(factor, expansion))
+        target = canonical_dimension_symbol(text)
+        if target:
+            result.append((target, index, len(combinations)))
+    return result
+
+
+def list_diffusible_variables(path: Path) -> tuple[list[DiffusionTarget], Reporter]:
+    reporter = Reporter()
+    workbook = XlsxReader().read(path, ignore_review_columns=False)
+    found: dict[tuple[str, str], DiffusionTarget] = {}
+    for sheet, row, columns, domains in iter_editable_module_rows(workbook, reporter):
+        for field in ("width", "array"):
+            column = columns.get(field)
+            if column is None:
+                continue
+            for factor in split_top_level_product(sheet.cell(row, column)):
+                for target, _, _ in expanded_factor_targets(factor, domains):
+                    found.setdefault((target.kind, target.expression), target)
+    targets = sorted(
+        found.values(),
+        key=lambda item: (0 if item.kind == "macro" else 1, item.expression),
+    )
+    return targets, reporter
+
+
+def normalize_diffusion_value(value: Any) -> str:
+    text = clean(value).replace("（", "(").replace("）", ")")
+    is_natural = text.isdigit() and int(text) > 0
+    is_parenthesized = text.startswith("(") and text.endswith(")")
+    if not (is_natural or is_parenthesized) or evaluate_int_expression(text) is None:
+        raise ValueError("扩散值必须是正自然数，或可安全计算且整体带括号的整数表达式")
+    return text
+
+
+def range_values(value: Any, count: int) -> list[str] | None:
+    text = clean(value)
+    match = re.search(r"(?:范围\s*(?:是|为|[:：=])\s*)?\{\{?([^{}]+)\}\}?", text)
+    if match is None:
+        return None
+    values = [item.strip() for item in re.split(r"[,，、;；]", match.group(1))]
+    return values if len(values) == count and all(values) else None
+
+
+def seeded_default(factor: str) -> str:
+    number = evaluate_int_expression(factor)
+    return str(number) if number is not None else str(UNKNOWN_WIDTH)
+
+
+def spread_default_cell(
+    raw_dimensions: Any,
+    raw_default: Any,
+    domains: dict[str, list[str]],
+    selected: DiffusionTarget,
+    value: str,
+) -> str | None:
+    factors = split_top_level_product(raw_dimensions)
+    if not factors:
+        return None
+    defaults = split_top_level_product(raw_default)
+    if len(defaults) != len(factors):
+        defaults = [seeded_default(factor) for factor in factors]
+    changed = False
+    for factor_index, factor in enumerate(factors):
+        matches = [
+            (index, count)
+            for target, index, count in expanded_factor_targets(factor, domains)
+            if target == selected
+        ]
+        if not matches:
+            continue
+        variables = template_variables(factor)
+        if not variables:
+            defaults[factor_index] = value
+            changed = True
+            continue
+        count = matches[0][1]
+        existing = range_values(defaults[factor_index], count)
+        if existing is None:
+            scalar = clean(defaults[factor_index])
+            if evaluate_int_expression(scalar) is not None:
+                existing = [scalar] * count
+            else:
+                existing = [str(UNKNOWN_WIDTH)] * count
+        else:
+            existing = [
+                item if evaluate_int_expression(item) is not None else str(UNKNOWN_WIDTH)
+                for item in existing
+            ]
+        for index, _ in matches:
+            existing[index] = value
+        defaults[factor_index] = "范围是{" + ",".join(existing) + "}"
+        changed = True
+    return "*".join(defaults) if changed else None
+
+
+def column_letters(column: int) -> str:
+    letters = ""
+    while column:
+        column, remainder = divmod(column - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
+def set_worksheet_cell(root: ET.Element, row_number: int, column: int, value: str) -> None:
+    namespace = root.tag.split("}", 1)[0].lstrip("{") if "}" in root.tag else ""
+    tag = lambda name: f"{{{namespace}}}{name}" if namespace else name
+    sheet_data = next(
+        (node for node in root.iter() if local_name(node.tag) == "sheetData"),
+        None,
+    )
+    if sheet_data is None:
+        raise ValueError("XLSX worksheet 缺少 sheetData")
+    row = next(
+        (
+            node
+            for node in sheet_data
+            if local_name(node.tag) == "row"
+            and int(node.attrib.get("r", "0") or 0) == row_number
+        ),
+        None,
+    )
+    if row is None:
+        row = ET.Element(tag("row"), {"r": str(row_number)})
+        position = next(
+            (
+                index
+                for index, node in enumerate(sheet_data)
+                if int(node.attrib.get("r", "0") or 0) > row_number
+            ),
+            len(sheet_data),
+        )
+        sheet_data.insert(position, row)
+    reference = f"{column_letters(column)}{row_number}"
+    cell = next(
+        (
+            node
+            for node in row
+            if local_name(node.tag) == "c" and node.attrib.get("r") == reference
+        ),
+        None,
+    )
+    if cell is None:
+        cell = ET.Element(tag("c"), {"r": reference})
+        position = next(
+            (
+                index
+                for index, node in enumerate(row)
+                if local_name(node.tag) == "c"
+                and column_number(CELL_RE.match(node.attrib.get("r", "A1")).group(1))
+                > column
+            ),
+            len(row),
+        )
+        row.insert(position, cell)
+    cell.attrib["t"] = "inlineStr"
+    for child in list(cell):
+        cell.remove(child)
+    inline = ET.SubElement(cell, tag("is"))
+    ET.SubElement(inline, tag("t")).text = value
+
+
+def write_xlsx_cell_updates(
+    path: Path,
+    updates: dict[str, dict[tuple[int, int], str]],
+) -> None:
+    temporary_handle = tempfile.NamedTemporaryFile(
+        prefix=f".{path.stem}_",
+        suffix=".xlsx.tmp",
+        dir=path.parent,
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
+    try:
+        with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(
+            temporary, "w"
+        ) as destination:
+            for item in source.infolist():
+                content = source.read(item.filename)
+                sheet_updates = updates.get(item.filename)
+                if sheet_updates:
+                    root = ET.fromstring(content)
+                    for (row, column), value in sheet_updates.items():
+                        set_worksheet_cell(root, row, column, value)
+                    content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                destination.writestr(item, content)
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def diffuse_variable_value(
+    path: Path,
+    variable: str,
+    value: Any,
+    *,
+    confirm: Callable[[str], str] = input,
+    timestamp: str | None = None,
+) -> DiffusionResult:
+    """Back up an XLSX and spread one macro/parameter value in place."""
+    path = path.resolve()
+    normalized_value = normalize_diffusion_value(value)
+    targets, discovery_reporter = list_diffusible_variables(path)
+    requested = clean(variable)
+    if requested.startswith("`"):
+        selected = DiffusionTarget("macro", f"`{requested[1:].upper()}")
+    else:
+        selected = DiffusionTarget("parameter", requested.upper())
+    if selected not in targets:
+        available = ", ".join(target.expression for target in targets) or "无"
+        raise ValueError(f"未找到可扩散变量 {variable!r}；可选值: {available}")
+
+    before = Reporter()
+    parse_workbook(path, before)
+    for item in discovery_reporter.items:
+        before.items.append(item)
+    workbook = XlsxReader().read(path, ignore_review_columns=False)
+    updates: dict[str, dict[tuple[int, int], str]] = {}
+    for sheet, row, columns, domains in iter_editable_module_rows(
+        workbook, Reporter()
+    ):
+        for dimension_field, value_field in (
+            ("width", "value"),
+            ("array", "array_value"),
+        ):
+            dimension_column = columns.get(dimension_field)
+            value_column = columns.get(value_field)
+            if dimension_column is None or value_column is None:
+                continue
+            replacement = spread_default_cell(
+                sheet.cell(row, dimension_column),
+                sheet.cell(row, value_column),
+                domains,
+                selected,
+                normalized_value,
+            )
+            if replacement is not None and replacement != clean(
+                sheet.cell(row, value_column)
+            ):
+                updates.setdefault(sheet.xml_path, {})[(row, value_column)] = replacement
+    edited_cells = sum(len(items) for items in updates.values())
+    if edited_cells == 0:
+        raise ValueError(f"变量 {selected.expression} 没有需要修改的数值单元格")
+
+    answer = confirm(
+        "即将原地修改 XLSX。脚本会自动备份，但请确认你也已做好备份。继续？[y/n]: "
+    ).strip().lower()
+    while answer not in {"y", "n"}:
+        answer = confirm("请输入 y 或 n: ").strip().lower()
+    if answer == "n":
+        return DiffusionResult(None, 0, before, before, cancelled=True)
+
+    stamp = timestamp or dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_directory = path.parent / "backup"
+    backup_directory.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_directory / f"{path.stem}_{stamp}{path.suffix}"
+    suffix = 2
+    while backup_path.exists():
+        backup_path = backup_directory / f"{path.stem}_{stamp}_{suffix}{path.suffix}"
+        suffix += 1
+    shutil.copy2(path, backup_path)
+    write_xlsx_cell_updates(path, updates)
+    after = Reporter()
+    parse_workbook(path, after)
+    return DiffusionResult(backup_path, edited_cells, before, after)
 
 
 def discover_workbooks() -> list[Path]:
@@ -2392,10 +3043,17 @@ def choose_workbook() -> Path:
 
 
 def interactive_main() -> int:
-    actions = ["生成 Verilog", "查看识别结果", "校验工作簿", "严格校验", "退出"]
+    actions = [
+        "生成 Verilog",
+        "查看识别结果",
+        "校验工作簿",
+        "严格校验",
+        "扩散变量值（修改 XLSX）",
+        "退出",
+    ]
     while True:
         selected = arrow_menu("XLSX → Verilog（↑/↓，Enter 确认）：", actions)
-        if selected is None or selected == 4:
+        if selected is None or selected == 5:
             print("已退出。")
             return 0
         try:
@@ -2413,7 +3071,28 @@ def interactive_main() -> int:
             return main([str(workbook), "--list"])
         if selected == 2:
             return main([str(workbook), "--check"])
-        return main([str(workbook), "--check", "--strict"])
+        if selected == 3:
+            return main([str(workbook), "--check", "--strict"])
+        targets, discovery_reporter = list_diffusible_variables(workbook)
+        discovery_reporter.print()
+        if not targets:
+            print("错误: 工作簿中没有可扩散的宏或 parameter", file=sys.stderr)
+            return 2
+        target_index = arrow_menu(
+            "请选择一次要扩散的变量（↑/↓，Enter 确认，Esc 返回）：",
+            [target.label for target in targets],
+        )
+        if target_index is None:
+            continue
+        value = input("请输入正自然数或整体带括号的整数表达式: ").strip()
+        return main(
+            [
+                str(workbook),
+                "--spread-value",
+                targets[target_index].expression,
+                value,
+            ]
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2425,6 +3104,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--check", action="store_true", help="只解析和校验，不写文件")
     parser.add_argument("--strict", action="store_true", help="存在任何警告时也不写文件并返回失败")
     parser.add_argument("--list", action="store_true", help="列出识别结果，不生成文件")
+    parser.add_argument(
+        "--spread-value",
+        nargs=2,
+        metavar=("VARIABLE", "VALUE"),
+        help="备份后原地扩散一个宏/parameter 数值；执行前仍需输入 y/n",
+    )
     return parser
 
 
@@ -2443,6 +3128,31 @@ def main(argv: Iterable[str] | None = None) -> int:
             raise ValueError(f"输入文件不存在: {workbook_path}")
         if workbook_path.suffix.lower() != ".xlsx":
             raise ValueError("输入文件必须是 .xlsx 格式")
+        if args.spread_value:
+            print("正在执行修改前完整检查……")
+            precheck = Reporter()
+            parse_workbook(workbook_path, precheck)
+            precheck.print()
+            print(
+                f"预检查完成：{sum(item.level == '错误' for item in precheck.items)} 个 error，"
+                f"{sum(item.level == '警告' for item in precheck.items)} 个 warning。"
+            )
+            variable, value = args.spread_value
+            result = diffuse_variable_value(workbook_path, variable, value)
+            if result.cancelled:
+                print("已取消，XLSX 未修改，也未创建备份。")
+                return 0
+            result.after.print()
+            print(
+                f"扩散完成：修改 {result.edited_cells} 个单元格；"
+                f"备份位于 {result.backup_path}"
+            )
+            failed = result.after.has_errors
+            if failed:
+                print("扩散后仍存在 error，请继续处理其他冲突。", file=sys.stderr)
+                return 2
+            print("扩散后校验无 error。")
+            return 0
         if args.list:
             reporter = Reporter()
             workbook, modules, integration = parse_workbook(workbook_path, reporter)
