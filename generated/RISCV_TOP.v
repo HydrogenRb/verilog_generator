@@ -75,8 +75,8 @@ module RISCV_TOP #(
     output wire                  test_bus2_sig3_valid
 );
 
-    // Internal child-to-child connections.
-    // 子模块之间的内部连线。
+    // Internal connections and NA placeholder signals.
+    // 子模块内部连线及 NA 占位信号。
     wire                                   w_apb_1;
     wire [2         -1:0]                  w_apb_2;
     wire [LANE_NUM  -1:0]                  w_apb_3;

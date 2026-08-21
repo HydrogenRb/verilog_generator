@@ -11,8 +11,8 @@ module TOP_PARAM #(
     output wire [WIDTH     -1:0] result
 );
 
-    // Internal child-to-child connections.
-    // 子模块之间的内部连线。
+    // Internal connections and NA placeholder signals.
+    // 子模块内部连线及 NA 占位信号。
     wire [WIDTH -1:0] w_bus;
 
 PRODUCER #(

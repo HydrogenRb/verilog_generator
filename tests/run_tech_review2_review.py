@@ -22,6 +22,7 @@ from xlsx2verilog import Reporter, TEMPLATE_RE, generate, parse_workbook  # noqa
 
 SAMPLE = ROOT / "test.xlsx"
 SAMPLE_OUTPUT = ROOT / "generated"
+SAMPLE_INTEGRATION = "集成_RISCV_TOP"
 REAL_TESTS = [
     ROOT / "review_test_cases/07_real_test_1/ibex_if_stage_3children.xlsx",
     ROOT / "review_test_cases/08_real_test_2/01_core_layer.xlsx",
@@ -48,12 +49,14 @@ class RoundResult:
 
 def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
     result = RoundResult("第一轮：新功能与边界输入检视")
-    paths, reporter = generate(SAMPLE, SAMPLE_OUTPUT)
+    paths, reporter = generate(
+        SAMPLE, SAMPLE_OUTPUT, integration_sheet=SAMPLE_INTEGRATION
+    )
     result.check(not reporter.has_errors, "最新 test.xlsx 无错误生成 3 个模块", "test.xlsx 生成失败")
     result.check(len(paths) == 3, "生成文件数为 3", f"生成文件数错误：{len(paths)}")
-    top = (SAMPLE_OUTPUT / "RISCV_TOP.v").read_text(encoding="utf-8") if paths else ""
+    top = (SAMPLE_OUTPUT / "riscv_top.v").read_text(encoding="utf-8") if paths else ""
     core = (
-        (SAMPLE_OUTPUT / "RISCV_CORE_TEST.v").read_text(encoding="utf-8")
+        (SAMPLE_OUTPUT / "riscv_core_test.v").read_text(encoding="utf-8")
         if paths
         else ""
     )
@@ -150,13 +153,15 @@ def regression_round() -> RoundResult:
 def static_round(paths: list[Path]) -> RoundResult:
     result = RoundResult("第三轮：生成 Verilog 独立静态检视")
     reporter = Reporter()
-    _, modules, integration = parse_workbook(SAMPLE, reporter)
-    expected_files = {f"{name}.v" for name in modules}
+    _, modules, integration = parse_workbook(
+        SAMPLE, reporter, integration_sheet=SAMPLE_INTEGRATION
+    )
+    expected_files = {f"{name.lower()}.v" for name in modules}
     actual_files = {path.name for path in paths}
     result.check(actual_files == expected_files, "生成文件集合与模块集合一致", "生成文件集合不一致")
 
     for name, module in modules.items():
-        path = SAMPLE_OUTPUT / f"{name}.v"
+        path = SAMPLE_OUTPUT / f"{name.lower()}.v"
         if not path.exists():
             result.problems.append(f"缺少 {path.name}")
             continue
@@ -204,7 +209,9 @@ def static_round(paths: list[Path]) -> RoundResult:
             )
 
     if integration:
-        top = (SAMPLE_OUTPUT / f"{integration.top_name}.v").read_text(encoding="utf-8")
+        top = (
+            SAMPLE_OUTPUT / f"{integration.top_name.lower()}.v"
+        ).read_text(encoding="utf-8")
         for child_name in integration.child_names:
             child = modules[child_name]
             match = re.search(

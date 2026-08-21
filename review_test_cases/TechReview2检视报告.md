@@ -30,7 +30,7 @@
 
 ## 第二轮：历史功能和 real_test 回归
 
-- PASS：unittest 42/42 通过
+- PASS：unittest 47/47 通过
 - PASS：Tech Review 1 matrix 6/6 通过
 - PASS：review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --strict 通过
 - PASS：review_test_cases\08_real_test_2\01_core_layer.xlsx --strict 通过
@@ -39,37 +39,37 @@
 ## 第三轮：生成 Verilog 独立静态检视
 
 - PASS：生成文件集合与模块集合一致
-- PASS：RISCV_TOP.v 模块边界唯一
-- PASS：RISCV_TOP.v 括号平衡
-- PASS：RISCV_TOP.v 端口列表完整且无重复
-- PASS：RISCV_CORE_TEST.v 模块边界唯一
-- PASS：RISCV_CORE_TEST.v 括号平衡
-- PASS：RISCV_CORE_TEST.v 端口列表完整且无重复
-- PASS：RISCV_CORE_TEST.v.ahb_test_3 output 已赋零
-- PASS：RISCV_CORE_TEST.v.ahb_test_4 output 已赋零
-- PASS：RISCV_CORE_TEST.v.ahb_test_5 output 已赋零
-- PASS：RISCV_CORE_TEST.v.apb_3 output 已赋零
-- PASS：RISCV_CORE_TEST.v.apb_4 output 已赋零
-- PASS：RISCV_CORE_TEST.v.apb_5 output 已赋零
-- PASS：RISCV_CORE_TEST.v.apb_6 output 已赋零
-- PASS：RISCV_CORE_TEST.v.test_bus_sig1_valid output 已赋零
-- PASS：RISCV_CORE_TEST.v.test_bus_sig2_valid output 已赋零
-- PASS：RISCV_CORE_TEST.v.test_bus_sig3_valid output 已赋零
-- PASS：RISCV_CORE_TEST.v.array output 已赋零
-- PASS：RISCV_CORE_TEST.v.test_bus2_sig1_valid output 已赋零
-- PASS：RISCV_CORE_TEST.v.test_bus2_sig2_valid output 已赋零
-- PASS：RISCV_CORE_TEST.v.test_bus2_sig3_valid output 已赋零
-- PASS：MEM_PHY.v 模块边界唯一
-- PASS：MEM_PHY.v 括号平衡
-- PASS：MEM_PHY.v 端口列表完整且无重复
-- PASS：MEM_PHY.v.apb_1 output 已赋零
-- PASS：MEM_PHY.v.apb_2 output 已赋零
-- PASS：MEM_PHY.v.ahb_test_3 output 已赋零
-- PASS：MEM_PHY.v.ahb_test_4 output 已赋零
-- PASS：MEM_PHY.v.ahb_test_5 output 已赋零
-- PASS：MEM_PHY.v.test_bus_sig1_valid output 已赋零
-- PASS：MEM_PHY.v.test_bus_sig2_valid output 已赋零
-- PASS：MEM_PHY.v.test_bus_sig3_valid output 已赋零
+- PASS：riscv_top.v 模块边界唯一
+- PASS：riscv_top.v 括号平衡
+- PASS：riscv_top.v 端口列表完整且无重复
+- PASS：riscv_core_test.v 模块边界唯一
+- PASS：riscv_core_test.v 括号平衡
+- PASS：riscv_core_test.v 端口列表完整且无重复
+- PASS：riscv_core_test.v.ahb_test_3 output 已赋零
+- PASS：riscv_core_test.v.ahb_test_4 output 已赋零
+- PASS：riscv_core_test.v.ahb_test_5 output 已赋零
+- PASS：riscv_core_test.v.apb_3 output 已赋零
+- PASS：riscv_core_test.v.apb_4 output 已赋零
+- PASS：riscv_core_test.v.apb_5 output 已赋零
+- PASS：riscv_core_test.v.apb_6 output 已赋零
+- PASS：riscv_core_test.v.test_bus_sig1_valid output 已赋零
+- PASS：riscv_core_test.v.test_bus_sig2_valid output 已赋零
+- PASS：riscv_core_test.v.test_bus_sig3_valid output 已赋零
+- PASS：riscv_core_test.v.array output 已赋零
+- PASS：riscv_core_test.v.test_bus2_sig1_valid output 已赋零
+- PASS：riscv_core_test.v.test_bus2_sig2_valid output 已赋零
+- PASS：riscv_core_test.v.test_bus2_sig3_valid output 已赋零
+- PASS：mem_phy.v 模块边界唯一
+- PASS：mem_phy.v 括号平衡
+- PASS：mem_phy.v 端口列表完整且无重复
+- PASS：mem_phy.v.apb_1 output 已赋零
+- PASS：mem_phy.v.apb_2 output 已赋零
+- PASS：mem_phy.v.ahb_test_3 output 已赋零
+- PASS：mem_phy.v.ahb_test_4 output 已赋零
+- PASS：mem_phy.v.ahb_test_5 output 已赋零
+- PASS：mem_phy.v.test_bus_sig1_valid output 已赋零
+- PASS：mem_phy.v.test_bus_sig2_valid output 已赋零
+- PASS：mem_phy.v.test_bus_sig3_valid output 已赋零
 - PASS：RISCV_CORE_TEST 每个端口恰好连接一次
 - PASS：MEM_PHY 每个端口恰好连接一次
 - PASS：生成代码中不再存在命名模板占位符

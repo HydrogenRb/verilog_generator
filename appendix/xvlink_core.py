@@ -643,7 +643,10 @@ def write_integration_workbook(
         diagnostics: list[dict[str, str]] = []
         if validate:
             _, reporter = generate(
-                temporary, output.parent / ".xvlink-check", check_only=True
+                temporary,
+                output.parent / ".xvlink-check",
+                check_only=True,
+                integration_sheet=sheet_name,
             )
             diagnostics = [diagnostic_dict(item) for item in reporter.items]
             if reporter.has_errors:

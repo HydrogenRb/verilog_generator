@@ -88,10 +88,10 @@ class Version2TechReview1Tests(unittest.TestCase):
             self.assertFalse(generated_reporter.has_errors)
             self.assertEqual(
                 {path.name for path in paths},
-                {"DEBUG_TOP.v", "TRACE.v"},
+                {"debug_top.v", "trace.v"},
             )
-            self.assertFalse((output / "RISCV_TOP.v").exists())
-            self.assertFalse((output / "CORE.v").exists())
+            self.assertFalse((output / "riscv_top.v").exists())
+            self.assertFalse((output / "core.v").exists())
 
     def test_integration_menu_selects_only_when_multiple_candidates_exist(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -199,8 +199,8 @@ class Version2TechReview1Tests(unittest.TestCase):
             )
             paths, reporter = generate(workbook, root / "generated")
             self.assertFalse(reporter.has_errors)
-            self.assertEqual({path.name for path in paths}, {"TOP.v", "CHILD.v"})
-            top = (root / "generated" / "TOP.v").read_text(encoding="utf-8")
+            self.assertEqual({path.name for path in paths}, {"top.v", "child.v"})
+            top = (root / "generated" / "top.v").read_text(encoding="utf-8")
             self.assertIn("module TOP", top)
             self.assertIn("input wire [WIDTH -1:0] data", top)
             self.assertIn("\nCHILD #(\n", top)
@@ -299,12 +299,12 @@ class Version2TechReview1Tests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual(len(paths), 4)
             self.assertTrue(any("generate 使用安全次数 5" in item.message for item in reporter.items))
-            top = (root / "generated" / "RISCV_TOP.v").read_text(encoding="utf-8")
+            top = (root / "generated" / "riscv_top.v").read_text(encoding="utf-8")
             self.assertIn(".dft_test_en          (dft_test_en[0]", top)
-            self.assertIn("for (genvar i = 0; i < 5; i = i + 1)", top)
+            self.assertIn("genvar i;\ngenerate\nfor (i = 0; i < 5; i = i + 1)", top)
             self.assertIn("MEM_DAT #(", top)
             self.assertIn(") U_MEM_DAT (", top)
-            self.assertIn(".bus_in             (bus_in[i]", top)
+            self.assertIn(".bus_in             (bus_in            [i]", top)
             self.assertIn(".dyadic_bus_out_rsp (dyadic_bus_out_rsp[i]", top)
 
 

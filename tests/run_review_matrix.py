@@ -461,18 +461,18 @@ def inspect_generated(workbook: Path, output: Path, paths: list[Path], reporter:
     problems: list[str] = []
     if parse_reporter.has_errors:
         return ["无法审计：输入工作簿本身解析失败"]
-    expected_names = set(modules)
+    expected_names = {name.lower() for name in modules}
     actual_names = {path.stem for path in paths}
     if expected_names != actual_names:
         problems.append(f"文件集合不一致: expected={sorted(expected_names)}, actual={sorted(actual_names)}")
 
     top_text = ""
     if integration:
-        top_path = output / f"{integration.top_name}.v"
+        top_path = output / f"{integration.top_name.lower()}.v"
         if top_path.exists():
             top_text = top_path.read_text(encoding="utf-8")
     for module in modules.values():
-        path = output / f"{module.name}.v"
+        path = output / f"{module.name.lower()}.v"
         if not path.exists():
             problems.append(f"缺少 {path.name}")
             continue
@@ -535,23 +535,23 @@ class ReviewResult:
 
 EXPECTED_PATTERNS: dict[str, list[tuple[str, str]]] = {
     "01_basic": [
-        ("TOP_BASIC.v", r"\.done\s+\(done\s*\)"),
-        ("TOP_BASIC.v", r"\.spare\s+\(1'b0\s*\)"),
-        ("TOP_BASIC.v", r"\.debug\s+\(\s*\)"),
+        ("top_basic.v", r"\.done\s+\(done\s*\)"),
+        ("top_basic.v", r"\.spare\s+\(1'b0\s*\)"),
+        ("top_basic.v", r"\.debug\s+\(\s*\)"),
     ],
     "02_parameter_macro_shifted": [
-        ("TOP_PARAM.v", r"`define RST_LANE\s+1"),
-        ("TOP_PARAM.v", r"parameter integer WIDTH\s+= 8"),
-        ("TOP_PARAM.v", r"wire\s+\[WIDTH\s*-1:0\]\s+w_bus;"),
-        ("TOP_PARAM.v", r"\.WIDTH\s+\(WIDTH\s*\)"),
+        ("top_param.v", r"`define RST_LANE\s+1"),
+        ("top_param.v", r"parameter integer WIDTH\s+= 8"),
+        ("top_param.v", r"wire\s+\[WIDTH\s*-1:0\]\s+w_bus;"),
+        ("top_param.v", r"\.WIDTH\s+\(WIDTH\s*\)"),
     ],
     "03_duplicate_port_rows": [
-        ("TOP_DUP.v", r"input\s+wire\s+\[2\s*-1:0\]\s+aaa"),
-        ("TOP_DUP.v", r"\.aaa\s+\(2'b0\s*\)"),
+        ("top_dup.v", r"input\s+wire\s+\[2\s*-1:0\]\s+aaa"),
+        ("top_dup.v", r"\.aaa\s+\(2'b0\s*\)"),
     ],
-    "05_unused_inout": [("TOP_IO.v", r"\.pad\s+\(\s*\)")],
+    "05_unused_inout": [("top_io.v", r"\.pad\s+\(\s*\)")],
     "06_width_mismatch": [
-        ("TOP_WIDTH.v", r"wire\s+\[8\s*-1:0\]\s+w_payload;")
+        ("top_width.v", r"wire\s+\[8\s*-1:0\]\s+w_payload;")
     ],
 }
 

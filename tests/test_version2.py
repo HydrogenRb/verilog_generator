@@ -33,9 +33,9 @@ class Version2GenerationTests(unittest.TestCase):
             self.assertTrue(any(item.level == "信息" and "模板端口展开不一致" in item.message for item in reporter.items))
 
             output = root / "generated"
-            top = (output / "RISCV_TOP.v").read_text(encoding="utf-8")
-            core = (output / "RISCV_CORE_TEST.v").read_text(encoding="utf-8")
-            phy = (output / "MEM_PHY.v").read_text(encoding="utf-8")
+            top = (output / "riscv_top.v").read_text(encoding="utf-8")
+            core = (output / "riscv_core_test.v").read_text(encoding="utf-8")
+            phy = (output / "mem_phy.v").read_text(encoding="utf-8")
             self.assertRegex(top, r"(?m)^`define APB_1\s+4$")
             self.assertNotIn("`define APB_1", core)
             self.assertNotIn("`define APB_1", phy)
@@ -68,7 +68,7 @@ class Version2GenerationTests(unittest.TestCase):
             _, reporter = generate(workbook, output)
             self.assertFalse(reporter.has_errors)
             self.assertFalse(any("位宽不匹配" in item.message for item in reporter.items))
-            top = (output / "TOP.v").read_text(encoding="utf-8")
+            top = (output / "top.v").read_text(encoding="utf-8")
             self.assertIn("parameter integer WIDTH = 8", top)
             self.assertNotIn("localparam", top)
             self.assertRegex(top, r"\.WIDTH\s+\(WIDTH\)")
@@ -77,9 +77,13 @@ class Version2GenerationTests(unittest.TestCase):
     def test_internal_literal_width_uses_maximum_low_bits_and_zero_fill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
-            _, reporter = generate(ROOT / "test.xlsx", output)
+            _, reporter = generate(
+                ROOT / "test.xlsx",
+                output,
+                integration_sheet="集成_RISCV_TOP",
+            )
             self.assertFalse(reporter.has_errors)
-            top = (output / "RISCV_TOP.v").read_text(encoding="utf-8")
+            top = (output / "riscv_top.v").read_text(encoding="utf-8")
             self.assertRegex(top, r"wire\s+w_apb_1;")
 
 

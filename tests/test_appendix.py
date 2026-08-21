@@ -70,7 +70,9 @@ class AppendixCoreTests(unittest.TestCase):
             export_project(self.model, project, str(second_output))
             self.assertEqual(output.read_bytes(), second_output.read_bytes())
             reporter = Reporter()
-            _, _, integration = parse_workbook(output, reporter)
+            _, _, integration = parse_workbook(
+                output, reporter, integration_sheet="集成"
+            )
             self.assertFalse(reporter.has_errors)
             self.assertIsNotNone(integration)
             with zipfile.ZipFile(SAMPLE) as original, zipfile.ZipFile(output) as exported:
