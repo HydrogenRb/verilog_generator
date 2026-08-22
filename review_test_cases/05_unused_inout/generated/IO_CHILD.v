@@ -4,6 +4,10 @@ module IO_CHILD (
     // test
     // ----- ----- ----- ----- ----- -----
     input wire          clk,
-    inout wire [4 -1:0] pad
+    inout [4 -1:0]      pad
 );
+
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
 endmodule

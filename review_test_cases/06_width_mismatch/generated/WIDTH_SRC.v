@@ -7,6 +7,10 @@ module WIDTH_SRC (
     output wire [8 -1:0] payload
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
 // Module placeholder: drive every output to zero.
 // 模块占位逻辑：所有输出均置零。
 assign payload = 8'b0;

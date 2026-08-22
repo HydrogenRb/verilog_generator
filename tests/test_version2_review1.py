@@ -202,10 +202,10 @@ class Version2TechReview1Tests(unittest.TestCase):
             self.assertEqual({path.name for path in paths}, {"top.v", "child.v"})
             top = (root / "generated" / "top.v").read_text(encoding="utf-8")
             self.assertIn("module TOP", top)
-            self.assertIn("input wire [WIDTH -1:0] data", top)
+            self.assertIn("input wire [WIDTH -1:0] Data", top)
             self.assertIn("\nCHILD #(\n", top)
             self.assertIn(") U_CHILD (", top)
-            self.assertIn("\n    .data ", top)
+            self.assertIn("\n    .Data ", top)
             self.assertNotIn("\n    CHILD", top)
 
             conflict = root / "macro-conflict.xlsx"

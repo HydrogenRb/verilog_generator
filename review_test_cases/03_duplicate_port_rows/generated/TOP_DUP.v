@@ -8,9 +8,20 @@ module TOP_DUP (
     output wire          status
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
+/*USER CODE BEGIN before DUP_CHILD*/
+
+/*USER CODE END   before DUP_CHILD*/
 DUP_CHILD U_DUP_CHILD (
     .clk    (clk   ),
     .aaa    (2'b0  ),
     .status (status)
 );
+
+/*USER CODE BEGIN after DUP_CHILD*/
+
+/*USER CODE END   after DUP_CHILD*/
 endmodule

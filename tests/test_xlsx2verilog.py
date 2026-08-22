@@ -459,7 +459,9 @@ class GenerationTests(unittest.TestCase):
             self.assertIn(
                 "assign data[gen_zero_data] = {DATA_WIDTH{1'b0}};", source
             )
-            self.assertTrue(destination.endswith(");\nendmodule\n"))
+            self.assertTrue(
+                destination.endswith("/*USER CODE END   before statement*/\nendmodule\n")
+            )
 
     def test_packed_dimension_columns_are_aligned_for_internal_wires(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -684,14 +686,15 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual([path.name for path in paths], ["generic.v"])
             text = paths[0].read_text(encoding="utf-8")
-            for name in ("bus_a_x", "bus_a_y", "bus_b_x", "bus_b_y"):
+            for name in ("BUS_A_X", "BUS_A_y", "BUS_b_X", "BUS_b_y"):
                 self.assertIn(name, text)
-            self.assertIn("done_a", text)
-            self.assertIn("done_b", text)
+            self.assertIn("DONE_A", text)
+            self.assertIn("DONE_b", text)
             self.assertRegex(text, r"(?m)^`define W_A\s+114$")
             self.assertRegex(text, r"(?m)^`define W_B\s+114$")
             self.assertNotIn("`define W_a", text)
-            self.assertRegex(text, r"(?m)^\s*inout\s+wire\s+needs_review")
+            self.assertRegex(text, r"(?m)^\s*inout\s+needs_review")
+            self.assertNotRegex(text, r"(?m)^\s*inout\s+wire\b")
             self.assertIn(
                 "TODO: XLSX i/o 为空，暂按 inout 生成；需处理方向缺失问题",
                 text,
@@ -761,7 +764,7 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(any("展开数量不一致" in item.message for item in reporter.items))
             self.assertFalse(any("方向冲突" in item.message for item in reporter.items))
 
-    def test_template_case_normalization_rejects_signal_collisions(self) -> None:
+    def test_template_expansion_preserves_case_sensitive_signal_names(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workbook = root / "case-collision.xlsx"
@@ -774,12 +777,11 @@ class GenerationTests(unittest.TestCase):
             write_xlsx(workbook, [("CASE_COLLISION", rows)])
 
             paths, reporter = generate(workbook, output)
-            self.assertEqual(paths, [])
-            self.assertTrue(reporter.has_errors)
-            self.assertTrue(
-                any("规范为小写后产生重复端口" in item.message for item in reporter.items)
-            )
-            self.assertFalse(output.exists())
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual([path.name for path in paths], ["case_collision.v"])
+            text = paths[0].read_text(encoding="utf-8")
+            self.assertIn("signal_A", text)
+            self.assertIn("signal_a", text)
 
     def test_top_output_drives_child_input_and_change_columns_are_ignored(self) -> None:
         def module_rows(name: str, signal_direction: str) -> list[list[object]]:

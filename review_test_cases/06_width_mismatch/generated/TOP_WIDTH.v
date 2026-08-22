@@ -6,17 +6,35 @@ module TOP_WIDTH (
     input wire clk
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
     // Internal connections and NA placeholder signals.
     // 子模块内部连线及 NA 占位信号。
     wire [8 -1:0] w_payload;
 
+/*USER CODE BEGIN before WIDTH_SRC*/
+
+/*USER CODE END   before WIDTH_SRC*/
 WIDTH_SRC U_WIDTH_SRC (
     .clk     (clk      ),
     .payload (w_payload)
 );
 
+/*USER CODE BEGIN after WIDTH_SRC*/
+
+/*USER CODE END   after WIDTH_SRC*/
+
+/*USER CODE BEGIN before WIDTH_DST*/
+
+/*USER CODE END   before WIDTH_DST*/
 WIDTH_DST U_WIDTH_DST (
     .clk     (clk              ),
     .payload (w_payload[4 -1:0])
 );
+
+/*USER CODE BEGIN after WIDTH_DST*/
+
+/*USER CODE END   after WIDTH_DST*/
 endmodule

@@ -75,6 +75,10 @@ module RISCV_TOP #(
     output wire                  test_bus2_sig3_valid
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
     // Internal connections and NA placeholder signals.
     // 子模块内部连线及 NA 占位信号。
     wire                                   w_apb_1;
@@ -93,6 +97,9 @@ assign ahb_test_4 = 4'b0;
 assign ahb_test_5 = 5'b0;
 assign ahb_test_6 = 6'b0;
 
+/*USER CODE BEGIN before RISCV_CORE_TEST*/
+
+/*USER CODE END   before RISCV_CORE_TEST*/
 RISCV_CORE_TEST #(
     .UID_SIZE (UID_SIZE),
     .LANE_NUM (LANE_NUM)
@@ -135,6 +142,13 @@ RISCV_CORE_TEST #(
     .test_bus2_sig3_valid (test_bus2_sig3_valid)
 );
 
+/*USER CODE BEGIN after RISCV_CORE_TEST*/
+
+/*USER CODE END   after RISCV_CORE_TEST*/
+
+/*USER CODE BEGIN before MEM_PHY*/
+
+/*USER CODE END   before MEM_PHY*/
 MEM_PHY #(
     .UID_SIZE (UID_SIZE)
 ) U_MEM_PHY (
@@ -167,4 +181,8 @@ MEM_PHY #(
     .test_bus_sig3_valid (test_bus_sig3_valid),
     .array               (w_array            )
 );
+
+/*USER CODE BEGIN after MEM_PHY*/
+
+/*USER CODE END   after MEM_PHY*/
 endmodule

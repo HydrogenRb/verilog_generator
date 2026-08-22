@@ -6,4 +6,8 @@ module WIDTH_DST (
     input wire          clk,
     input wire [4 -1:0] payload
 );
+
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
 endmodule

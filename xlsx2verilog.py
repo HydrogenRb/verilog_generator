@@ -51,9 +51,17 @@ CONDITION_CATEGORY_RE = re.compile(
 )
 INDEX_MARKER_RE = re.compile(r"^(.*)\[([A-Za-z_][A-Za-z0-9_$]*)\]\s*$")
 BIT_SELECT_RE = re.compile(r"^(.*)\[\s*([0-9]+)\s*\]\s*$")
+ANONYMOUS_NA_RE = re.compile(
+    r"^(?:na|n/a)(?:\s*\[\s*[A-Za-z_][A-Za-z0-9_$]*\s*\])?$",
+    re.IGNORECASE,
+)
 PARAMETER_CATEGORIES = {"parameter", "parameters", "参数", "参数定义"}
 NA_CONNECTION_VALUES = {"na", "n/a"}
 NA_CONNECTION_TODO = "//TODO:本信号期望有逻辑功能，请完成"
+MAX_TEMPLATE_RANGE_ITEMS = 4096
+USER_CODE_MARKER_RE = re.compile(
+    r"(?m)^[ \t]*/\*USER CODE (BEGIN|END)[ \t]+(.+?)[ \t]*\*/[ \t]*\r?$"
+)
 
 
 def local_name(tag: str) -> str:
@@ -99,14 +107,34 @@ class Reporter:
     def has_warnings(self) -> bool:
         return any(item.level == "警告" for item in self.items)
 
-    def print(self) -> None:
-        for item in self.items:
-            prefix = {
-                "信息": "info",
-                "警告": "warning",
-                "错误": "error",
-            }[item.level]
-            print(f"{prefix}[{item.message}]", file=sys.stderr)
+    def print(
+        self,
+        stream: TextIO | None = None,
+        *,
+        color: bool | None = None,
+    ) -> None:
+        """Print diagnostics grouped by severity, with ANSI color on a TTY."""
+        target = stream if stream is not None else sys.stderr
+        if color is None:
+            color = bool(getattr(target, "isatty", lambda: False)())
+        styles = {
+            "错误": ("error", "\033[31m"),
+            "警告": ("warning", "\033[33m"),
+            "信息": ("info", "\033[36m"),
+        }
+        reset = "\033[0m" if color else ""
+        for level in ("错误", "警告", "信息"):
+            grouped = [item for item in self.items if item.level == level]
+            if not grouped:
+                continue
+            prefix, style = styles[level]
+            paint = style if color else ""
+            print(
+                f"{paint}=== {prefix.upper()} ({len(grouped)}) ==={reset}",
+                file=target,
+            )
+            for item in grouped:
+                print(f"{paint}{prefix}[{item.message}]{reset}", file=target)
 
 
 @dataclass
@@ -368,6 +396,7 @@ class IntegrationBlock:
     module_name: str
     port_column: int
     direction_column: int
+    anonymous_na: bool = False
 
 
 @dataclass
@@ -555,6 +584,26 @@ def normalized_width_default(
     return "1"
 
 
+def normalized_parameter_default(
+    default_value: Any,
+    context: str,
+    reporter: Reporter,
+    *,
+    fallback_uncertain: bool,
+) -> str:
+    """Normalize an explicit parameter default, including a macro reference."""
+    text = clean(default_value)
+    macro_match = MACRO_RE.fullmatch(text)
+    if macro_match:
+        return f"`{macro_match.group(1).upper()}"
+    return normalized_width_default(
+        default_value,
+        context,
+        reporter,
+        fallback_uncertain=fallback_uncertain,
+    )
+
+
 def analyze_width(
     raw_width: Any,
     default_value: Any,
@@ -686,6 +735,16 @@ def template_values_in_row(
 ) -> dict[str, list[str]]:
     """Read named domains such as ``j的范围是{a,b}`` from a row."""
     result: dict[str, list[str]] = {}
+
+    def record(variable: str, values: list[str]) -> None:
+        previous = result.get(variable)
+        if previous is None:
+            result[variable] = values
+        elif previous != values:
+            reporter.error(
+                f"{context}: 模板变量 {variable} 在同一行定义了冲突的取值列表"
+            )
+
     for column in range(1, sheet.max_column + 1):
         if column in sheet.ignored_columns:
             continue
@@ -707,11 +766,24 @@ def template_values_in_row(
             if len(values) != len(set(values)):
                 reporter.error(f"{context}: 模板变量 {variable} 的取值列表包含重复值")
                 continue
-            previous = result.setdefault(variable, values)
-            if previous != values:
+            record(variable, values)
+        for match in re.finditer(
+            r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+            r"([0-9]+)\s*[:：]\s*([0-9]+)(?![A-Za-z0-9_])",
+            text,
+        ):
+            variable, first_text, last_text = match.groups()
+            first = int(first_text)
+            last = int(last_text)
+            count = abs(last - first) + 1
+            if count > MAX_TEMPLATE_RANGE_ITEMS:
                 reporter.error(
-                    f"{context}: 模板变量 {variable} 在同一行定义了冲突的取值列表"
+                    f"{context}: 模板变量 {variable} 的范围包含 {count} 项，"
+                    f"超过上限 {MAX_TEMPLATE_RANGE_ITEMS}"
                 )
+                continue
+            step = 1 if last >= first else -1
+            record(variable, [str(value) for value in range(first, last + step, step)])
     return result
 
 
@@ -958,8 +1030,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                         active_template_values[variable],
                         expansion_index,
                     )
-                raw_default = substitute_template(raw_default, expansion)
-                default = normalized_width_default(
+                raw_default = uppercase_macro_references(
+                    substitute_template(raw_default, expansion)
+                )
+                default = normalized_parameter_default(
                     raw_default,
                     f"{expanded_context}: parameter {parameter_name}",
                     reporter,
@@ -1003,14 +1077,14 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             raw_expansion_values = tuple(
                 expansion[name] for name in port_variables
             )
-            port_name = substitute_template(raw_port_name, expansion).lower()
+            port_name = substitute_template(raw_port_name, expansion)
             if port_variables:
                 previous_values = expanded_names_in_row.setdefault(
                     port_name, raw_expansion_values
                 )
                 if previous_values != raw_expansion_values:
                     reporter.error(
-                        f"{context}: 模板展开值仅大小写不同，规范为小写后产生重复端口 "
+                        f"{context}: 模板展开产生重复端口 "
                         f"{port_name!r}"
                     )
                     continue
@@ -1022,10 +1096,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 )
                 continue
             normalized_template_source = (
-                raw_port_name.lower() if port_variables else None
+                raw_port_name if port_variables else None
             )
             normalized_template_values = tuple(
-                expansion[name].lower() for name in port_variables
+                expansion[name] for name in port_variables
             )
             if port_name in seen:
                 # A repeated row denotes the same physical port. The first
@@ -1039,7 +1113,7 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     or previous.template_values != normalized_template_values
                 ):
                     reporter.error(
-                        f"{expanded_context}: 模板大小写规范后与已有端口 "
+                        f"{expanded_context}: 模板来源或展开值与已有端口 "
                         f"{port_name!r} 冲突"
                     )
                 continue
@@ -1190,8 +1264,72 @@ def find_integration(sheet: Sheet) -> Integration | None:
             ):
                 port_columns.append(column)
         port_columns.sort()
+
+        def column_has_only_na_references(column: int) -> bool:
+            values = [
+                clean(sheet.cell(data_row, column))
+                for data_row in range(row + 1, sheet.max_row + 1)
+                if clean(sheet.cell(data_row, column))
+            ]
+            return bool(values) and all(
+                ANONYMOUS_NA_RE.fullmatch(value) for value in values
+            )
+
+        # An explicit NA endpoint does not represent a module and therefore
+        # does not need a module name.  Its own repeated 端口名/i/o header is
+        # optional as well.  First separate header-bearing anonymous columns;
+        # they must have no explicit label above them and must immediately
+        # follow a named port/direction pair.
+        unlabeled_na_header_columns = {
+            port_column
+            for port_column in port_columns
+            if not any(
+                clean(sheet.cell(label_row, port_column))
+                for label_row in range(row - 1, 0, -1)
+            )
+            and column_has_only_na_references(port_column)
+        }
+        named_port_columns = [
+            port_column
+            for port_column in port_columns
+            if port_column not in unlabeled_na_header_columns
+        ]
+        anonymous_na_columns = [
+            port_column
+            for port_column in unlabeled_na_header_columns
+            if port_column - 2 in named_port_columns
+        ]
+
+        # Also recognise an entirely headerless column immediately following
+        # a normal port/direction pair.  Requiring every populated cell to be
+        # NA or NA[index] keeps ordinary notes and spacer columns out of the
+        # integration graph.
+        paired_columns = {
+            column
+            for port_column in port_columns
+            for column in (port_column, port_column + 1)
+        }
+        for port_column in named_port_columns:
+            column = port_column + 2
+            if column > sheet.max_column or column in paired_columns:
+                continue
+            if clean(sheet.cell(row - 1, column)) or clean(sheet.cell(row, column)):
+                continue
+            if column_has_only_na_references(column):
+                anonymous_na_columns.append(column)
+
         blocks: list[IntegrationBlock] = []
-        for port_column in port_columns:
+        for port_column in sorted((*named_port_columns, *anonymous_na_columns)):
+            if port_column in anonymous_na_columns:
+                direction_column = (
+                    port_column + 1
+                    if port_column in unlabeled_na_header_columns
+                    else 0
+                )
+                blocks.append(
+                    IntegrationBlock("", port_column, direction_column, True)
+                )
+                continue
             direction_column = port_column + 1
             direction_header = clean(sheet.cell(row, direction_column)).lower().replace(" ", "")
             if direction_header and direction_header not in {
@@ -1200,11 +1338,17 @@ def find_integration(sheet: Sheet) -> Integration | None:
                 continue
             module_name = module_name_above_header(sheet, row, port_column).upper()
             blocks.append(IntegrationBlock(module_name, port_column, direction_column))
-        if len(blocks) < 2:
+        if len([block for block in blocks if not block.anonymous_na]) < 2:
             continue
         groups: list[list[IntegrationBlock]] = []
         for block in blocks:
-            if not groups or block.port_column - groups[-1][-1].port_column > 2:
+            previous = groups[-1][-1] if groups else None
+            previous_end = (
+                previous.direction_column or previous.port_column
+                if previous is not None
+                else 0
+            )
+            if previous is None or block.port_column - previous_end > 1:
                 groups.append([block])
             else:
                 groups[-1].append(block)
@@ -1212,7 +1356,11 @@ def find_integration(sheet: Sheet) -> Integration | None:
         child_names: list[str] = []
         for group in groups:
             for block in group:
-                if block.module_name != top_name and block.module_name not in child_names:
+                if (
+                    not block.anonymous_na
+                    and block.module_name != top_name
+                    and block.module_name not in child_names
+                ):
                     child_names.append(block.module_name)
         return Integration(sheet.name, row, groups, top_name, child_names)
     return None
@@ -1789,6 +1937,8 @@ def port_declaration_prefix(
     ranges = packed_dimension_ranges(port.packed_dimensions, port.width)
     packed = align_packed_dimensions(ranges, dimension_widths)
     packed_field = f" {packed}" if dimension_widths else ""
+    if port.direction == "inout":
+        return f"inout{packed_field}"
     return f"{port.direction:<{direction_width}} wire{packed_field}"
 
 
@@ -1861,8 +2011,18 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
     return lines
 
 
+def user_code_block(label: str) -> list[str]:
+    """Return one stable, intentionally empty user-editable Verilog region."""
+    return [
+        f"/*USER CODE BEGIN {label}*/",
+        "",
+        f"/*USER CODE END   {label}*/",
+    ]
+
+
 def render_stub(module: Module, macros: dict[str, str] | None = None) -> str:
     lines = render_module_header(module, macros)
+    lines.extend(["", *user_code_block("before statement")])
     output_ports = [port for port in module.ports if port.direction == "output"]
     if output_ports:
         lines.append("")
@@ -1880,7 +2040,7 @@ def render_stub(module: Module, macros: dict[str, str] | None = None) -> str:
 
 
 def safe_name(text: str) -> str:
-    result = re.sub(r"[^A-Za-z0-9_$]+", "_", text).strip("_").lower()
+    result = re.sub(r"[^A-Za-z0-9_$]+", "_", text).strip("_")
     if not result or result[0].isdigit():
         result = "signal_" + result
     return result
@@ -1933,7 +2093,7 @@ def split_index_marker(reference: Any) -> tuple[str, str | None]:
     match = INDEX_MARKER_RE.fullmatch(text)
     if match is None:
         return text, None
-    return match.group(1).strip(), match.group(2).lower()
+    return match.group(1).strip(), match.group(2)
 
 
 def split_bit_select(reference: Any) -> tuple[str, str | None, int | None]:
@@ -2089,30 +2249,34 @@ def render_integration(
     adapter_assignments: list[Assignment] = []
     used_signals = set(top_ports)
 
+    def indexed_dimension(port: Port) -> Width | None:
+        dimensions = (
+            (*port.packed_dimensions, port.width)
+            if not port.is_interface
+            else port.arrays
+        )
+        return dimensions[0] if dimensions else None
+
     def register_generate_marker(
         child_name: str,
         index: str,
         indexed_port: Port,
         row: int,
-    ) -> None:
+    ) -> int | None:
         spec = generate_specs.setdefault(child_name, GenerateSpec(index))
         if spec.index != index:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: {child_name} 同时使用了 "
                 f"[{spec.index}] 和 [{index}]，无法生成同一个循环"
             )
-            return
-        dimensions = (
-            (*indexed_port.packed_dimensions, indexed_port.width)
-            if not indexed_port.is_interface
-            else indexed_port.arrays
-        )
-        if not dimensions:
-            return
-        first = dimensions[0]
+            return None
+        first = indexed_dimension(indexed_port)
+        if first is None:
+            return None
         extent = evaluate_int_expression(first.default or first.expression)
         if extent is not None:
             spec.extents.append(extent)
+        return extent
 
     def add_assignment(
         target: str,
@@ -2136,7 +2300,6 @@ def render_integration(
         module = modules.get(module_name)
         if module is None:
             return None
-        port_name = port_name.lower()
         port = module.port_map.get(port_name)
         if port is None:
             reporter.error(
@@ -2146,7 +2309,7 @@ def render_integration(
 
     def get_ports(module_name: str, reference: str, row: int) -> list[Port]:
         context = f"集成页签 {sheet.name} 第 {row} 行"
-        reference = normalize_template_text(reference, context, reporter).lower()
+        reference = normalize_template_text(reference, context, reporter)
         matches = list(TEMPLATE_RE.finditer(reference))
         if not matches:
             port = get_port(module_name, reference, row)
@@ -2161,7 +2324,7 @@ def render_integration(
         ports = [
             port
             for port in module.ports
-            if port.template_source == reference.lower()
+            if port.template_source == reference
         ]
         if not ports:
             reporter.error(
@@ -2281,6 +2444,7 @@ def render_integration(
         block: IntegrationBlock,
         port: Port,
         row: int,
+        index: str | None = None,
     ) -> None:
         if block.module_name == top.name:
             reporter.warning(
@@ -2288,12 +2452,28 @@ def render_integration(
                 f"{top.name}.{port.name} 不能通过 NA 创建内部占位信号"
             )
             return
+        if index and port.is_interface:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: interface "
+                f"{block.module_name}.{port.name} 不支持 NA[{index}] generate"
+            )
+            return
         signal_name = unique_name(port.name, used_signals)
+        placeholder_arrays = port.arrays
+        expression = signal_name
+        if index:
+            extent = register_generate_marker(block.module_name, index, port, row)
+            count = extent or 1
+            placeholder_arrays = (
+                Width("literal", str(count), str(count)),
+                *placeholder_arrays,
+            )
+            expression += f"[{index}]"
         wires.append(
             Wire(
                 name=signal_name,
                 width=port.width,
-                arrays=port.arrays,
+                arrays=placeholder_arrays,
                 parameter_map=parameter_maps.get(block.module_name, {}),
                 interface_type=(
                     port.interface_type.rsplit(".", 1)[0]
@@ -2309,18 +2489,23 @@ def render_integration(
         bind(
             block.module_name,
             port,
-            signal_name,
+            expression,
             row,
             requires_todo=True,
         )
+        na_label = f"NA[{index}]" if index else "NA"
         reporter.info(
             f"集成页签 {sheet.name} 第 {row} 行: "
-            f"{block.module_name}.{port.name} 连接到 NA，"
+            f"{block.module_name}.{port.name} 连接到 {na_label}，"
             f"已创建 {signal_name} 占位信号并加入 TODO"
         )
 
     first_group = integration.groups[0]
     top_block = first_group[0]
+    first_group_child_blocks = [
+        block for block in first_group[1:] if not block.anonymous_na
+    ]
+    first_group_na_blocks = [block for block in first_group if block.anonymous_na]
     for row in range(integration.header_row + 1, sheet.max_row + 1):
         top_reference = sheet.cell(row, top_block.port_column)
         top_port_name, top_bit_select, top_bit_index = split_bit_select(
@@ -2329,20 +2514,53 @@ def render_integration(
         top_index: str | None = None
         if top_bit_select is None:
             top_port_name, top_index = split_index_marker(top_reference)
-        row_entries = [
-            (block, *split_index_marker(sheet.cell(row, block.port_column)))
-            for block in first_group[1:]
+        row_entries: list[tuple[IntegrationBlock, str, str | None]] = []
+        row_na_entries: list[tuple[IntegrationBlock, str | None]] = []
+        for block in first_group_child_blocks:
+            reference = clean(sheet.cell(row, block.port_column))
+            if not reference:
+                continue
+            port_name, index = split_index_marker(reference)
+            if is_na_connection(port_name):
+                row_na_entries.append((block, index))
+            else:
+                row_entries.append((block, port_name, index))
+        row_na_entries.extend(
+            (block, split_index_marker(sheet.cell(row, block.port_column))[1])
+            for block in first_group_na_blocks
             if clean(sheet.cell(row, block.port_column))
-        ]
-        if not top_port_name and not row_entries:
+        )
+        row_na_indices = {
+            index for _, index in row_na_entries if index is not None
+        }
+        if not top_port_name and not row_entries and not row_na_entries:
             continue
         if not top_port_name:
+            if not row_entries:
+                reporter.warning(
+                    f"集成页签 {sheet.name} 第 {row} 行: NA 没有可拉出的模块端口"
+                )
+                continue
+            if len(row_na_indices) > 1:
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个 "
+                    f"generate 索引 ({', '.join(sorted(row_na_indices, key=str))})"
+                )
+                continue
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: TOP 端口为空，子模块端口按未连接处理"
             )
             for block, child_port_name, _ in row_entries:
                 for child_port in get_ports(block.module_name, child_port_name, row):
                     validate_sheet_direction(block, child_port, row)
+                    if row_na_entries:
+                        bind_na_placeholder(
+                            block,
+                            child_port,
+                            row,
+                            next(iter(row_na_indices), None),
+                        )
+                        continue
                     expression = (
                         connection_zero_value(
                             child_port, parameter_maps.get(block.module_name)
@@ -2352,6 +2570,16 @@ def render_integration(
                     )
                     bind(block.module_name, child_port, expression, row)
             continue
+        if row_na_entries:
+            na_labels = [
+                f"NA[{index}]" if index else "NA"
+                for _, index in row_na_entries
+            ]
+            reporter.info(
+                f"集成页签 {sheet.name} 第 {row} 行: TOP 端口 "
+                f"{top.name}.{top_port_name} 连接到 {', '.join(na_labels)}，"
+                "保留为顶层观察端口，不查询 NA 所在列的模块端口"
+            )
         expanded = [(top_block, get_ports(top.name, top_port_name, row))]
         expanded.extend(
             (block, get_ports(block.module_name, child_port_name, row))
@@ -2537,15 +2765,16 @@ def render_integration(
 
         for row in range(integration.header_row + 1, sheet.max_row + 1):
             expanded: list[tuple[IntegrationBlock, list[Port]]] = []
-            na_blocks: list[IntegrationBlock] = []
+            na_blocks: list[tuple[IntegrationBlock, str | None]] = []
             for block in group:
-                port_name = clean(sheet.cell(row, block.port_column))
-                if not port_name:
+                reference = clean(sheet.cell(row, block.port_column))
+                if not reference:
                     continue
+                port_name, index = split_index_marker(reference)
                 if is_na_connection(port_name):
-                    na_blocks.append(block)
+                    na_blocks.append((block, index))
                     continue
-                ports = get_ports(block.module_name, port_name, row)
+                ports = get_ports(block.module_name, reference, row)
                 for port in ports:
                     validate_sheet_direction(block, port, row)
                 expanded.append((block, ports))
@@ -2561,7 +2790,21 @@ def render_integration(
                 if len(entries) == 1:
                     block, port = entries[0]
                     if na_blocks:
-                        bind_na_placeholder(block, port, row)
+                        indices = {
+                            index for _, index in na_blocks if index is not None
+                        }
+                        if len(indices) > 1:
+                            reporter.error(
+                                f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个 "
+                                f"generate 索引 ({', '.join(sorted(indices))})"
+                            )
+                            continue
+                        bind_na_placeholder(
+                            block,
+                            port,
+                            row,
+                            next(iter(indices), None),
+                        )
                         continue
                     reporter.warning(
                         f"集成页签 {sheet.name} 第 {row} 行: 内部连接只有 {block.module_name}.{port.name} 一端，按未连接处理"
@@ -2719,6 +2962,7 @@ def render_integration(
         generate_counts[child_name] = (spec.index, count)
 
     lines = render_module_header(top, all_macros)
+    lines.extend(["", *user_code_block("before statement")])
     if wires:
         lines.append("")
         lines.append("    // Internal connections and NA placeholder signals.")
@@ -2808,7 +3052,7 @@ def render_integration(
 
     declared_generate_indices: set[str] = set()
     for child in children:
-        lines.append("")
+        lines.extend(["", *user_code_block(f"before {child.name}")])
         parameter_map = parameter_maps[child.name]
         generate_spec = generate_counts.get(child.name)
         if generate_spec:
@@ -2851,8 +3095,118 @@ def render_integration(
         if generate_spec:
             lines.append("end")
             lines.append("endgenerate")
+        lines.extend(["", *user_code_block(f"after {child.name}")])
     lines.extend(["endmodule", ""])
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class UserCodeRegion:
+    label: str
+    occurrence: int
+    content_start: int
+    content_end: int
+    content: str
+
+
+def parse_user_code_regions(
+    text: str,
+    context: str,
+    reporter: Reporter,
+) -> list[UserCodeRegion] | None:
+    """Parse protected regions, rejecting damaged markers before any overwrite."""
+    markers = list(USER_CODE_MARKER_RE.finditer(text))
+    begin_tokens = text.count("/*USER CODE BEGIN")
+    end_tokens = text.count("/*USER CODE END")
+    matched_begins = sum(match.group(1) == "BEGIN" for match in markers)
+    matched_ends = sum(match.group(1) == "END" for match in markers)
+    if begin_tokens != matched_begins or end_tokens != matched_ends:
+        reporter.error(f"{context}: 用户代码段标记格式损坏，拒绝覆盖文件")
+        return None
+
+    regions: list[UserCodeRegion] = []
+    occurrences: dict[str, int] = {}
+    active: tuple[str, int] | None = None
+    for marker in markers:
+        kind = marker.group(1)
+        label = marker.group(2).strip()
+        if kind == "BEGIN":
+            if active is not None:
+                reporter.error(f"{context}: 用户代码段不允许嵌套，拒绝覆盖文件")
+                return None
+            active = (label, marker.end())
+            continue
+        if active is None:
+            reporter.error(f"{context}: 用户代码段 END 缺少对应 BEGIN，拒绝覆盖文件")
+            return None
+        begin_label, content_start = active
+        if label != begin_label:
+            reporter.error(
+                f"{context}: 用户代码段 BEGIN {begin_label!r} 与 END {label!r} "
+                "不匹配，拒绝覆盖文件"
+            )
+            return None
+        occurrence = occurrences.get(label, 0)
+        occurrences[label] = occurrence + 1
+        regions.append(
+            UserCodeRegion(
+                label,
+                occurrence,
+                content_start,
+                marker.start(),
+                text[content_start : marker.start()],
+            )
+        )
+        active = None
+    if active is not None:
+        reporter.error(
+            f"{context}: 用户代码段 BEGIN {active[0]!r} 缺少对应 END，拒绝覆盖文件"
+        )
+        return None
+    return regions
+
+
+def preserve_user_code(
+    generated: str,
+    existing: str,
+    path: Path,
+    reporter: Reporter,
+) -> str:
+    """Merge protected content from an existing generated file into new output."""
+    old_regions = parse_user_code_regions(existing, str(path), reporter)
+    new_regions = parse_user_code_regions(generated, f"新生成内容 {path.name}", reporter)
+    if old_regions is None or new_regions is None:
+        return generated
+    old_by_key = {
+        (region.label, region.occurrence): region for region in old_regions
+    }
+    new_keys = {(region.label, region.occurrence) for region in new_regions}
+    orphaned = [
+        region
+        for key, region in old_by_key.items()
+        if key not in new_keys and region.content.strip()
+    ]
+    if orphaned:
+        labels = "、".join(
+            f"{region.label}#{region.occurrence + 1}" for region in orphaned
+        )
+        reporter.error(
+            f"{path}: 旧文件中的用户代码段在新结构中已无对应位置 ({labels})，"
+            "拒绝覆盖文件"
+        )
+        return generated
+
+    merged = generated
+    for region in reversed(new_regions):
+        previous = old_by_key.get((region.label, region.occurrence))
+        if previous is None:
+            continue
+        merged = (
+            merged[: region.content_start]
+            + previous.content
+            + merged[region.content_end :]
+        )
+    return merged
 
 
 def generate(
@@ -2895,12 +3249,22 @@ def generate(
         for module in modules.values():
             rendered[module.name] = render_stub(module)
 
+    paths = [output_directory / f"{name.lower()}.v" for name in rendered]
+    merged_contents: list[str] = []
+    for path, content in zip(paths, rendered.values()):
+        if path.is_file():
+            try:
+                existing = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                reporter.error(f"无法读取已有生成文件 {path}: {exc}")
+            else:
+                content = preserve_user_code(content, existing, path, reporter)
+        merged_contents.append(content)
     if reporter.has_errors or (strict and reporter.has_warnings):
         return [], reporter
-    paths = [output_directory / f"{name.lower()}.v" for name in rendered]
     if not check_only:
         output_directory.mkdir(parents=True, exist_ok=True)
-        for path, content in zip(paths, rendered.values()):
+        for path, content in zip(paths, merged_contents):
             temporary = path.with_suffix(path.suffix + ".tmp")
             with temporary.open("w", encoding="utf-8", newline="\n") as stream:
                 stream.write(content)

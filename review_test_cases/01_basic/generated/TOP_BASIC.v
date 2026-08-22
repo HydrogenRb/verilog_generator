@@ -7,10 +7,21 @@ module TOP_BASIC (
     output wire done
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
+/*USER CODE BEGIN before BASIC_CHILD*/
+
+/*USER CODE END   before BASIC_CHILD*/
 BASIC_CHILD U_BASIC_CHILD (
     .clk   (clk ),
     .done  (done),
     .spare (1'b0),
     .debug (    )
 );
+
+/*USER CODE BEGIN after BASIC_CHILD*/
+
+/*USER CODE END   after BASIC_CHILD*/
 endmodule

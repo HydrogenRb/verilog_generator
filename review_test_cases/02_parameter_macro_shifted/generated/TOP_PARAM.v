@@ -11,10 +11,17 @@ module TOP_PARAM #(
     output wire [WIDTH     -1:0] result
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
     // Internal connections and NA placeholder signals.
     // 子模块内部连线及 NA 占位信号。
     wire [WIDTH -1:0] w_bus;
 
+/*USER CODE BEGIN before PRODUCER*/
+
+/*USER CODE END   before PRODUCER*/
 PRODUCER #(
     .WIDTH (WIDTH)
 ) U_PRODUCER (
@@ -23,6 +30,13 @@ PRODUCER #(
     .debug (     )
 );
 
+/*USER CODE BEGIN after PRODUCER*/
+
+/*USER CODE END   after PRODUCER*/
+
+/*USER CODE BEGIN before CONSUMER*/
+
+/*USER CODE END   before CONSUMER*/
 CONSUMER #(
     .WIDTH (WIDTH)
 ) U_CONSUMER (
@@ -30,4 +44,8 @@ CONSUMER #(
     .bus    (w_bus ),
     .result (result)
 );
+
+/*USER CODE BEGIN after CONSUMER*/
+
+/*USER CODE END   after CONSUMER*/
 endmodule

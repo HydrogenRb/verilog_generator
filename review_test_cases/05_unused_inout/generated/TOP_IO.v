@@ -6,8 +6,19 @@ module TOP_IO (
     input wire clk
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
+/*USER CODE BEGIN before IO_CHILD*/
+
+/*USER CODE END   before IO_CHILD*/
 IO_CHILD U_IO_CHILD (
     .clk (clk),
     .pad (   )
 );
+
+/*USER CODE BEGIN after IO_CHILD*/
+
+/*USER CODE END   after IO_CHILD*/
 endmodule

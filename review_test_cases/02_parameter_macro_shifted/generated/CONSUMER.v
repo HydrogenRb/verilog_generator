@@ -10,6 +10,10 @@ module CONSUMER #(
     output wire [WIDTH     -1:0] result
 );
 
+/*USER CODE BEGIN before statement*/
+
+/*USER CODE END   before statement*/
+
 // Module placeholder: drive every output to zero.
 // 模块占位逻辑：所有输出均置零。
 assign result = {WIDTH{1'b0}};

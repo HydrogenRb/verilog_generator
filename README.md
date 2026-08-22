@@ -29,7 +29,7 @@ python .\xlsx2verilog.py .\design.xlsx --spread-value WIDTH "(3+5)"
 
 命令行参数仍全部保留。无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；使用 `↑`、`↓` 移动选项，按 `Enter` 确认，按 `Esc` 返回上级菜单或退出。主菜单包含“生成”“查看”“校验”“严格校验”“扩散变量值”和“退出”，可继续选择 XLSX 和输出目录。工作簿中有多个有效的集成页签时，菜单会再列出“页签名 → TOP 模块名”供选择；只有一个`集成`或`集成_xxx`页签时自动使用，不显示这一级菜单。显式传入 XLSX 或 `--list`、`--check`、`--strict` 等参数时直接按命令行模式执行，不显示菜单；多集成页签工作簿必须通过`--integration 页签名`消除歧义，管道、CI 等非交互环境不会等待输入。修改 XLSX 的 `--spread-value` 是唯一例外：无论从菜单还是 CLI 进入，都必须再次输入 `y` 才会修改。
 
-正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会被原子替换，输出目录内其他文件不会被删除。
+正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；重定向到文件或 CI 时自动关闭 ANSI 颜色。
 
 ## 文件顶部配置
 
@@ -54,11 +54,11 @@ ENABLE_CONDITIONAL_BLOCKS = True
 | `端口名` | 合法的 Verilog 标识符；同一模块中的重复名称合并为同一个物理端口 |
 | `位宽` | packed 位宽；支持正整数、整体带括号的安全整数表达式、宏（如 `` `DFT_BUS``）、parameter（如 `DATA_WIDTH`）、由任意顶层 `*` 分隔的多维 packed array，或 interface modport（如 `sky_cs_if.mst`） |
 | `数值` | 位宽宏或 parameter 的默认值；支持整数表达式；位宽为空时 `1` 表示标量 |
-| `i/o` | 支持 `i/o/io`、`input/output/inout`、`输入/输出/双向`；interface 行使用 `NA`/`N/A`/`interface`；单元格为空时暂按 `inout` 生成，并在代码中加入 TODO 备注 |
+| `i/o` | 支持 `i/o/io`、`input/output/inout`、`输入/输出/双向`；`inout`声明不附加`wire`；interface 行使用 `NA`/`N/A`/`interface`；单元格为空时暂按 `inout` 生成，并在代码中加入 TODO 备注 |
 | `数组`（可选） | 端口名之后的 unpacked array 深度；任意顶层 `*` 表示多维；别名为 `数组维度`、`数组深度`、`array`、`depth` |
 | `数组数值`（可选） | 数组深度宏或 parameter 的默认值；别名为 `数组默认值`、`arrayvalue`、`array_default`、`depthdefault`、`depth_default` |
 
-模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。Excel 中的页签名、模块名和端口名均不限制大小写；生成时模块名、实例名、宏和 parameter 规范为大写，所有普通信号/端口名规范为小写。规范后重名会报错。
+模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。生成时模块名、实例名、宏和 parameter 规范为大写，输出文件名规范为小写；普通信号和端口名严格保持 XLSX 中的大小写。Verilog 标识符大小写敏感，因此`Data`和`data`是两个不同信号，集成页签也必须使用与模块页完全相同的拼写。
 
 - 宏位宽会直接生成 `` `define``，例如 `` `define DFT_BUS 64``；按项目约定不添加 `` `ifndef/`endif`` 保护。
 - 非反引号符号位宽会生成模块 parameter。
@@ -66,11 +66,11 @@ ENABLE_CONDITIONAL_BLOCKS = True
 - 重复名称可以出现在多行或不同模块中。单个 Verilog 模块只声明一次同名端口；同一模块后续同名行合并到第一次定义。
 - 普通模块页签中的所有 output 会在模块内部连续赋零，方便生成结果直接通过基础语法检查。
 
-分类为`parameter`（也接受`parameters`、`参数`、`参数定义`）时，该分类内的行不是端口，而是当前模块的显式 parameter 声明：`端口名`列填写 parameter 名，`数值`列填写默认值，`位宽`和`i/o`可以留空。分类会像普通分类一样向后续空分类行继承；名称统一转成大写，也支持`DW_{{i}}`配合`i的列表是{sig1,sig2,sig3}`和`数值={11,12,13}`逐项展开。显式声明可为后续端口位宽提供默认值，重复声明或与端口引用给出的默认值冲突时会报错。
+分类为`parameter`（也接受`parameters`、`参数`、`参数定义`）时，该分类内的行不是端口，而是当前模块的显式 parameter 声明：`端口名`列填写 parameter 名，`数值`列填写默认值，`位宽`和`i/o`可以留空。分类会像普通分类一样向后续空分类行继承；名称统一转成大写，也支持`DW_{{i}}`配合`i的列表是{sig1,sig2,sig3}`和`数值={11,12,13}`逐项展开。默认值既可以是安全整数表达式，也可以是完整宏引用，例如`LANE_NUM`配数值`` `GLB_PARAMETER``会生成``parameter integer LANE_NUM = `GLB_PARAMETER``。显式声明可为后续端口位宽提供默认值，重复声明或与端口引用给出的默认值冲突时会报错。
 
 ### 命名模板端口（`{{i}}`、`{{j}}`、`{{z}}` 等）
 
-`端口名`、`位宽`和数组维度中可使用任意合法变量名的 `{{变量名}}`，不再限定为 `i`。同一行的任意备注单元格中用单层花括号给出对应取值，如 `j的范围是{sig1,sig2,sig3}` 或 `i是{a,b}`；也支持 `i为{...}`、`i={...}`、`i:{...}` 和 `i in {...}`。变量列表会向同一“分类”的后续空分类行继承。例如：
+`端口名`、`位宽`和数组维度中可使用任意合法变量名的 `{{变量名}}`，不再限定为 `i`。同一行的任意备注单元格中用单层花括号给出对应取值，如 `j的范围是{sig1,sig2,sig3}` 或 `i是{a,b}`；也支持 `i为{...}`、`i={...}`、`i:{...}` 和 `i in {...}`。连续整数可简写为闭区间，例如`z=0:31`等价于列出`0`到`31`共 32 项，`z=31:0`则按降序展开；单个范围最多 4096 项。变量列表会向同一“分类”的后续空分类行继承。例如：
 
 ```text
 端口名: test_bus_{{i}}_dat
@@ -78,7 +78,7 @@ ENABLE_CONDITIONAL_BLOCKS = True
 备注:    i的列表是{sig1,sig2,sig3}
 ```
 
-会展开为 `test_bus_sig1_dat`、`test_bus_sig2_dat`和 `test_bus_sig3_dat`，对应宏为 `` `DW_SIG1``～`` `DW_SIG3``。模板生成的最终信号标识符统一转换为小写，展开后的反引号宏标识符统一转换为大写；模板取值本身仍用于跨模块逐项对齐。若模板宏/parameter 的`数值`无法可靠计算，脚本输出 warning 并使用 `114` 作为明确的待确认占位值。集成页签中保留原始 `{{i}}` 写法即可，脚本会按模块已展开端口逐项连接。
+会展开为 `test_bus_sig1_dat`、`test_bus_sig2_dat`和 `test_bus_sig3_dat`，对应宏为 `` `DW_SIG1``～`` `DW_SIG3``。模板生成的信号名和取值大小写均原样保留，展开后的反引号宏标识符仍统一转换为大写；模板取值同时用于跨模块逐项、区分大小写地对齐。若模板宏/parameter 的`数值`无法可靠计算，脚本输出 warning 并使用 `114` 作为明确的待确认占位值。集成页签中保留原始 `{{i}}` 写法即可，脚本会按模块已展开端口逐项连接。
 
 变量按名称绑定：`{{j}}` 只使用 `j的范围是{...}`，不会自动套用 `i` 的列表。同一端口名包含多个变量时采用笛卡尔积，例如 `bus_{{j}}_{{z}}` 配合 `j={a,b}`、`z={x,y}` 会生成 `bus_a_x`、`bus_a_y`、`bus_b_x`、`bus_b_y`。如果位宽或数组维度引用了未被端口名绑定的其他变量，脚本不会猜测变量之间的关系，而是 warning 后使用 `114`；如果端口名本身的变量没有取值列表，则报错且不生成该行。
 
@@ -153,6 +153,26 @@ CHILD U_CHILD (
 );
 ```
 
+### 可持久化用户代码段
+
+每个模块端口声明后都有`before statement`代码段；集成 TOP 在每个子模块实例块前后还分别生成`before <MODULE>`和`after <MODULE>`代码段：
+
+```verilog
+/*USER CODE BEGIN before statement*/
+// 可以在这里填写声明或逻辑
+/*USER CODE END   before statement*/
+
+/*USER CODE BEGIN before CHILD*/
+// 可以在这里填写实例前逻辑
+/*USER CODE END   before CHILD*/
+CHILD U_CHILD (...);
+/*USER CODE BEGIN after CHILD*/
+// 可以在这里填写实例后逻辑
+/*USER CODE END   after CHILD*/
+```
+
+重新生成时，脚本按“标签 + 同名标签出现序号”提取旧文件中 BEGIN/END 之间的原文，再合入新生成结构。不要编辑、删除或嵌套标记行；若标记损坏、BEGIN/END 标签不一致，或包含实际用户内容的旧代码段在新结构中失去对应位置，本次生成会报 error 并在写文件前整体停止，以免静默丢失用户代码。`--check`也会执行相同的保护校验。
+
 生成的内部 wire、位宽适配和自动 assign 代码块均同时输出英文与中文说明，便于中英文项目成员直接阅读生成文件。
 
 模块端口按“分类”分组，每组生成三行标题。合并单元格在首行给出的分类会由后续连续端口继承；完全没有分类的连续端口使用 `no group`：
@@ -171,7 +191,7 @@ CHILD U_CHILD (
 
 页签名推荐使用`集成`或`集成_xxx`，例如`集成_riscv_top`、`集成_debug_top`。脚本会按工作簿顺序自动发现这些页签；为兼容历史工作簿，在没有这种名称时仍保留原有的内容结构识别。只有一个有效候选时直接生成，无论名称是`集成`还是`集成_xxx`；有多个候选时，终端 GUI 会要求选择，CLI 则使用`--integration`指定。一次运行只解析并生成所选集成层次引用的 TOP 和子模块，不会混入其他集成页签对应的模块。
 
-内容结构上，同一行出现至少两组相邻的 `端口名`、`i/o` 表头时，该页签被识别为有效集成页签。每组的模块名位于 `端口名` 上方，既可以写 `RISCV_CORE`，也可以写 `module:RISCV_CORE`、`module：RISCV_CORE`；前缀不进入生成的模块名和实例名。若后续模块块已有模块名和端口数据但漏写重复的`端口名/i/o`表头，脚本也会恢复该块；缺失的集成方向按模块页定义校验并记录 info。
+内容结构上，同一行出现至少两组相邻的 `端口名`、`i/o` 表头时，该页签被识别为有效集成页签。每组的模块名位于 `端口名` 上方，既可以写 `RISCV_CORE`，也可以写 `module:RISCV_CORE`、`module：RISCV_CORE`；前缀不进入生成的模块名和实例名。若后续模块块已有模块名和端口数据但漏写重复的`端口名/i/o`表头，脚本也会恢复该块；缺失的集成方向按模块页定义校验并记录 info。唯一例外是作为连接终点的匿名 `NA` 列：它可以紧跟某个正常的`端口名/i/o`列对，不写模块名，也不写自己的表头。
 
 连接区由一个或多个空列隔开：
 
@@ -182,7 +202,7 @@ CHILD U_CHILD (
 5. 未由子模块 output/inout 驱动的 TOP output 会在 TOP 内赋零；该 TOP output 可以同时连接一个或多个子模块 input，并以置零后的同一信号驱动它们。TOP input 始终只作为外部输入，不在模块内赋值。
 6. TOP 端口引用末尾的 `[i]` 是 generate 指示符。脚本去掉指示符查找真实端口，在实例连接表达式中保留 `[i]`，并为对应子模块生成`genvar i; generate`和`for (i = 0; ...)`。能从首维默认值解析次数时输出 info；同一实例涉及多个范围时采用避免越界的最小值；完全无法解析时 warning 并使用 `< 1`。
 7. TOP 端口可以显式写常量 bit select，例如 5 bit 的`n_rst`写成`n_rst[0]`连接子模块端口。脚本校验索引未越界，并原样保留`.n_rst (n_rst[0])`；显式选择优先于自动位宽适配。
-8. 子模块互连区的一端可以写`NA`或`N/A`。若另一端是子模块 input，TOP 内创建同宽`reg`；若另一端是 output/inout，则创建`wire`。实例仍以占位信号连接，并在该连接行附加`//TODO:本信号期望有逻辑功能，请完成`，提醒后续补充真实逻辑。这一规则与模块定义页中用`i/o=NA`表示 interface 是两种不同语义。
+8. 子模块互连区的一端可以写`NA`或`N/A`。若另一端是子模块 input，TOP 内创建同宽`reg`；若另一端是 output/inout，则创建`wire`。实例仍以占位信号连接，并在该连接行附加`//TODO:本信号期望有逻辑功能，请完成`，提醒后续补充真实逻辑。写成`NA[i]`时，真实端模块生成`for (i = ...)`实例，工具为占位信号增加一维并连接`placeholder[i]`，因此不会把完整端口误接成单 bit。`NA`/`NA[i]`这一端允许完全省略模块名、`端口名`和`i/o`表头：把值写在真实端`i/o`右侧的下一列即可。为避免误判备注列，该匿名列的所有非空值必须都是`NA`、`N/A`或其`[索引]`形式。在第一个`TOP ↔ 子模块`连接区，TOP 端口的对端也允许写`NA`：该行保留为顶层观察端口，不再把`NA`当成所在子模块的端口名查询；模板端口仍正常展开，例如`dyadic_bus_out_{{z}}[i]`生成三个 TOP 端口。没有真实子模块驱动时不凭空生成实例，TOP output 按第 5 条规则赋零。这一规则与模块定义页中用`i/o=NA`表示 interface 是两种不同语义。
 
 列位置可以扩展，不限于示例中的 B～Y；关键是每个区内的模块组相邻、不同区之间至少留一个空列。脚本同时检查集成页签的 `i/o` 与模块定义是否一致、多驱动、缺失端口及位宽差异。
 
@@ -193,7 +213,7 @@ CHILD U_CHILD (
 - parameter 参与的位宽不做“位宽不匹配”判断或固定切片，统一参数连接交给 SystemVerilog elaboration 解析。
 - 宏只在集成 TOP 文件定义。上下层或兄弟模块的同名宏若给出不同默认值会报 error，不再猜测优先级；错误会逐项列出“页签名称 + 该页签中的数值”，便于直接定位冲突来源。子模块桩文件不重复定义这些宏。
 - 可确定的固定/宏位宽不一致仍输出 warning，但 V2 会生成可读的适配：接收端较窄时只接低位（单 bit 为 `[0]`），接收端较宽时高位补零；内部网络按最大位宽建线，窄驱动未覆盖的高位 assign 为零。数组、多维 packed 和 interface 只在能够安全确定语义时适配，否则保留形状诊断供人工处理。
-- `Reporter` 现在有 `info`、`warning`、`error` 三级。`--strict` 只把 warning 视为失败；info 用于记录模板子集、参数上提、自动未连接等确定性的生成决策。
+- `Reporter` 有 `error`、`warning`、`info` 三级，输出时按严重程度分组而非按产生时间混排，并在交互终端使用红、黄、青色。`--strict` 只额外把 warning 视为失败；info 用于记录模板子集、参数上提、自动未连接等确定性的生成决策。
 
 任意页签的表头行中若存在名为 `修改` 或 `修改列` 的列，读取 XLSX 时会先整列移除，再执行任何表头、模板、分类、方向和连接解析。该列可以插在业务列之间，其中所有内容均不会影响生成结果。
 
@@ -229,6 +249,8 @@ warning[RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是�
 
 `review_test_cases/12_test_for_techreview2/techreview2version2.xlsx`覆盖本轮新增规格：显式 parameter 分类、子模块端口连接 NA、常量 bit select、generate 排版和带页签来源的宏冲突诊断。原件刻意保留四组宏冲突，预期直接校验失败；自动测试在临时副本上统一冲突值后检查 4 个小写 Verilog 文件，不修改原始 XLSX。
 
+`review_test_cases/13_test_for_techreview3/techreview2version3.xlsx`覆盖用户代码段、`NA[i]`内部 generate、`z=0:31`范围展开和`RISCV_CRG`的 32 个模板端口。该原件继承四组刻意保留的宏冲突，预期直接校验失败；`tests/test_version2_review3.py`在临时副本上统一宏值后生成 5 个模块，并另外验证信号大小写、无`wire`的 inout、宏 parameter 默认值、用户代码保留/损坏保护及彩色分组诊断。样例中的`CLK_BUS_0`～`CLK_BUS_31`没有提供数值，因此按既有模板规则 warning 并使用 114 占位，`G_RISCV_CRG`循环次数也暂为 114；补齐这些 parameter 默认值后，循环次数会按安全最小值重新计算。`z=0:31`只负责展开 32 个端口，不替代`[i]`的循环范围。
+
 ## 可视化附录工具
 
 `appendix/` 提供两个完全离线的本地 Web GUI。它们只使用 Python 标准库、只绑定 `127.0.0.1`，并直接复用 `xlsx2verilog.py` 的解析与校验逻辑。
@@ -258,11 +280,12 @@ python .\tests\run_tech_review2_review.py
 python .\xlsx2verilog.py .\review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --check --strict
 python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\01_core_layer.xlsx --check --strict
 python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xlsx --check --strict
-# 以下两个原件刻意保留跨模块宏冲突，预期返回 2
+# 以下三个原件刻意保留跨模块宏冲突，预期返回 2
 python .\xlsx2verilog.py .\review_test_cases\09_version_2\test.xlsx --check
 python .\xlsx2verilog.py .\review_test_cases\10_special_case\review2case.xlsx --check
+python .\xlsx2verilog.py .\review_test_cases\13_test_for_techreview3\techreview2version3.xlsx --check
 # 扩散后的最小样例预期返回 0
 python .\xlsx2verilog.py .\temp_test\variable_diffusion_after.xlsx --check
 ```
 
-测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。V2 两轮新增规则分别由`tests/test_version2_review1.py`和`tests/test_version2_review2.py`覆盖；`10_special_case`与`12_test_for_techreview2`原文件预期因宏冲突失败，不能把它们当作 strict 成功样例。PRD 位于 `doc/PRD/`，代码维护文档及带时间戳的检视报告位于`doc/TechReport/`。
+测试同样只使用标准库。除直接使用仓库中的 `test.xlsx` 外，`run_review_matrix.py` 还会创建 6 种不同结构的 XLSX，逐一调用本工具、立即静态检视生成结果，并在 `review_test_cases/检视报告.md` 中将发现归类。V2 三轮新增规则分别由`tests/test_version2_review1.py`、`tests/test_version2_review2.py`和`tests/test_version2_review3.py`覆盖；`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能把它们当作 strict 成功样例。PRD 位于 `doc/PRD/`，代码维护文档及本轮[`V2 TechReview3 实现与代码检视报告`](doc/TechReport/V2_TechReview3实现与代码检视报告_20260822_102200.md)位于`doc/TechReport/`。
