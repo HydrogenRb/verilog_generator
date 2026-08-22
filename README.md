@@ -2,6 +2,8 @@
 
 `xlsx2verilog.py` 读取 Excel 中的模块定义和集成关系，为每个模块生成一个 `.v` 文件。脚本只依赖 Python 3.10+ 标准库，目标机器不需要联网，也不需要安装 `openpyxl`。
 
+当前能力的完整索引见[功能特性表](doc/功能特性表.md)。
+
 ## 快速使用
 
 ```powershell
@@ -55,7 +57,7 @@ ENABLE_CONDITIONAL_BLOCKS = True
 | `位宽` | packed 位宽；支持正整数、整体带括号的安全整数表达式、宏（如 `` `DFT_BUS``）、parameter（如 `DATA_WIDTH`）、由任意顶层 `*` 分隔的多维 packed array，或 interface modport（如 `sky_cs_if.mst`） |
 | `数值` | 位宽宏或 parameter 的默认值；支持整数表达式；位宽为空时 `1` 表示标量 |
 | `i/o` | 支持 `i/o/io`、`input/output/inout`、`输入/输出/双向`；`inout`声明不附加`wire`；interface 行使用 `NA`/`N/A`/`interface`；单元格为空时暂按 `inout` 生成，并在代码中加入 TODO 备注 |
-| `数组`（可选） | 端口名之后的 unpacked array 深度；任意顶层 `*` 表示多维；别名为 `数组维度`、`数组深度`、`array`、`depth` |
+| `数组`（可选） | 信号的外层 packed 数组维度；生成时统一放在端口名左侧、位宽之前；任意顶层 `*` 表示多维；别名为 `数组维度`、`数组深度`、`array`、`depth` |
 | `数组数值`（可选） | 数组深度宏或 parameter 的默认值；别名为 `数组默认值`、`arrayvalue`、`array_default`、`depthdefault`、`depth_default` |
 
 模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。生成时模块名、实例名、宏和 parameter 规范为大写，输出文件名规范为小写；普通信号和端口名严格保持 XLSX 中的大小写。Verilog 标识符大小写敏感，因此`Data`和`data`是两个不同信号，集成页签也必须使用与模块页完全相同的拼写。
@@ -122,18 +124,18 @@ ENABLE_CONDITIONAL_BLOCKS = True
 | `DATA_WIDTH` | `32` | `parameter integer DATA_WIDTH = 32`，端口为 `[DATA_WIDTH -1:0]` | 单个 parameter |
 | `` `LANE_NUM*DATA_WIDTH`` | `4*32` | ``[`LANE_NUM -1:0][DATA_WIDTH -1:0] sig`` | 无论乘号是否带空格，都按两个 packed 维度解释 |
 | `TOTAL_WIDTH` | `(4*32)` | `[TOTAL_WIDTH -1:0] sig` | 括号使默认值保持单维，计算为 128 |
-| `DATA_WIDTH`，`数组=DEPTH` | `32`，`数组数值=4` | `input wire [DATA_WIDTH -1:0] sig [DEPTH -1:0]` | packed 元素宽度加 unpacked 数组深度 |
+| `DATA_WIDTH`，`数组=DEPTH` | `32`，`数组数值=4` | `input wire [DEPTH -1:0][DATA_WIDTH -1:0] sig` | 数组维度在最左侧，元素位宽紧随其后 |
 | `sky_bus_if.mst` | 空白 | `sky_bus_if.mst sig` | interface modport，不生成 `wire` |
 
 复杂项目示例：若需要 4 lane、每 lane 32 bit 的二维 packed 端口，应写 `` `LANE_NUM*DATA_WIDTH`` 和数值 `4*32`。若需要单根 128 bit 扁平总线，应使用单独的 `TOTAL_WIDTH`，数值写 `128` 或 `(4*32)`。不确定的模板位宽会 warning 并使用 `[114 -1:0]` 作为待确认占位值。
 
-`位宽` 描述每个元素的 packed width，`数组` 描述端口名之后的第二维 unpacked depth。例如 `DATA_WIDTH` 的数值为 `32`、`DEPTH` 的数组数值为 `4` 时生成：
+`位宽`描述每个元素的 packed width，`数组`描述位于其外侧的 packed dimensions。所有普通信号维度统一位于名称左侧，顺序是“数组维度 → 位宽中的多维因子 → 最终元素位宽”。例如 `DATA_WIDTH` 的数值为 `32`、`DEPTH` 的数组数值为 `4` 时生成：
 
 ```systemverilog
-input wire [DATA_WIDTH -1:0] data [DEPTH -1:0]
+input wire [DEPTH -1:0][DATA_WIDTH -1:0] data
 ```
 
-未连接的数组 input 使用 `'{default:'0}` 接零；普通模块及未驱动 output 的数组桩使用嵌套 `generate for` 逐元素赋零。多维端口、数组赋值和 interface 均属于 SystemVerilog 语法：生成文件仍使用 `.v` 扩展名，仿真、综合和 lint 工具必须显式启用 SystemVerilog 模式。
+未连接的多维 input 使用`'0`接零；普通模块及未驱动 output 也直接使用整信号`assign signal = '0`，不再为置零生成逐元素循环。多维 packed 端口和 interface 属于 SystemVerilog 语法：生成文件仍使用 `.v` 扩展名，仿真、综合和 lint 工具必须显式启用 SystemVerilog 模式。interface 实例数组受 SystemVerilog 语法限制，若使用则仍只能写在 interface 实例名右侧；普通 input/output/inout/wire 不存在这一例外。
 
 ### Interface
 
@@ -141,7 +143,7 @@ input wire [DATA_WIDTH -1:0] data [DEPTH -1:0]
 
 ## 生成代码格式
 
-生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；packed 范围按维度建立独立列，每一维的左方括号固定，数字、参数名或宏名紧跟 `[` 并左对齐，所需空格放在表达式与减号之间，使该维的 `-1:0]` 仍然纵向对齐，第二维及后续维度使用相同规则；所有生成的 `-1:0` 前至少保留一个空格，便于 gvim 搜索。unpacked 范围的右方括号使用独立字段对齐；同一组宏定义的值、parameter 名、wire 名和 assign 等号分别对齐；模块实例声明从第 1 列开始，参数连接和端口连接只缩进 4 个空格，左、右圆括号均纵向对齐。generate 实例连接中的索引另成一列，例如`in1     [i]`与`sig_in1 [i]`的`[i]`对齐。所有 generate 均先声明`genvar i;`，再进入`generate`并使用`for (i = ...)`。模块级 `assign` 和对应说明注释从第 1 列开始，数组 generate 内部的 `assign` 仍按循环层级缩进。模块主体结束后直接生成 `endmodule`，不在其前方保留空白行。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
+生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；普通信号的全部 packed 范围都在名称左侧并按维度建立独立列，每一维的左方括号固定，数字、参数名或宏名紧跟 `[` 并左对齐，所需空格放在表达式与减号之间，使该维的 `-1:0]` 仍然纵向对齐，第二维及后续维度使用相同规则；所有生成的 `-1:0` 前至少保留一个空格，便于 gvim 搜索。同一组宏定义的值、parameter 名、wire 名和 assign 等号分别对齐；模块实例声明从第 1 列开始，参数连接和端口连接只缩进 4 个空格，左、右圆括号均纵向对齐。generate 实例连接中的索引另成一列，例如`in1     [i]`与`sig_in1 [i]`的`[i]`对齐。所有实例 generate 均先声明`genvar i;`，再进入`generate`并使用`for (i = ...)`。模块级 `assign` 和对应说明注释从第 1 列开始。模块主体结束后直接生成 `endmodule`，不在其前方保留空白行。不同代码块不强求全局列宽。该格式只改善可读性，不改变端口顺序或连接语义。
 
 ```verilog
 input wire [`SHORT     -1:0][`LANE    -1:0] matrix_a,
@@ -202,7 +204,7 @@ CHILD U_CHILD (...);
 5. 未由子模块 output/inout 驱动的 TOP output 会在 TOP 内赋零；该 TOP output 可以同时连接一个或多个子模块 input，并以置零后的同一信号驱动它们。TOP input 始终只作为外部输入，不在模块内赋值。
 6. TOP 端口引用末尾的 `[i]` 是 generate 指示符。脚本去掉指示符查找真实端口，在实例连接表达式中保留 `[i]`，并为对应子模块生成`genvar i; generate`和`for (i = 0; ...)`。能从首维默认值解析次数时输出 info；同一实例涉及多个范围时采用避免越界的最小值；完全无法解析时 warning 并使用 `< 1`。
 7. TOP 端口可以显式写常量 bit select，例如 5 bit 的`n_rst`写成`n_rst[0]`连接子模块端口。脚本校验索引未越界，并原样保留`.n_rst (n_rst[0])`；显式选择优先于自动位宽适配。
-8. 子模块互连区的一端可以写`NA`或`N/A`。若另一端是子模块 input，TOP 内创建同宽`reg`；若另一端是 output/inout，则创建`wire`。实例仍以占位信号连接，并在该连接行附加`//TODO:本信号期望有逻辑功能，请完成`，提醒后续补充真实逻辑。写成`NA[i]`时，真实端模块生成`for (i = ...)`实例，工具为占位信号增加一维并连接`placeholder[i]`，因此不会把完整端口误接成单 bit。`NA`/`NA[i]`这一端允许完全省略模块名、`端口名`和`i/o`表头：把值写在真实端`i/o`右侧的下一列即可。为避免误判备注列，该匿名列的所有非空值必须都是`NA`、`N/A`或其`[索引]`形式。在第一个`TOP ↔ 子模块`连接区，TOP 端口的对端也允许写`NA`：该行保留为顶层观察端口，不再把`NA`当成所在子模块的端口名查询；模板端口仍正常展开，例如`dyadic_bus_out_{{z}}[i]`生成三个 TOP 端口。没有真实子模块驱动时不凭空生成实例，TOP output 按第 5 条规则赋零。这一规则与模块定义页中用`i/o=NA`表示 interface 是两种不同语义。
+8. 子模块互连区的一端可以写`NA`或`N/A`。无论另一端是 input、output 还是 inout，TOP 内的普通占位信号都统一创建为同形状`wire`，不再生成`reg`。实例仍以占位信号连接，并在该连接行附加`//TODO:本信号期望有逻辑功能，请完成`，提醒后续补充真实逻辑。写成`NA[i]`时，真实端模块生成`for (i = ...)`实例，工具为占位信号在名称左侧增加一维并连接`placeholder[i]`，因此不会把完整端口误接成单 bit。`NA`/`NA[i]`这一端允许完全省略模块名、`端口名`和`i/o`表头：把值写在真实端`i/o`右侧的下一列即可。为避免误判备注列，该匿名列的所有非空值必须都是`NA`、`N/A`或其`[索引]`形式。在第一个`TOP ↔ 子模块`连接区，TOP 端口的对端也允许写`NA`：该行保留为顶层观察端口，不再把`NA`当成所在子模块的端口名查询；模板端口仍正常展开，例如`dyadic_bus_out_{{z}}[i]`生成三个 TOP 端口。没有真实子模块驱动时不凭空生成实例，TOP output 按第 5 条规则赋零。这一规则与模块定义页中用`i/o=NA`表示 interface 是两种不同语义。
 
 列位置可以扩展，不限于示例中的 B～Y；关键是每个区内的模块组相邻、不同区之间至少留一个空列。脚本同时检查集成页签的 `i/o` 与模块定义是否一致、多驱动、缺失端口及位宽差异。
 

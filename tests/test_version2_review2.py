@@ -115,7 +115,7 @@ class Version2TechReview2Tests(unittest.TestCase):
                     rf"parameter integer {name}\s+= {value}",
                 )
 
-            self.assertRegex(top, r"(?m)^\s*reg\s+\[DW_SIG3\s+-1:0\]\s+ready_to_process;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[DW_SIG3\s+-1:0\]\s+ready_to_process;$")
             self.assertRegex(top, r"(?m)^\s*wire\s+\[DW_SIG2\s+-1:0\]\s+need_to_solve;$")
             self.assertRegex(
                 top,

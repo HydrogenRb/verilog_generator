@@ -366,7 +366,7 @@ class GenerationTests(unittest.TestCase):
             self.assertEqual(len(parameter_lines), 2)
             self.assertEqual(len({line.rindex(")") for line in parameter_lines}), 1)
 
-    def test_unpacked_array_declarations_connections_and_zero_drives(self) -> None:
+    def test_array_dimensions_are_packed_left_and_zero_drives_are_direct(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workbook = root / "arrays.xlsx"
@@ -433,32 +433,23 @@ class GenerationTests(unittest.TestCase):
 
             self.assertRegex(
                 top,
-                r"output wire\s+\[DATA_WIDTH\s+-1:0\]\s+monitor\s+\[DEPTH\s+-1:0\]",
+                r"output wire\s+\[DEPTH\s+-1:0\]\[DATA_WIDTH\s+-1:0\]\s+monitor",
             )
             self.assertRegex(
                 source,
-                r"output wire\s+\[DATA_WIDTH\s+-1:0\]\s+data\s+\[DEPTH\s+-1:0\]",
+                r"output wire\s+\[DEPTH\s+-1:0\]\[DATA_WIDTH\s+-1:0\]\s+data",
             )
             self.assertRegex(
                 destination,
-                r"input wire\s+\[DATA_WIDTH\s+-1:0\]\s+data\s+\[DEPTH\s+-1:0\]",
+                r"input wire\s+\[DEPTH\s+-1:0\]\[DATA_WIDTH\s+-1:0\]\s+data",
             )
             self.assertRegex(
                 top,
-                r"wire\s+\[DATA_WIDTH\s+-1:0\]\s+w_data\s+\[DEPTH\s+-1:0\];",
+                r"wire\s+\[DEPTH\s+-1:0\]\[DATA_WIDTH\s+-1:0\]\s+w_data;",
             )
-            self.assertRegex(
-                top, r"(?m)^    \.spare \('\{default:'0\}\s*\)$"
-            )
-            self.assertIn(
-                "genvar gen_zero_data;\ngenerate\n"
-                "for (gen_zero_data = 0; gen_zero_data < DEPTH; "
-                "gen_zero_data = gen_zero_data + 1) begin : g_zero_data",
-                source,
-            )
-            self.assertIn(
-                "assign data[gen_zero_data] = {DATA_WIDTH{1'b0}};", source
-            )
+            self.assertRegex(top, r"(?m)^    \.spare \('0\s*\)$")
+            self.assertRegex(source, r"(?m)^assign data\s+= '0;$")
+            self.assertNotIn("gen_zero_data", source)
             self.assertTrue(
                 destination.endswith("/*USER CODE END   before statement*/\nendmodule\n")
             )
@@ -604,7 +595,7 @@ class GenerationTests(unittest.TestCase):
             )
             self.assertRegex(
                 text,
-                r"output wire\s+\[8\s+-1:0\]\s+cube\s+\[`A\s+-1:0\] \[`B\s+-1:0\]",
+                r"output wire\s+\[`A\s+-1:0\]\[`B\s+-1:0\]\[8\s+-1:0\]\s+cube",
             )
             self.assertRegex(text, r"\[8\s+-1:0\]")
 
@@ -660,9 +651,8 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(text, r"(?m)^`define ROWS\s+2$")
             self.assertRegex(text, r"(?m)^`define COLS\s+8$")
             self.assertRegex(text, r"(?m)^\s*assign matrix\s+= '0;$")
-            self.assertIn(
-                "assign cube[gen_zero_cube_0][gen_zero_cube_1] = 8'b0;", text
-            )
+            self.assertRegex(text, r"(?m)^assign cube\s+= '0;$")
+            self.assertNotIn("gen_zero_cube", text)
             self.assertTrue(any("占位值 114" in item.message for item in reporter.items))
 
     def test_named_templates_cartesian_product_and_missing_io_note(self) -> None:

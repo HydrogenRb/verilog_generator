@@ -76,8 +76,8 @@ class Version2TechReview3Tests(unittest.TestCase):
             top = (root / "generated" / "riscv_top.v").read_text(encoding="utf-8")
             self.assertRegex(
                 top,
-                r"wire\s+\[CLK_BUS_0\s+-1:0\]\s+high_clk_after_pll_0\s+"
-                r"\[114\s+-1:0\];",
+                r"wire\s+\[114\s+-1:0\]\[CLK_BUS_0\s+-1:0\]\s+"
+                r"high_clk_after_pll_0;",
             )
             self.assertRegex(
                 top,
@@ -219,12 +219,16 @@ class Version2TechReview3Tests(unittest.TestCase):
                 ("`APB_1", "4"),
                 ("`LANE_NUM", "5"),
             ):
-                diffuse_variable_value(
-                    workbook,
-                    variable,
-                    value,
-                    confirm=lambda _prompt: "y",
-                )
+                try:
+                    diffuse_variable_value(
+                        workbook,
+                        variable,
+                        value,
+                        confirm=lambda _prompt: "y",
+                    )
+                except ValueError as exc:
+                    if "没有需要修改的数值单元格" not in str(exc):
+                        raise
 
             paths, reporter = generate(workbook, root / "generated")
             self.assertFalse(reporter.has_errors)
@@ -311,10 +315,10 @@ class Version2TechReview3Tests(unittest.TestCase):
                 {"top.v", "child.v", "other.v"},
             )
             text = (root / "generated" / "top.v").read_text(encoding="utf-8")
-            self.assertRegex(text, r"(?m)^\s*reg\s+sig1\s*;")
+            self.assertRegex(text, r"(?m)^\s*wire\s+sig1\s*;")
             self.assertRegex(
                 text,
-                r"(?m)^\s*reg\s+\[4\s+-1:0\]\s+lanes\s+\[4\s+-1:0\];",
+                r"(?m)^\s*wire\s+\[4\s+-1:0\]\[4\s+-1:0\]\s+lanes;",
             )
             self.assertRegex(
                 text,

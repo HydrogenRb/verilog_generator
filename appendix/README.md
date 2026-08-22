@@ -50,7 +50,7 @@ xvlink_core.py
   └─ OOXML 集成页签写入 → generate(check_only=True)
 ```
 
-- `model.modules[].ports[]` 是从主解析器导出的只读端点，ID 为 `module:port`，带 packed/unpacked、interface、模板、条件、分类和源行。
+- `model.modules[].ports[]` 是从主解析器导出的只读端点，ID 为 `module:port`，带位宽维度、XLSX 数组维度、interface、模板、条件、分类和源行；普通信号生成时两类维度都位于名称左侧。
 - `project.networks[]` 包含稳定 UUID 和端点 ID 列表。第一版的集成表每个网络在同一 module 中最多一个端口，超出时 `DUP_MODULE` 阻断导出。
 - XLSX 写入只替换/新增集成 worksheet 和必要的 workbook relationships/content types。其他 ZIP entry 原样复制，module worksheet 不被重写。
 
