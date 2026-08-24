@@ -54,50 +54,50 @@ SHOW_INFO_MESSAGES = True
 # master switches and take precedence over this table.
 DIAGNOSTIC_VISIBILITY_BY_CODE = {
     # Errors: malformed input or unsafe generation/overwrite.
-    "E_GENERAL": True,
-    "E_WIDTH": True,
-    "E_TEMPLATE": True,
-    "E_CONDITION": True,
-    "E_MODULE": True,
-    "E_PORT": True,
-    "E_PARAMETER": True,
-    "E_INTEGRATION": True,
-    "E_INSTANCE": True,
-    "E_DIRECTION": True,
-    "E_PORT_REFERENCE": True,
-    "E_GENERATE_INDEX": True,
-    "E_NA_TARGET": True,
-    "E_BIT_SELECT": True,
-    "E_INTERFACE_CONNECTION": True,
-    "E_DRIVER_CONFLICT": True,
-    "E_USER_CODE": True,
-    "E_FILE_IO": True,
+    "E_GENERAL": True,  # 其他未分类错误：显示具体失败原因。
+    "E_WIDTH": True,  # 位宽错误：显示非法、缺失或冲突的位宽信息。
+    "E_TEMPLATE": True,  # 模板错误：显示变量范围、展开或花括号问题。
+    "E_CONDITION": True,  # 条件错误：显示非法或互相冲突的条件宏。
+    "E_MODULE": True,  # 模块错误：显示模块缺失、重名或名称非法。
+    "E_PORT": True,  # 端口错误：显示端口名称、方向或重复定义问题。
+    "E_PARAMETER": True,  # 参数错误：显示参数声明、表达式或链接冲突。
+    "E_INTEGRATION": True,  # 集成错误：显示页签结构或层次选择问题。
+    "E_INSTANCE": True,  # 例化错误：显示实例名、次数或元数据问题。
+    "E_DIRECTION": True,  # 方向错误：显示 input/output 连接冲突。
+    "E_PORT_REFERENCE": True,  # 端口引用错误：显示缺失或重复连接的端口。
+    "E_GENERATE_INDEX": True,  # 循环索引错误：显示 generate 标记冲突。
+    "E_NA_TARGET": True,  # NA 目标错误：显示非法、重名或不适用的目标。
+    "E_BIT_SELECT": True,  # 位选择错误：显示不支持或越界的 bit select。
+    "E_INTERFACE_CONNECTION": True,  # 接口错误：显示 interface 连接限制。
+    "E_DRIVER_CONFLICT": True,  # 驱动冲突：显示同一网络的多个 output。
+    "E_USER_CODE": True,  # 用户代码错误：显示 USER CODE 标记损坏或丢失。
+    "E_FILE_IO": True,  # 文件错误：显示读取、写入、备份或替换失败。
     # Warnings: generation can continue, but engineering review is needed.
-    "W_GENERAL": True,
-    "W_WIDTH_PLACEHOLDER": True,
-    "W_WIDTH_MISMATCH": True,
-    "W_TEMPLATE_REPAIR": True,
-    "W_TEMPLATE_BINDING": True,
-    "W_IO_DEFAULTED": True,
-    "W_MODULE_SKIPPED": True,
-    "W_NO_INTEGRATION": True,
-    "W_INSTANCE_UNUSED": True,
-    "W_DRIVER_RISK": True,
-    "W_GENERATE_RANGE": True,
+    "W_GENERAL": True,  # 其他未分类警告：显示需要人工确认的风险。
+    "W_WIDTH_PLACEHOLDER": True,  # 位宽占位：显示使用 114 代替未知值。
+    "W_WIDTH_MISMATCH": True,  # 位宽不匹配：显示相连信号的形状差异。
+    "W_TEMPLATE_REPAIR": True,  # 模板修复：显示自动修复的花括号内容。
+    "W_TEMPLATE_BINDING": True,  # 模板绑定：显示变量无法可靠对应的问题。
+    "W_IO_DEFAULTED": True,  # 方向推断风险：显示空或非法 i/o 的处理结果。
+    "W_MODULE_SKIPPED": True,  # 模块跳过：显示无法识别而未生成的页签。
+    "W_NO_INTEGRATION": True,  # 无集成页：显示仅生成独立模块的提示。
+    "W_INSTANCE_UNUSED": True,  # 实例元数据未使用：显示找不到对应模块。
+    "W_DRIVER_RISK": True,  # 驱动风险：显示无 output 或可能多驱动的网络。
+    "W_GENERATE_RANGE": True,  # 循环范围风险：显示默认次数或越界可能。
     # Information: deterministic decisions and automatic recovery.
-    "I_GENERAL": True,
-    "I_PARAMETER_LINK": True,
-    "I_DIRECTION_INFERRED": True,
-    "I_TEMPLATE_PARTIAL": True,
-    "I_NA_CONNECTION": True,
-    "I_UNCONNECTED": True,
-    "I_INSTANCE": True,
+    "I_GENERAL": True,  # 其他普通信息：显示脚本采用的确定性处理。
+    "I_PARAMETER_LINK": True,  # 参数链接：显示 TOP localparam 和覆盖关系。
+    "I_DIRECTION_INFERRED": True,  # 方向继承：显示采用模块页 i/o 的结果。
+    "I_TEMPLATE_PARTIAL": True,  # 模板部分匹配：显示缺少对端的展开项。
+    "I_NA_CONNECTION": True,  # NA 连接：显示占位、常量、观察或开路处理。
+    "I_UNCONNECTED": True,  # 未连接端口：显示接零、开路或自动补全处理。
+    "I_INSTANCE": True,  # 例化信息：显示实例名、次数和 generate 范围。
 }
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.12"
-SCRIPT_RELEASE_DATE = "2026.8.24"
+SCRIPT_VERSION = "Version V3.13"
+SCRIPT_RELEASE_DATE = "2026.8.24 night"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
 
@@ -2164,6 +2164,22 @@ def connection_zero_value(port: Port, parameter_map: dict[str, str] | None = Non
     return zero_value(port.width, parameter_map)
 
 
+def connection_constant_value(
+    value: str,
+    port: Port,
+    parameter_map: dict[str, str] | None = None,
+) -> str:
+    """Size plain ``NA->1`` to every packed bit of its destination port."""
+    constant = clean(value)
+    if constant != "1":
+        return constant
+    dimensions = (*port.arrays, *port.packed_dimensions, port.width)
+    bit_count = "*".join(
+        width_expression(dimension, parameter_map) for dimension in dimensions
+    )
+    return f"{{{bit_count}{{1'b1}}}}"
+
+
 def port_uses_parameter_width(port: Port) -> bool:
     """Whether V2 delegates this port's width compatibility to elaboration."""
     return any(
@@ -2533,6 +2549,7 @@ class Assignment:
     target: str
     expression: str
     conditions: tuple[str, ...] = ()
+    requires_todo: bool = False
 
 
 @dataclass
@@ -2851,11 +2868,13 @@ def render_integration(
         target: str,
         expression: str,
         *conditions: str | None,
+        requires_todo: bool = False,
     ) -> None:
         assignment = Assignment(
             target,
             expression,
             tuple(dict.fromkeys(item for item in conditions if item is not None)),
+            requires_todo,
         )
         if assignment not in adapter_assignments:
             adapter_assignments.append(assignment)
@@ -3041,7 +3060,15 @@ def render_integration(
         if target and is_verilog_constant(target):
             if index:
                 register_generate_marker(block.module_name, index, port, row)
-            expression = target if port.direction == "input" else None
+            expression = (
+                connection_constant_value(
+                    target,
+                    port,
+                    parameter_maps.get(block.module_name),
+                )
+                if port.direction == "input"
+                else None
+            )
             bind(block.module_name, port, expression, row)
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: "
@@ -3113,6 +3140,66 @@ def render_integration(
             code="I_NA_CONNECTION",
         )
 
+    def bind_top_na_observer(
+        port: Port,
+        row: int,
+        target: str,
+        bit_select: str | None,
+    ) -> None:
+        """Create a named wire that observes one real TOP endpoint."""
+        if port.is_interface:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: TOP interface "
+                f"{top.name}.{port.name} 不支持 NA->{target} 命名观察 wire",
+                code="E_INTERFACE_CONNECTION",
+            )
+            return
+        if not IDENTIFIER_RE.fullmatch(target):
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
+                f"{target!r} 不是合法 Verilog 标识符",
+                code="E_NA_TARGET",
+            )
+            return
+        if target in used_signals:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
+                f"{target} 与已有信号重名",
+                code="E_NA_TARGET",
+            )
+            return
+        used_signals.add(target)
+        observed_port = port
+        observed_expression = port.name
+        if bit_select is not None:
+            observed_port = replace(
+                port,
+                width=Width("literal", "1", "1"),
+                arrays=(),
+                packed_dimensions=(),
+            )
+            observed_expression += bit_select
+        wires.append(
+            Wire(
+                name=target,
+                width=observed_port.width,
+                arrays=observed_port.arrays,
+                parameter_map=parameter_maps.get(top.name, {}),
+                packed_dimensions=observed_port.packed_dimensions,
+            )
+        )
+        add_assignment(
+            target,
+            observed_expression,
+            port.condition,
+            requires_todo=True,
+        )
+        reporter.info(
+            f"集成页签 {sheet.name} 第 {row} 行: TOP 端口 "
+            f"{top.name}.{port.name} 通过 NA->{target} 创建命名观察 wire",
+            code="I_NA_CONNECTION",
+        )
+
     first_group = integration.groups[0]
     top_block = first_group[0]
     first_group_child_blocks = [
@@ -3123,14 +3210,21 @@ def render_integration(
         if row in parameter_rows_by_group[0]:
             continue
         top_reference = sheet.cell(row, top_block.port_column)
-        top_port_name, top_bit_select, top_bit_index = split_bit_select(
-            top_reference
-        )
+        top_na_reference = parse_na_connection(top_reference)
+        top_port_name = ""
+        top_bit_select: str | None = None
+        top_bit_index: int | None = None
         top_index: str | None = None
-        if top_bit_select is None:
-            top_port_name, top_index = split_index_marker(top_reference)
+        if top_na_reference is None:
+            top_port_name, top_bit_select, top_bit_index = split_bit_select(
+                top_reference
+            )
+            if top_bit_select is None:
+                top_port_name, top_index = split_index_marker(top_reference)
         row_entries: list[tuple[IntegrationBlock, str, str | None]] = []
         row_na_entries: list[tuple[IntegrationBlock, str | None, str | None]] = []
+        if top_na_reference is not None:
+            row_na_entries.append((top_block, *top_na_reference))
         for block in first_group_child_blocks:
             reference = clean(sheet.cell(row, block.port_column))
             if not reference:
@@ -3180,7 +3274,8 @@ def render_integration(
                 )
                 continue
             reporter.info(
-                f"集成页签 {sheet.name} 第 {row} 行: TOP 端口为空，子模块端口按未连接处理",
+                f"集成页签 {sheet.name} 第 {row} 行: TOP 端口为空或为 NA，"
+                "子模块端口按占位/未连接处理",
                 code="I_UNCONNECTED",
             )
             for block, child_port_name, _ in row_entries:
@@ -3269,41 +3364,52 @@ def render_integration(
                     )
             if row_na_target is not None:
                 if not is_verilog_constant(row_na_target):
-                    reporter.error(
-                        f"集成页签 {sheet.name} 第 {row} 行: TOP 连接区的 "
-                        f"NA->{row_na_target} 仅支持常量；自定义线名请用于子模块互连区",
-                        code="E_NA_TARGET",
+                    bind_top_na_observer(
+                        top_port,
+                        row,
+                        row_na_target,
+                        top_bit_select,
                     )
-                    continue
-                if top_port.direction != "output":
+                elif top_port.direction != "output":
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: 只有 TOP output "
                         f"可以由 NA->{row_na_target} 赋值，{top.name}.{top_port.name} "
                         f"为 {top_port.direction}",
                         code="E_NA_TARGET",
                     )
-                    continue
-                add_assignment(top_port.name, row_na_target, top_port.condition)
-                top_output_driver_conditions.setdefault(top_port.name, []).append(None)
-                reporter.info(
-                    f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
-                    f"{top.name}.{top_port.name} 已由 NA->{row_na_target} 赋值",
-                    code="I_NA_CONNECTION",
-                )
-                for block, child_port in aligned[1:]:
-                    validate_sheet_direction(block, child_port, row)
-                    expression = (
-                        row_na_target if child_port.direction == "input" else None
+                else:
+                    top_constant = connection_constant_value(
+                        row_na_target,
+                        top_port,
+                        parameter_maps.get(top.name),
                     )
-                    bind(block.module_name, child_port, expression, row)
-                    if expression is None:
-                        reporter.info(
-                            f"集成页签 {sheet.name} 第 {row} 行: "
-                            f"{block.module_name}.{child_port.name} 为输出端，"
-                            f"在 NA->{row_na_target} 常量网络中按开路处理",
-                            code="I_NA_CONNECTION",
+                    add_assignment(top_port.name, top_constant, top_port.condition)
+                    top_output_driver_conditions.setdefault(top_port.name, []).append(None)
+                    reporter.info(
+                        f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
+                        f"{top.name}.{top_port.name} 已由 NA->{row_na_target} 赋值",
+                        code="I_NA_CONNECTION",
+                    )
+                    for block, child_port in aligned[1:]:
+                        validate_sheet_direction(block, child_port, row)
+                        expression = (
+                            connection_constant_value(
+                                row_na_target,
+                                child_port,
+                                parameter_maps.get(block.module_name),
+                            )
+                            if child_port.direction == "input"
+                            else None
                         )
-                continue
+                        bind(block.module_name, child_port, expression, row)
+                        if expression is None:
+                            reporter.info(
+                                f"集成页签 {sheet.name} 第 {row} 行: "
+                                f"{block.module_name}.{child_port.name} 为输出端，"
+                                f"在 NA->{row_na_target} 常量网络中按开路处理",
+                                code="I_NA_CONNECTION",
+                            )
+                    continue
             for block, child_port in aligned[1:]:
                 validate_sheet_direction(block, child_port, row)
                 if top_port.direction == "input" and child_port.direction == "output":
@@ -3425,26 +3531,6 @@ def render_integration(
                         )
 
     for group_index, group in enumerate(integration.groups[1:], start=1):
-        if len(group) == 1:
-            block = group[0]
-            for row in range(integration.header_row + 1, sheet.max_row + 1):
-                if row in parameter_rows_by_group[group_index]:
-                    continue
-                port_name = clean(sheet.cell(row, block.port_column))
-                if not port_name:
-                    continue
-                for port in get_ports(block.module_name, port_name, row):
-                    validate_sheet_direction(block, port, row)
-                    if block.module_name == top.name:
-                        continue
-                    expression = (
-                        connection_zero_value(port, parameter_maps.get(block.module_name))
-                        if port.direction == "input"
-                        else None
-                    )
-                    bind(block.module_name, port, expression, row)
-            continue
-
         for row in range(integration.header_row + 1, sheet.max_row + 1):
             if row in parameter_rows_by_group[group_index]:
                 continue
@@ -3461,7 +3547,6 @@ def render_integration(
                     index, target = na_reference
                     na_blocks.append((block, index, target))
                     continue
-                port_name, _ = split_index_marker(reference)
                 ports = get_ports(block.module_name, reference, row)
                 for port in ports:
                     validate_sheet_direction(block, port, row)
@@ -3698,8 +3783,8 @@ def render_integration(
     lines.extend(["", *user_code_block("before statement")])
     if wires:
         lines.append("")
-        lines.append("    // Internal connections and NA placeholder signals.")
-        lines.append("    // 子模块内部连线及 NA 占位信号。")
+        lines.append("// Internal connections and NA placeholder signals.")
+        lines.append("// 子模块内部连线及 NA 占位信号。")
         wire_packed_ranges = [
             ()
             if wire.interface_type
@@ -3743,7 +3828,7 @@ def render_integration(
         ):
             suffix = "();" if wire.interface_type else ";"
             declaration = (
-                f"    {prefix:<{wire_prefix_width}} {wire.name:<{wire_name_width}}"
+                f"{prefix:<{wire_prefix_width}} {wire.name:<{wire_name_width}}"
                 f"{array_field:>{wire_array_width}}"
             )
             lines.append(declaration.rstrip() + suffix)
@@ -3763,6 +3848,7 @@ def render_integration(
             lines.append(
                 f"assign {assignment.target:<{assignment_target_width}} = "
                 f"{assignment.expression};"
+                + (f" {NA_CONNECTION_TODO}" if assignment.requires_todo else "")
             )
             lines.extend("`endif" for _ in reversed(assignment.conditions))
 

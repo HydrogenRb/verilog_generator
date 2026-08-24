@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import unittest
@@ -38,6 +39,54 @@ class MergerUnitTests(unittest.TestCase):
         self.assertNotIn("wire old_generated;", merged)
         self.assertIn("assign user_logic = 1'b1;", merged)
         self.assertFalse(diagnostics)
+
+    def test_matching_module_signal_preserves_reg_or_wire_kind(self) -> None:
+        old = (
+            "module TOP (\n"
+            "    output reg  [7:0] status\n"
+            ");\n"
+            "reg  [7:0] state;\n"
+            "wire legacy_only;\n"
+            "/*USER CODE BEGIN before statement*/\n"
+            "reg user_owned;\n"
+            "/*USER CODE END   before statement*/\n"
+            "endmodule\n"
+            "module CHILD;\n"
+            "wire [3:0] state;\n"
+            "endmodule\n"
+        )
+        new = (
+            "module TOP (\n"
+            "    output wire [15:0] status\n"
+            ");\n"
+            "wire [15:0] state;\n"
+            "wire generated_new;\n"
+            "/*USER CODE BEGIN before statement*/\n"
+            "\n"
+            "/*USER CODE END   before statement*/\n"
+            "endmodule\n"
+            "module CHILD;\n"
+            "reg [8:0] state;\n"
+            "endmodule\n"
+        )
+
+        merged, diagnostics = merge_verilog_text(new, old, "multi.v")
+        self.assertRegex(merged, r"output\s+reg\s+\[15:0\]\s+status")
+        self.assertRegex(merged, r"(?m)^reg\s+\[15:0\]\s+state;")
+        self.assertRegex(
+            merged,
+            r"(?s)module CHILD;.*?wire\s+\[8:0\]\s+state;",
+        )
+        self.assertIn("reg user_owned;", merged)
+        self.assertNotIn("legacy_only", merged)
+        self.assertEqual(
+            {
+                "multi.v: 保留 TOP.status 的 reg 声明类型（新生成版本为 wire）",
+                "multi.v: 保留 TOP.state 的 reg 声明类型（新生成版本为 wire）",
+                "multi.v: 保留 CHILD.state 的 wire 声明类型（新生成版本为 reg）",
+            },
+            {item.message for item in diagnostics},
+        )
 
     def test_damaged_or_removed_nonempty_region_blocks_merge(self) -> None:
         damaged = "/*USER CODE BEGIN a*/\ntext\n/*USER CODE END b*/\n"
@@ -139,6 +188,14 @@ class EdgeCaseMergeReview(unittest.TestCase):
                 "/*USER CODE BEGIN before statement*/\n// USER: keep me",
                 1,
             )
+            old_top, declaration_updates = re.subn(
+                r"(?m)^wire(?=\s+\[10\s+-1:0\]\[114\s+-1:0\]\s+"
+                r"high_clk_after_pll_0;)",
+                "reg",
+                old_top,
+                count=1,
+            )
+            self.assertEqual(declaration_updates, 1)
             top_path.write_text(old_top, encoding="utf-8", newline="\n")
 
             shutil.copy2(EDGE_SAMPLE, adjusted)
@@ -162,7 +219,7 @@ class EdgeCaseMergeReview(unittest.TestCase):
             self.assertNotIn("i_gen_u_riscv_crg < 10", merged_top)
             self.assertRegex(
                 merged_top,
-                r"wire\s+\[9\s+-1:0\]\[114\s+-1:0\]\s+high_clk_after_pll_0;",
+                r"reg\s+\[9\s+-1:0\]\[114\s+-1:0\]\s+high_clk_after_pll_0;",
             )
             self.assertIn("// USER: keep me", merged_top)
             self.assertEqual(len(result.changed), 1)

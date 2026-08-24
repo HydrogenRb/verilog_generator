@@ -116,58 +116,58 @@ module RISCV_TOP #(
 
 /*USER CODE END   before statement*/
 
-    // Internal connections and NA placeholder signals.
-    // 子模块内部连线及 NA 占位信号。
-    wire [4               -1:0]                  w_apb_1;
-    wire [12              -1:0]                  w_apb_2;
-    wire [13              -1:0]                  w_apb_3;
-    wire [14              -1:0]                  w_apb_4;
-    wire [15              -1:0]                  w_apb_5;
-    wire [16              -1:0]                  w_apb_6;
-    wire [`LANE_NUM       -1:0][`TEST_SIZE -1:0] w_array;
-    wire [13              -1:0]                  ready_test_process;
-    wire [`DW_VERI_DAT    -1:0]                  w_verification_sig_dat;
-    wire [`DW_VERI_REQ    -1:0]                  w_verification_sig_req;
-    wire [`DW_VERI_REQEXT -1:0]                  w_verification_sig_reqext;
-    wire [12              -1:0]                  w_need_to_solve;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_0;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_1;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_2;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_3;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_4;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_5;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_6;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_7;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_8;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_9;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_10;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_11;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_12;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_13;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_14;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_15;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_16;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_17;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_18;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_19;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_20;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_21;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_22;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_23;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_24;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_25;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_26;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_27;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_28;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_29;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_30;
-    wire [1               -1:0][1          -1:0] high_clk_after_pll_31;
+// Internal connections and NA placeholder signals.
+// 子模块内部连线及 NA 占位信号。
+wire [4               -1:0]                  w_apb_1;
+wire [12              -1:0]                  w_apb_2;
+wire [13              -1:0]                  w_apb_3;
+wire [14              -1:0]                  w_apb_4;
+wire [15              -1:0]                  w_apb_5;
+wire [16              -1:0]                  w_apb_6;
+wire [`LANE_NUM       -1:0][`TEST_SIZE -1:0] w_array;
+wire [13              -1:0]                  ready_test_process;
+wire [`DW_VERI_DAT    -1:0]                  w_verification_sig_dat;
+wire [`DW_VERI_REQ    -1:0]                  w_verification_sig_req;
+wire [`DW_VERI_REQEXT -1:0]                  w_verification_sig_reqext;
+wire [12              -1:0]                  w_need_to_solve;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_0;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_1;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_2;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_3;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_4;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_5;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_6;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_7;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_8;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_9;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_10;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_11;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_12;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_13;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_14;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_15;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_16;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_17;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_18;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_19;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_20;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_21;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_22;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_23;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_24;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_25;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_26;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_27;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_28;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_29;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_30;
+wire [1               -1:0][1          -1:0] high_clk_after_pll_31;
 
 // Width adapters: keep low bits and zero-fill undriven high bits.
 // 位宽适配：保留低位，未驱动的高位补零。
-assign test_bus2_sig1_valid = 1;
-assign test_bus2_sig2_valid = 1;
-assign test_bus2_sig3_valid = 1;
+assign test_bus2_sig1_valid = {1{1'b1}};
+assign test_bus2_sig2_valid = {1{1'b1}};
+assign test_bus2_sig3_valid = {1{1'b1}};
 assign w_apb_1[4-1:3]       = '0;
 assign w_apb_2[12-1:2]      = '0;
 

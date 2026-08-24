@@ -21,10 +21,23 @@ import re
 from typing import Iterable
 
 
-VERSION = "1.0"
+VERSION = "1.1"
 DEFAULT_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
 USER_CODE_MARKER_RE = re.compile(
     r"(?m)^[ \t]*/\*USER CODE (BEGIN|END)[ \t]+(.+?)[ \t]*\*/[ \t]*\r?$"
+)
+VERILOG_COMMENT_RE = re.compile(r"//[^\r\n]*|/\*.*?\*/", re.DOTALL)
+MODULE_BEGIN_RE = re.compile(
+    r"^[ \t]*module[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\b"
+)
+MODULE_END_RE = re.compile(r"^[ \t]*endmodule\b")
+SIGNAL_DECLARATION_RE = re.compile(
+    r"^[ \t]*(?:(?:input|output|inout)[ \t]+)?"
+    r"(?P<kind>wire|reg)\b(?P<body>[^\r\n]*)"
+)
+SIGNAL_DECLARATOR_TAIL_RE = re.compile(
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_$]*)"
+    r"(?:[ \t]*\[[^\[\]\r\n]+\])*[ \t]*[,;]?[ \t]*$"
 )
 
 
@@ -39,6 +52,15 @@ class UserCodeRegion:
     content_start: int
     content_end: int
     content: str
+
+
+@dataclass(frozen=True)
+class SignalDeclaration:
+    module_name: str
+    signal_name: str
+    kind: str
+    kind_start: int
+    kind_end: int
 
 
 @dataclass(frozen=True)
@@ -119,6 +141,132 @@ def parse_user_code_regions(text: str, context: str) -> list[UserCodeRegion]:
     return regions
 
 
+def _mask_verilog_comments(text: str) -> str:
+    """Hide comments without changing character offsets or line boundaries."""
+
+    def replacement(match: re.Match[str]) -> str:
+        return "".join(
+            character if character in "\r\n" else " "
+            for character in match.group(0)
+        )
+
+    return VERILOG_COMMENT_RE.sub(replacement, text)
+
+
+def parse_signal_declarations(
+    text: str,
+    regions: list[UserCodeRegion],
+    context: str,
+) -> dict[tuple[str, str], SignalDeclaration]:
+    """Find generated ``wire/reg`` declarations keyed by module and signal.
+
+    This is intentionally a conservative line-oriented Verilog recognizer, not
+    a compiler.  It covers the ANSI port and one-signal-per-line declarations
+    emitted by xlsx2verilog while ignoring protected USER CODE contents.
+    """
+    masked = _mask_verilog_comments(text)
+    protected_ranges = [
+        (region.content_start, region.content_end) for region in regions
+    ]
+
+    def is_protected(position: int) -> bool:
+        return any(start <= position < end for start, end in protected_ranges)
+
+    declarations: dict[tuple[str, str], SignalDeclaration] = {}
+    current_module: str | None = None
+    offset = 0
+    for line in masked.splitlines(keepends=True):
+        if is_protected(offset):
+            offset += len(line)
+            continue
+        module_match = MODULE_BEGIN_RE.match(line)
+        if module_match is not None:
+            if current_module is not None:
+                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+            current_module = module_match.group("name")
+            offset += len(line)
+            continue
+        if MODULE_END_RE.match(line) is not None:
+            current_module = None
+            offset += len(line)
+            continue
+        if current_module is None:
+            offset += len(line)
+            continue
+        declaration_match = SIGNAL_DECLARATION_RE.match(line)
+        if declaration_match is None:
+            offset += len(line)
+            continue
+        body = declaration_match.group("body")
+        name_match = SIGNAL_DECLARATOR_TAIL_RE.search(body)
+        if name_match is None:
+            offset += len(line)
+            continue
+        kind = declaration_match.group("kind")
+        signal_name = name_match.group("name")
+        key = (current_module, signal_name)
+        declaration = SignalDeclaration(
+            current_module,
+            signal_name,
+            kind,
+            offset + declaration_match.start("kind"),
+            offset + declaration_match.end("kind"),
+        )
+        previous = declarations.get(key)
+        if previous is not None and previous.kind != declaration.kind:
+            raise MergeError(
+                f"{context}: {current_module}.{signal_name} 同时声明为 "
+                f"{previous.kind} 和 {declaration.kind}，无法安全匹配"
+            )
+        declarations.setdefault(key, declaration)
+        offset += len(line)
+    return declarations
+
+
+def preserve_signal_declaration_kinds(
+    new_text: str,
+    existing_text: str,
+    new_regions: list[UserCodeRegion],
+    old_regions: list[UserCodeRegion],
+    context: str,
+) -> tuple[str, list[Diagnostic]]:
+    """Carry old ``wire/reg`` choices into matching new declarations."""
+    old_declarations = parse_signal_declarations(
+        existing_text,
+        old_regions,
+        f"旧文件 {context}",
+    )
+    new_declarations = parse_signal_declarations(
+        new_text,
+        new_regions,
+        f"新文件 {context}",
+    )
+    replacements: list[tuple[int, int, str]] = []
+    diagnostics: list[Diagnostic] = []
+    for key, new_declaration in new_declarations.items():
+        old_declaration = old_declarations.get(key)
+        if old_declaration is None or old_declaration.kind == new_declaration.kind:
+            continue
+        replacements.append(
+            (
+                new_declaration.kind_start,
+                new_declaration.kind_end,
+                old_declaration.kind,
+            )
+        )
+        diagnostics.append(
+            Diagnostic(
+                "info",
+                f"{context}: 保留 {key[0]}.{key[1]} 的 {old_declaration.kind} "
+                f"声明类型（新生成版本为 {new_declaration.kind}）",
+            )
+        )
+    preserved = new_text
+    for start, end, kind in reversed(replacements):
+        preserved = preserved[:start] + kind + preserved[end:]
+    return preserved, diagnostics
+
+
 def merge_verilog_text(
     new_text: str,
     existing_text: str,
@@ -155,8 +303,18 @@ def merge_verilog_text(
             f"{context}: 新结构缺少含用户内容的旧 USER CODE 段 ({labels})"
         )
 
-    merged = new_text
-    for region in reversed(new_regions):
+    merged, declaration_diagnostics = preserve_signal_declaration_kinds(
+        new_text,
+        existing_text,
+        new_regions,
+        old_regions,
+        context,
+    )
+    diagnostics.extend(declaration_diagnostics)
+    # ``wire`` and ``reg`` have different lengths, so declaration migration
+    # may shift every later USER region.  Reparse before restoring contents.
+    merged_regions = parse_user_code_regions(merged, f"新文件 {context}")
+    for region in reversed(merged_regions):
         previous = old_by_key.get((region.label, region.occurrence))
         if previous is None:
             continue

@@ -68,8 +68,16 @@ class Version3TechReview1Tests(unittest.TestCase):
             for name in ("sig1", "sig2", "sig3"):
                 self.assertRegex(
                     top,
-                    rf"(?m)^assign test_bus2_{name}_valid\s+= 1;$",
+                    rf"(?m)^assign test_bus2_{name}_valid\s+= "
+                    rf"\{{1\{{1'b1\}}\}};$",
                 )
+            self.assertIn(
+                "\n// Internal connections and NA placeholder signals.\n"
+                "// 子模块内部连线及 NA 占位信号。\n",
+                top,
+            )
+            self.assertNotIn("\n    // 子模块内部连线及 NA 占位信号。", top)
+            self.assertRegex(top, r"(?m)^wire\s+\[13\s+-1:0\]\s+ready_test_process;")
 
             self.assertIn("MEM_DAT PROJECT_PERSONAL_MEM_DAT (", top)
             self.assertIn("genvar i_gen_u_riscv_crg;", top)
@@ -181,6 +189,141 @@ class Version3TechReview1Tests(unittest.TestCase):
                     item.code == "E_PARAMETER" and "安全的单行" in item.message
                     for item in reporter.items
                 )
+            )
+
+    def test_na_one_replicates_across_every_packed_dimension(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "na-all-ones.xlsx"
+            integration = integration_sheet(
+                [
+                    (
+                        ["TOP", "CHILD"],
+                        [[("all_bits", "o"), ("NA->1", "")]],
+                    ),
+                    (
+                        ["CHILD"],
+                        [[("data_in", "i")]],
+                    ),
+                ]
+            )
+            # Headerless anonymous NA endpoint immediately after the second
+            # group's CHILD port/direction pair.
+            set_cell(integration, 3, 10, "NA->1")
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    (
+                        "TOP",
+                        module_sheet(
+                            "TOP",
+                            [("all_bits", "B", 4, "o", "A", 3)],
+                        ),
+                    ),
+                    (
+                        "CHILD",
+                        module_sheet(
+                            "CHILD",
+                            [("data_in", "Y", 6, "i", "X", 5)],
+                        ),
+                    ),
+                ],
+            )
+
+            _, reporter = generate(workbook, root / "generated")
+            self.assertFalse(reporter.has_errors)
+            text = (root / "generated" / "top.v").read_text(encoding="utf-8")
+            self.assertRegex(
+                text,
+                r"(?m)^assign all_bits\s+= \{A\*B\{1'b1\}\};$",
+            )
+            self.assertRegex(text, r"\.data_in\s+\(\{5\*6\{1'b1\}\}\)")
+
+    def test_named_na_works_for_top_and_single_real_module_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "named-na-everywhere.xlsx"
+            integration = integration_sheet(
+                [
+                    (
+                        ["TOP", "CHILD"],
+                        [
+                            [("probe", "i"), ("NA->probe_alias", "")],
+                            [("status", "o"), ("NA->status_alias", "")],
+                            [
+                                ("NA->top_area_child_wire", ""),
+                                ("data_from_child", "o"),
+                            ],
+                        ],
+                    ),
+                    (
+                        ["CHILD"],
+                        [
+                            [("data_in", "i")],
+                            [("data_out", "o")],
+                        ],
+                    ),
+                ]
+            )
+            # One real module plus an adjacent anonymous NA endpoint uses the
+            # same downstream connection path as every other internal group.
+            set_cell(integration, 4, 10, "NA->child_probe")
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    (
+                        "TOP",
+                        module_sheet(
+                            "TOP",
+                            [("probe", "BUS", 8, "i"), ("status", 2, None, "o")],
+                        ),
+                    ),
+                    (
+                        "CHILD",
+                        module_sheet(
+                            "CHILD",
+                            [
+                                ("data_in", 4, None, "i"),
+                                ("data_out", 3, None, "o"),
+                                ("data_from_child", 5, None, "o"),
+                            ],
+                        ),
+                    ),
+                ],
+            )
+
+            _, reporter = generate(workbook, root / "generated")
+            self.assertFalse(reporter.has_errors)
+            text = (root / "generated" / "top.v").read_text(encoding="utf-8")
+            self.assertRegex(text, r"(?m)^wire\s+\[BUS\s+-1:0\]\s+probe_alias;")
+            self.assertRegex(text, r"(?m)^wire\s+\[2\s+-1:0\]\s+status_alias;")
+            self.assertRegex(text, r"(?m)^wire\s+\[3\s+-1:0\]\s+child_probe;")
+            self.assertRegex(
+                text,
+                r"(?m)^wire\s+\[5\s+-1:0\]\s+top_area_child_wire;",
+            )
+            self.assertRegex(
+                text,
+                r"(?m)^assign probe_alias\s+= probe;\s+"
+                r"//TODO:本信号期望有逻辑功能，请完成$",
+            )
+            self.assertRegex(
+                text,
+                r"(?m)^assign status_alias\s+= status;\s+"
+                r"//TODO:本信号期望有逻辑功能，请完成$",
+            )
+            self.assertRegex(text, r"\.data_in\s+\(4'b0\s*\)")
+            self.assertRegex(
+                text,
+                r"\.data_out\s+\(child_probe\s*\),?\s+"
+                r"//TODO:本信号期望有逻辑功能，请完成",
+            )
+            self.assertRegex(
+                text,
+                r"\.data_from_child\s+\(top_area_child_wire\s*\)\s+"
+                r"//TODO:本信号期望有逻辑功能，请完成",
             )
 
     def test_custom_count_warns_when_index_range_is_too_small(self) -> None:
@@ -320,6 +463,12 @@ class Version3TechReview1Tests(unittest.TestCase):
                 literal_codes.add(code.value)
         self.assertFalse(missing, f"Reporter calls without code: {missing}")
         self.assertLessEqual(literal_codes, set(DIAGNOSTIC_VISIBILITY_BY_CODE))
+        for code in DIAGNOSTIC_VISIBILITY_BY_CODE:
+            self.assertRegex(
+                source,
+                rf'(?m)^\s*"{re.escape(code)}":\s*(?:True|False),\s+#\s*\S+',
+                f"diagnostic config {code} needs a Chinese inline comment",
+            )
 
 
 if __name__ == "__main__":
