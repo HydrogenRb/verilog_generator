@@ -1,2 +1,0 @@
-# Runtime dependencies: Python 3.10+ standard library only.
-
