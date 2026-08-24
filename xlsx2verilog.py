@@ -76,6 +76,8 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "W_GENERAL": True,  # 其他未分类警告：显示需要人工确认的风险。
     "W_WIDTH_PLACEHOLDER": True,  # 位宽占位：显示使用 114 代替未知值。
     "W_WIDTH_MISMATCH": True,  # 位宽不匹配：显示相连信号的形状差异。
+    "W_ZERO_WIDTH": True,  # 零位宽：显示已生成 [0 -1:0] 但需确认工具链行为。
+    "W_NA_CONSTANT_WIDTH": True,  # NA 常量：显示定宽常量大于目标或无法安全匹配。
     "W_TEMPLATE_REPAIR": True,  # 模板修复：显示自动修复的花括号内容。
     "W_TEMPLATE_BINDING": True,  # 模板绑定：显示变量无法可靠对应的问题。
     "W_IO_DEFAULTED": True,  # 方向推断风险：显示空或非法 i/o 的处理结果。
@@ -96,7 +98,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.13"
+SCRIPT_VERSION = "Version V3.2"
 SCRIPT_RELEASE_DATE = "2026.8.24 night"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
@@ -146,6 +148,10 @@ NA_REFERENCE_RE = re.compile(
 VERILOG_CONSTANT_RE = re.compile(
     r"^(?:[0-9]+|'[sS]?[dDhHbBoO]?[0-9a-fA-F_xXzZ?]+|"
     r"[0-9]+\s*'[sS]?[dDhHbBoO][0-9a-fA-F_xXzZ?]+)$"
+)
+SIZED_VERILOG_CONSTANT_RE = re.compile(
+    r"^(?P<width>[0-9][0-9_]*)\s*'[sS]?[dDhHbBoO]"
+    r"[0-9a-fA-F_xXzZ?]+$"
 )
 PARAMETER_CATEGORIES = {"parameter", "parameters", "参数", "参数定义"}
 NA_CONNECTION_TODO = "//TODO:本信号期望有逻辑功能，请完成"
@@ -578,9 +584,9 @@ def normalized_direction(value: Any) -> str | None:
 def evaluate_int_expression(value: Any, *, allow_zero: bool = False) -> int | None:
     """Safely evaluate a small integer expression.
 
-    Physical widths, array extents and instance counts use the default
-    strictly-positive rule.  Parameter/macro matching values opt into zero so
-    a legal feature-disable value is not confused with a missing dimension.
+    Most physical sizing/count callers use the default strictly-positive rule.
+    Parameter/macro matching values and the explicit-width parser opt into
+    zero; the latter emits a dedicated toolchain-risk warning.
     """
     minimum = 0 if allow_zero else 1
     if isinstance(value, bool):
@@ -722,8 +728,8 @@ def normalized_width_default(
     fallback_uncertain: bool,
 ) -> str:
     # A macro/parameter default may intentionally be zero (for example a
-    # feature-enable flag).  Callers that consume a physical dimension still
-    # validate the expression itself with the strictly-positive default mode.
+    # disabled optional bus).  analyze_width() preserves that dimension and
+    # emits W_ZERO_WIDTH; instance-count callers remain strictly positive.
     evaluated = evaluate_int_expression(default_value, allow_zero=True)
     if evaluated is not None:
         return str(evaluated)
@@ -773,12 +779,22 @@ def analyze_width(
     *,
     fallback_uncertain: bool = False,
 ) -> Width:
+    def accepted(width: Width) -> Width:
+        candidate = width.expression if width.kind == "literal" else width.default
+        if evaluate_int_expression(candidate, allow_zero=True) == 0:
+            reporter.warning(
+                f"{context}: 使用零位宽 {width.expression}；仍按 "
+                f"[{width.expression} -1:0] 生成，请确认综合/仿真工具对零宽网络的处理",
+                code="W_ZERO_WIDTH",
+            )
+        return width
+
     if raw_width is None or clean(raw_width) == "":
         number = evaluate_int_expression(default_value)
         return Width("literal", str(number or 1), str(number or 1))
-    number = evaluate_int_expression(raw_width)
+    number = evaluate_int_expression(raw_width, allow_zero=True)
     if number is not None:
-        return Width("literal", str(number), str(number))
+        return accepted(Width("literal", str(number), str(number)))
 
     text = clean(raw_width)
     macro_match = MACRO_RE.fullmatch(text)
@@ -790,7 +806,7 @@ def analyze_width(
             reporter,
             fallback_uncertain=fallback_uncertain,
         )
-        return Width("macro", text, default)
+        return accepted(Width("macro", text, default))
     if IDENTIFIER_RE.fullmatch(text):
         text = text.upper()
         default = normalized_width_default(
@@ -799,14 +815,14 @@ def analyze_width(
             reporter,
             fallback_uncertain=fallback_uncertain,
         )
-        return Width("parameter", text, default)
+        return accepted(Width("parameter", text, default))
 
     if re.fullmatch(r"[A-Za-z0-9_$`()\s`+\-*/%<>&|^]+", text) and re.search(
         r"[+\-*/%<>&|^]", text
     ):
-        inferred = evaluate_int_expression(default_value)
+        inferred = evaluate_int_expression(default_value, allow_zero=True)
         if inferred is not None:
-            return Width("literal", str(inferred), str(inferred))
+            return accepted(Width("literal", str(inferred), str(inferred)))
         reporter.warning(
             f"{context}: 表达式 {text!r} 无法确定位宽，使用占位值 {UNKNOWN_WIDTH}",
             code="W_WIDTH_PLACEHOLDER",
@@ -814,7 +830,7 @@ def analyze_width(
         return Width("literal", str(UNKNOWN_WIDTH), str(UNKNOWN_WIDTH))
 
     reporter.error(
-        f"{context}: 不支持的位宽 {text!r}；请使用正整数、`MACRO 或 PARAMETER",
+        f"{context}: 不支持的位宽 {text!r}；请使用非负整数、`MACRO 或 PARAMETER",
         code="E_WIDTH",
     )
     return Width("literal", "1", "1")
@@ -2163,6 +2179,8 @@ def all_packed_dimension_ranges(
 def zero_value(width: Width, parameter_map: dict[str, str] | None = None) -> str:
     expression = width_expression(width, parameter_map)
     if width.kind == "literal":
+        if evaluate_int_expression(expression, allow_zero=True) == 0:
+            return "'0"
         return f"{expression}'b0"
     return f"{{{expression}{{1'b0}}}}"
 
@@ -2177,16 +2195,59 @@ def connection_constant_value(
     value: str,
     port: Port,
     parameter_map: dict[str, str] | None = None,
+    *,
+    reporter: Reporter | None = None,
+    context: str = "NA 常量",
 ) -> str:
-    """Size plain ``NA->1`` to every packed bit of its destination port."""
+    """Fit an NA constant to the destination's complete packed shape.
+
+    Plain 0/1 are expanded across every packed dimension.  A sized Verilog
+    literal is zero-extended when narrower; an oversized literal is retained
+    (Verilog will context-truncate it) and reported for engineering review.
+    """
     constant = clean(value)
-    if constant != "1":
-        return constant
     dimensions = (*port.arrays, *port.packed_dimensions, port.width)
     bit_count = "*".join(
         width_expression(dimension, parameter_map) for dimension in dimensions
     )
-    return f"{{{bit_count}{{1'b1}}}}"
+    if constant in {"0", "1"}:
+        return f"{{{bit_count}{{1'b{constant}}}}}"
+
+    sized_match = SIZED_VERILOG_CONSTANT_RE.fullmatch(constant)
+    if sized_match is None:
+        return constant
+    source_width = int(sized_match.group("width").replace("_", ""))
+    resolved_dimensions = [
+        evaluate_int_expression(
+            dimension.expression
+            if dimension.kind == "literal"
+            else dimension.default,
+            allow_zero=True,
+        )
+        for dimension in dimensions
+    ]
+    if any(item is None for item in resolved_dimensions):
+        if reporter is not None:
+            reporter.warning(
+                f"{context}: 无法静态计算目标总位宽，保留常量 {constant}，"
+                "请在 elaboration 后确认",
+                code="W_NA_CONSTANT_WIDTH",
+            )
+        return constant
+    target_width = 1
+    for dimension in resolved_dimensions:
+        assert dimension is not None
+        target_width *= dimension
+    if source_width < target_width:
+        return f"{{{{{target_width - source_width}{{1'b0}}}}, {constant}}}"
+    if source_width > target_width and reporter is not None:
+        reporter.warning(
+            f"{context}: 常量 {constant} 的声明位宽 {source_width} 大于"
+            f"目标总位宽 {target_width}，生成结果保留原常量并由 Verilog 上下文截断；"
+            "请确认高位丢失是否符合设计",
+            code="W_NA_CONSTANT_WIDTH",
+        )
+    return constant
 
 
 def port_uses_parameter_width(port: Port) -> bool:
@@ -3074,6 +3135,11 @@ def render_integration(
                     target,
                     port,
                     parameter_maps.get(block.module_name),
+                    reporter=reporter,
+                    context=(
+                        f"集成页签 {sheet.name} 第 {row} 行: "
+                        f"{block.module_name}.{port.name}"
+                    ),
                 )
                 if port.direction == "input"
                 else None
@@ -3391,6 +3457,11 @@ def render_integration(
                         row_na_target,
                         top_port,
                         parameter_maps.get(top.name),
+                        reporter=reporter,
+                        context=(
+                            f"集成页签 {sheet.name} 第 {row} 行: "
+                            f"{top.name}.{top_port.name}"
+                        ),
                     )
                     add_assignment(top_port.name, top_constant, top_port.condition)
                     top_output_driver_conditions.setdefault(top_port.name, []).append(None)
@@ -3406,6 +3477,11 @@ def render_integration(
                                 row_na_target,
                                 child_port,
                                 parameter_maps.get(block.module_name),
+                                reporter=reporter,
+                                context=(
+                                    f"集成页签 {sheet.name} 第 {row} 行: "
+                                    f"{block.module_name}.{child_port.name}"
+                                ),
                             )
                             if child_port.direction == "input"
                             else None
