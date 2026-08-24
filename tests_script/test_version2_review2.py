@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.run_review_matrix import integration_sheet, module_sheet, write_xlsx
+from tests_script.run_review_matrix import integration_sheet, module_sheet, write_xlsx
 from xlsx2verilog import (
     Reporter,
     XlsxReader,
@@ -112,11 +112,11 @@ class Version2TechReview2Tests(unittest.TestCase):
             ):
                 self.assertRegex(
                     core,
-                    rf"parameter integer {name}\s+= {value}",
+                    rf"localparam\s+{name}\s+= {value}",
                 )
 
-            self.assertRegex(top, r"(?m)^\s*wire\s+\[DW_SIG3\s+-1:0\]\s+ready_to_process;$")
-            self.assertRegex(top, r"(?m)^\s*wire\s+\[DW_SIG2\s+-1:0\]\s+need_to_solve;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[13\s+-1:0\]\s+ready_to_process;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[12\s+-1:0\]\s+need_to_solve;$")
             self.assertRegex(
                 top,
                 r"(?m)^\s*\.ready_to_process\s+\(ready_to_process\s*\)"
@@ -128,17 +128,21 @@ class Version2TechReview2Tests(unittest.TestCase):
                 r"\s*//TODO:本信号期望有逻辑功能，请完成$",
             )
             self.assertRegex(top, r"(?m)^\s*\.n_rst\s+\(n_rst\[0\]\s*\),$")
-            self.assertRegex(top, r"(?m)^genvar i;\ngenerate\nfor \(i = 0;")
+            self.assertRegex(
+                top,
+                r"(?m)^genvar i_gen_u_mem_dat;\ngenerate\n"
+                r"for \(i_gen_u_mem_dat = 0;",
+            )
             self.assertNotIn("for (genvar", top)
 
             indexed_connections = [
                 line
                 for line in top.splitlines()
-                if re.search(r"\[[iI]\]\),?$", line.strip())
+                if re.search(r"\[i_gen_[a-z0-9_]+\]\),?$", line.strip())
             ]
             self.assertGreaterEqual(len(indexed_connections), 4)
             self.assertEqual(
-                len({line.index("[i]") for line in indexed_connections}),
+                len({line.index("[i_gen_") for line in indexed_connections}),
                 1,
             )
 

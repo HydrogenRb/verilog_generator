@@ -6,23 +6,31 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from appendix.xvlink_core import (
-    connection_suggestions,
-    export_project,
-    load_project,
-    load_workbook_model,
-    new_project,
-    validate_project,
-    write_integration_workbook,
-)
-from tests.run_review_matrix import module_sheet, write_xlsx
+try:
+    from appendix.xvlink_core import (
+        connection_suggestions,
+        export_project,
+        load_project,
+        load_workbook_model,
+        new_project,
+        validate_project,
+        write_integration_workbook,
+    )
+
+    APPENDIX_AVAILABLE = True
+except ModuleNotFoundError:
+    # The current V3 archive contains only the main generator; keep the former
+    # appendix regression discoverable without making the main suite unloadable.
+    APPENDIX_AVAILABLE = False
+from tests_script.run_review_matrix import module_sheet, write_xlsx
 from xlsx2verilog import Reporter, parse_workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SAMPLE = ROOT / "test.xlsx"
+SAMPLE = ROOT / "main_test.xlsx"
 
 
+@unittest.skipUnless(APPENDIX_AVAILABLE, "appendix project is not present in the V3 archive")
 class AppendixCoreTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

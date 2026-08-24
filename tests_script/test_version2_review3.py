@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.run_review_matrix import integration_sheet, module_sheet, set_cell, write_xlsx
+from tests_script.run_review_matrix import integration_sheet, module_sheet, set_cell, write_xlsx
 from xlsx2verilog import (
     Reporter,
     Sheet,
@@ -76,15 +76,16 @@ class Version2TechReview3Tests(unittest.TestCase):
             top = (root / "generated" / "riscv_top.v").read_text(encoding="utf-8")
             self.assertRegex(
                 top,
-                r"wire\s+\[114\s+-1:0\]\[CLK_BUS_0\s+-1:0\]\s+"
+                r"wire\s+\[114\s+-1:0\]\[114\s+-1:0\]\s+"
                 r"high_clk_after_pll_0;",
             )
             self.assertRegex(
                 top,
-                r"\.high_clk_after_pll_0\s+\(high_clk_after_pll_0\s*\[i\]\),?\s+"
+                r"\.high_clk_after_pll_0\s+"
+                r"\(high_clk_after_pll_0\s*\[i_gen_u_riscv_crg\]\),?\s+"
                 r"//TODO:本信号期望有逻辑功能，请完成",
             )
-            self.assertIn("begin : G_RISCV_CRG", top)
+            self.assertIn("begin : G_U_RISCV_CRG", top)
             self.assertIn("/*USER CODE BEGIN before RISCV_CRG*/", top)
             self.assertIn("/*USER CODE BEGIN after RISCV_CRG*/", top)
 
@@ -169,7 +170,7 @@ class Version2TechReview3Tests(unittest.TestCase):
             text = paths[0].read_text(encoding="utf-8")
             self.assertRegex(
                 text,
-                r"parameter integer LANE_NUM\s+= `GLB_PARAMETER",
+                r"localparam\s+LANE_NUM\s+= `GLB_PARAMETER",
             )
             self.assertRegex(text, r"(?m)^\s*input wire \[LANE_NUM\s+-1:0\]\s+DataBus,")
             self.assertRegex(text, r"(?m)^\s*inout\s+\[8\s+-1:0\]\s+BiDir$")
@@ -326,9 +327,10 @@ class Version2TechReview3Tests(unittest.TestCase):
             )
             self.assertRegex(
                 text,
-                r"\.lanes\s+\(lanes\s*\[i\]\),?\s+//TODO:本信号期望有逻辑功能，请完成",
+                r"\.lanes\s+\(lanes\s*\[i_gen_u_child\]\),?\s+"
+                r"//TODO:本信号期望有逻辑功能，请完成",
             )
-            self.assertIn("begin : G_CHILD", text)
+            self.assertIn("begin : G_U_CHILD", text)
 
             # Keeping a repeated header for the NA endpoint is also legal;
             # only its module-name cell must remain optional.

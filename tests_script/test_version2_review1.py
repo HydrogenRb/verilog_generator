@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.run_review_matrix import integration_sheet, module_sheet, set_cell, write_xlsx
+from tests_script.run_review_matrix import integration_sheet, module_sheet, set_cell, write_xlsx
 from xlsx2verilog import (
     Reporter,
     XlsxReader,
@@ -203,8 +203,7 @@ class Version2TechReview1Tests(unittest.TestCase):
             top = (root / "generated" / "top.v").read_text(encoding="utf-8")
             self.assertIn("module TOP", top)
             self.assertIn("input wire [WIDTH -1:0] Data", top)
-            self.assertIn("\nCHILD #(\n", top)
-            self.assertIn(") U_CHILD (", top)
+            self.assertIn("\nCHILD U_CHILD (\n", top)
             self.assertIn("\n    .Data ", top)
             self.assertNotIn("\n    CHILD", top)
 
@@ -301,11 +300,18 @@ class Version2TechReview1Tests(unittest.TestCase):
             self.assertTrue(any("generate 使用安全次数 5" in item.message for item in reporter.items))
             top = (root / "generated" / "riscv_top.v").read_text(encoding="utf-8")
             self.assertIn(".dft_test_en          (dft_test_en[0]", top)
-            self.assertIn("genvar i;\ngenerate\nfor (i = 0; i < 5; i = i + 1)", top)
-            self.assertIn("MEM_DAT #(", top)
-            self.assertIn(") U_MEM_DAT (", top)
-            self.assertIn(".bus_in             (bus_in            [i]", top)
-            self.assertIn(".dyadic_bus_out_rsp (dyadic_bus_out_rsp[i]", top)
+            self.assertIn(
+                "genvar i_gen_u_mem_dat;\ngenerate\n"
+                "for (i_gen_u_mem_dat = 0; i_gen_u_mem_dat < 5;",
+                top,
+            )
+            self.assertIn("MEM_DAT U_MEM_DAT (", top)
+            self.assertIn(
+                ".bus_in             (bus_in            [i_gen_u_mem_dat]", top
+            )
+            self.assertIn(
+                ".dyadic_bus_out_rsp (dyadic_bus_out_rsp[i_gen_u_mem_dat]", top
+            )
 
 
 if __name__ == "__main__":

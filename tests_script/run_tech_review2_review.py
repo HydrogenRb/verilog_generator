@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tests.run_review_matrix import run_matrix  # noqa: E402
+from tests_script.run_review_matrix import run_matrix  # noqa: E402
 from xlsx2verilog import Reporter, TEMPLATE_RE, generate, parse_workbook  # noqa: E402
 
 
-SAMPLE = ROOT / "test.xlsx"
+SAMPLE = ROOT / "main_test.xlsx"
 SAMPLE_OUTPUT = ROOT / "generated"
 SAMPLE_INTEGRATION = "集成_RISCV_TOP"
 REAL_TESTS = [
@@ -52,7 +52,11 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
     paths, reporter = generate(
         SAMPLE, SAMPLE_OUTPUT, integration_sheet=SAMPLE_INTEGRATION
     )
-    result.check(not reporter.has_errors, "最新 test.xlsx 无错误生成 3 个模块", "test.xlsx 生成失败")
+    result.check(
+        not reporter.has_errors,
+        "main_test.xlsx 无错误生成 3 个模块",
+        "main_test.xlsx 生成失败",
+    )
     result.check(len(paths) == 3, "生成文件数为 3", f"生成文件数错误：{len(paths)}")
     top = (SAMPLE_OUTPUT / "riscv_top.v").read_text(encoding="utf-8") if paths else ""
     core = (
@@ -68,7 +72,7 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
             f"缺少 {{{{i}}}} 展开端口 {signal}",
         )
         result.check(
-            re.search(rf"(?m)^`define {macro_name}\s+114$", top) is not None,
+            re.search(rf"(?m)^// `define {macro_name}\s+114$", top) is not None,
             f"{macro_name} 不确定位宽使用 114",
             f"{macro_name} 未使用 114 占位",
         )
@@ -120,7 +124,9 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
 def regression_round() -> RoundResult:
     result = RoundResult("第二轮：历史功能和 real_test 回归")
     stream = io.StringIO()
-    suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_*.py")
+    suite = unittest.defaultTestLoader.discover(
+        str(ROOT / "tests_script"), pattern="test_*.py"
+    )
     unit_result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
     result.check(
         unit_result.wasSuccessful(),
@@ -250,7 +256,7 @@ def write_report(path: Path, rounds: list[RoundResult], diagnostics: Reporter) -
     lines = [
         "# Tech Review 2 三轮检视报告",
         "",
-        "本报告由 `tests/run_tech_review2_review.py` 生成，覆盖新功能、历史回归和生成代码静态结构。",
+        "本报告由 `tests_script/run_tech_review2_review.py` 生成，覆盖新功能、历史回归和生成代码静态结构。",
         "",
         "## 汇总",
         "",

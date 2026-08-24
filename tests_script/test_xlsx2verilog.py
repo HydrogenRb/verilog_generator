@@ -17,7 +17,7 @@ from xlsx2verilog import (
     generate,
     parse_workbook,
 )
-from tests.run_review_matrix import (
+from tests_script.run_review_matrix import (
     integration_sheet,
     module_sheet,
     run_matrix,
@@ -27,7 +27,7 @@ from tests.run_review_matrix import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SAMPLE = ROOT / "test.xlsx"
+SAMPLE = ROOT / "main_test.xlsx"
 SAMPLE_INTEGRATION = "集成_RISCV_TOP"
 
 
@@ -145,18 +145,18 @@ class GenerationTests(unittest.TestCase):
             core = (output / "riscv_core_test.v").read_text(encoding="utf-8")
             phy = (output / "mem_phy.v").read_text(encoding="utf-8")
 
-            self.assertIn("parameter integer UID_SIZE = 5", top)
-            self.assertRegex(top, r"(?m)^`define DFT_BUS\s+64$")
+            self.assertRegex(top, r"(?m)^\s*localparam\s+UID_SIZE\s+= 5")
+            self.assertRegex(top, r"(?m)^// `define DFT_BUS\s+64$")
             self.assertRegex(top, r"(?m)^\s*wire\s+.*\bw_apb_1;$")
             self.assertRegex(top, r"(?m)^\s*wire\s+.*\bw_apb_6;$")
-            self.assertIn("RISCV_CORE_TEST #(", top)
-            self.assertIn("MEM_PHY #(", top)
+            self.assertIn("RISCV_CORE_TEST U_RISCV_CORE_TEST (", top)
+            self.assertIn("MEM_PHY U_MEM_PHY (", top)
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(1'b0\s*\),$")
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_3\s+\(\s*\),$")
             self.assertRegex(top, r"(?m)^assign ahb_test_6\s+= 6'b0;$")
             self.assertRegex(core, r"(?m)^assign apb_6\s+= \{LANE_NUM\{1'b0\}\};$")
             self.assertRegex(phy, r"(?m)^assign apb_1\s+= 1'b0;$")
-            self.assertRegex(top, r"(?m)^`define DW_SIG1\s+114$")
+            self.assertRegex(top, r"(?m)^// `define DW_SIG1\s+114$")
             self.assertRegex(top, r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$")
             self.assertRegex(
                 top,
@@ -344,11 +344,10 @@ class GenerationTests(unittest.TestCase):
             ]
             self.assertEqual(len(set(name_columns)), 1)
 
-            self.assertRegex(top, r"(?m)^    \.WIDTH\s+\(WIDTH\s*\),$")
             self.assertRegex(top, r"(?m)^    \.short\s{7}\(1'b0\s*\),$")
             self.assertRegex(
                 top,
-                r"(?m)^    \.much_longer \(\{WIDTH\{1'b0\}\}\s*\),$",
+                r"(?m)^    \.much_longer \(\{8\{1'b0\}\}\s*\),$",
             )
             connection_lines = [
                 line
@@ -358,13 +357,7 @@ class GenerationTests(unittest.TestCase):
                 )
             ]
             self.assertEqual(len({line.rindex(")") for line in connection_lines}), 1)
-            parameter_lines = [
-                line
-                for line in top.splitlines()
-                if line.lstrip().startswith((".WIDTH", ".LONG_PARAMETER"))
-            ]
-            self.assertEqual(len(parameter_lines), 2)
-            self.assertEqual(len({line.rindex(")") for line in parameter_lines}), 1)
+            self.assertNotIn("FORMAT_CHILD #(", top)
 
     def test_array_dimensions_are_packed_left_and_zero_drives_are_direct(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -445,7 +438,7 @@ class GenerationTests(unittest.TestCase):
             )
             self.assertRegex(
                 top,
-                r"wire\s+\[DEPTH\s+-1:0\]\[DATA_WIDTH\s+-1:0\]\s+w_data;",
+                r"wire\s+\[4\s+-1:0\]\[32\s+-1:0\]\s+w_data;",
             )
             self.assertRegex(top, r"(?m)^    \.spare \('0\s*\)$")
             self.assertRegex(source, r"(?m)^assign data\s+= '0;$")
@@ -648,8 +641,8 @@ class GenerationTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(set(positions)), 1)
             self.assertRegex(text, r"(?m)^\s*sky_if\.slv\s+bus_if$")
-            self.assertRegex(text, r"(?m)^`define ROWS\s+2$")
-            self.assertRegex(text, r"(?m)^`define COLS\s+8$")
+            self.assertRegex(text, r"(?m)^// `define ROWS\s+2$")
+            self.assertRegex(text, r"(?m)^// `define COLS\s+8$")
             self.assertRegex(text, r"(?m)^\s*assign matrix\s+= '0;$")
             self.assertRegex(text, r"(?m)^assign cube\s+= '0;$")
             self.assertNotIn("gen_zero_cube", text)
@@ -680,8 +673,8 @@ class GenerationTests(unittest.TestCase):
                 self.assertIn(name, text)
             self.assertIn("DONE_A", text)
             self.assertIn("DONE_b", text)
-            self.assertRegex(text, r"(?m)^`define W_A\s+114$")
-            self.assertRegex(text, r"(?m)^`define W_B\s+114$")
+            self.assertRegex(text, r"(?m)^// `define W_A\s+114$")
+            self.assertRegex(text, r"(?m)^// `define W_B\s+114$")
             self.assertNotIn("`define W_a", text)
             self.assertRegex(text, r"(?m)^\s*inout\s+needs_review")
             self.assertNotRegex(text, r"(?m)^\s*inout\s+wire\b")
@@ -923,7 +916,9 @@ class GenerationTests(unittest.TestCase):
             self.assertNotIn("`define FEATURE_Y", text)
             self.assertNotIn("`ifndef", text)
 
-            macro_lines = [line for line in text.splitlines() if line.startswith("`define")]
+            macro_lines = [
+                line for line in text.splitlines() if line.startswith("// `define")
+            ]
             self.assertEqual(len(macro_lines), 2)
             macro_value_columns = [
                 re.search(r"\S+$", line).start()  # type: ignore[union-attr]
@@ -1256,9 +1251,8 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual({path.name for path in paths}, {"top.v", "source.v", "sink.v"})
             text = (output / "top.v").read_text(encoding="utf-8")
-            self.assertIn("parameter integer WIDTH = 8", text)
             self.assertNotIn("localparam", text)
-            self.assertIn("SOURCE #(", text)
+            self.assertIn("SOURCE U_SOURCE (", text)
             self.assertNotIn("module:SOURCE", text)
             wire_lines = [
                 line for line in text.splitlines() if re.match(r"^\s*wire\b", line)

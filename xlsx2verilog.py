@@ -29,6 +29,31 @@ from xml.etree import ElementTree as ET
 # True: honor “条件：MACRO” in category cells and emit conditional Verilog.
 ENABLE_CONDITIONAL_BLOCKS = False
 
+# Text placed at the beginning of every generated Verilog file.  Edit this
+# plain multi-line string to match the project.  The stable USER markers make
+# the header editable after generation as well.
+VERILOG_FILE_HEADER = """//******************
+// Design by: aaa
+// Project name: bbb
+//
+//******************"""
+
+# False (default): preserve an existing generated file's ``file header`` USER
+# region.  True: replace that region with VERILOG_FILE_HEADER on every run.
+OVERWRITE_FILE_HEADER = False
+
+# Diagnostic visibility only affects terminal output.  Hidden diagnostics are
+# still recorded and still affect exit codes / --strict exactly as before.
+SHOW_ERROR_MESSAGES = True
+SHOW_WARNING_MESSAGES = True
+SHOW_INFO_MESSAGES = True
+
+# Startup identification.  These lines are centered to one shared width.
+SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
+SCRIPT_VERSION = "Version V3.1"
+SCRIPT_RELEASE_DATE = "2026.8.24"
+SCRIPT_CONTACT = "Contact xxx-xxxx in case"
+
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 CELL_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
@@ -52,11 +77,20 @@ CONDITION_CATEGORY_RE = re.compile(
 INDEX_MARKER_RE = re.compile(r"^(.*)\[([A-Za-z_][A-Za-z0-9_$]*)\]\s*$")
 BIT_SELECT_RE = re.compile(r"^(.*)\[\s*([0-9]+)\s*\]\s*$")
 ANONYMOUS_NA_RE = re.compile(
-    r"^(?:na|n/a)(?:\s*\[\s*[A-Za-z_][A-Za-z0-9_$]*\s*\])?$",
+    r"^(?:na|n/a)(?:\s*\[\s*[A-Za-z_][A-Za-z0-9_$]*\s*\])?"
+    r"(?:\s*->\s*[^\s].*)?$",
     re.IGNORECASE,
 )
+NA_REFERENCE_RE = re.compile(
+    r"^(?:na|n/a)(?:\s*\[\s*([A-Za-z_][A-Za-z0-9_$]*)\s*\])?"
+    r"(?:\s*->\s*(.+))?$",
+    re.IGNORECASE,
+)
+VERILOG_CONSTANT_RE = re.compile(
+    r"^(?:[0-9]+|'[sS]?[dDhHbBoO]?[0-9a-fA-F_xXzZ?]+|"
+    r"[0-9]+\s*'[sS]?[dDhHbBoO][0-9a-fA-F_xXzZ?]+)$"
+)
 PARAMETER_CATEGORIES = {"parameter", "parameters", "参数", "参数定义"}
-NA_CONNECTION_VALUES = {"na", "n/a"}
 NA_CONNECTION_TODO = "//TODO:本信号期望有逻辑功能，请完成"
 MAX_TEMPLATE_RANGE_ITEMS = 4096
 USER_CODE_MARKER_RE = re.compile(
@@ -122,8 +156,15 @@ class Reporter:
             "警告": ("warning", "\033[33m"),
             "信息": ("info", "\033[36m"),
         }
+        visibility = {
+            "错误": SHOW_ERROR_MESSAGES,
+            "警告": SHOW_WARNING_MESSAGES,
+            "信息": SHOW_INFO_MESSAGES,
+        }
         reset = "\033[0m" if color else ""
         for level in ("错误", "警告", "信息"):
+            if not visibility[level]:
+                continue
             grouped = [item for item in self.items if item.level == level]
             if not grouped:
                 continue
@@ -385,6 +426,9 @@ class Module:
     parameters: dict[str, str] = field(default_factory=dict)
     macros: dict[str, str] = field(default_factory=dict)
     declared_parameters: dict[str, str] = field(default_factory=dict)
+    parameter_expressions: dict[str, str] = field(default_factory=dict)
+    parameter_comments: dict[str, str] = field(default_factory=dict)
+    externally_configurable_parameters: set[str] = field(default_factory=set)
 
     @property
     def port_map(self) -> dict[str, Port]:
@@ -399,6 +443,15 @@ class IntegrationBlock:
     anonymous_na: bool = False
 
 
+@dataclass(frozen=True)
+class InstanceSpec:
+    module_name: str
+    instance_name: str | None = None
+    count: int | None = None
+    raw_count: str | None = None
+    row: int = 0
+
+
 @dataclass
 class Integration:
     sheet_name: str
@@ -406,6 +459,32 @@ class Integration:
     groups: list[list[IntegrationBlock]]
     top_name: str
     child_names: list[str]
+    instance_specs: dict[str, InstanceSpec] = field(default_factory=dict)
+
+
+def integration_parameter_rows(
+    sheet: Sheet, integration: Integration
+) -> dict[int, set[int]]:
+    """Return inherited ``parameter`` rows for every connection group."""
+    result: dict[int, set[int]] = {}
+    for group_index, group in enumerate(integration.groups):
+        category_column = group[0].port_column - 1
+        active = False
+        rows: set[int] = set()
+        for row in range(integration.header_row + 1, sheet.max_row + 1):
+            raw_category = (
+                clean(sheet.cell(row, category_column))
+                if category_column >= 1
+                else ""
+            )
+            if raw_category:
+                active = is_parameter_category(raw_category)
+            if active and any(
+                clean(sheet.cell(row, block.port_column)) for block in group
+            ):
+                rows.add(row)
+        result[group_index] = rows
+    return result
 
 
 def normalized_direction(value: Any) -> str | None:
@@ -897,6 +976,12 @@ def replace_port_dimensions(port: Port, transform: Callable[[Width], Width]) -> 
 def rebuild_module_symbols(module: Module) -> None:
     parameters = dict(module.declared_parameters)
     macros: dict[str, str] = {}
+    for name, expression in module.parameter_expressions.items():
+        macro_match = MACRO_RE.fullmatch(expression)
+        if macro_match:
+            macros.setdefault(
+                macro_match.group(1), module.declared_parameters.get(name, "")
+            )
     for port in module.ports:
         for dimension in port_dimensions(port):
             if dimension.kind == "parameter":
@@ -956,6 +1041,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
 
     ports: list[Port] = []
     declared_parameters: dict[str, str] = {}
+    parameter_expressions: dict[str, str] = {}
+    parameter_comments: dict[str, str] = {}
     declared_parameter_rows: dict[str, int] = {}
     seen: dict[str, Port] = {}
     active_template_values: dict[str, list[str]] = {}
@@ -1033,27 +1120,48 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 raw_default = uppercase_macro_references(
                     substitute_template(raw_default, expansion)
                 )
-                default = normalized_parameter_default(
-                    raw_default,
-                    f"{expanded_context}: parameter {parameter_name}",
-                    reporter,
-                    fallback_uncertain=bool(expansion),
+                raw_expression = uppercase_macro_references(
+                    substitute_template(sheet.cell(row, columns["width"]), expansion)
                 )
-                if not default:
-                    reporter.error(
-                        f"{expanded_context}: parameter {parameter_name} "
-                        "缺少“数值”默认值"
+                expression = ""
+                if clean(raw_expression):
+                    macro_match = MACRO_RE.fullmatch(clean(raw_expression))
+                    if macro_match is None:
+                        reporter.error(
+                            f"{expanded_context}: parameter {parameter_name} 的“位宽”"
+                            "仅支持完整宏引用，例如 `GLB_LANE_NUM"
+                        )
+                    else:
+                        expression = f"`{macro_match.group(1).upper()}"
+                    default = normalized_width_default(
+                        raw_default,
+                        f"{expanded_context}: parameter {parameter_name} 的匹配数值",
+                        reporter,
+                        fallback_uncertain=bool(expansion),
                     )
-                    default = "1"
+                else:
+                    default = normalized_parameter_default(
+                        raw_default,
+                        f"{expanded_context}: parameter {parameter_name}",
+                        reporter,
+                        fallback_uncertain=bool(expansion),
+                    )
                 previous = declared_parameters.get(parameter_name)
-                if previous is not None and previous != default:
+                previous_expression = parameter_expressions.get(parameter_name, "")
+                if previous is not None and (
+                    previous != default or previous_expression != expression
+                ):
                     reporter.error(
                         f"页签 {sheet.name}: parameter {parameter_name} 默认值冲突；"
-                        f"第 {declared_parameter_rows[parameter_name]} 行为 {previous}，"
-                        f"第 {row} 行为 {default}"
+                        f"第 {declared_parameter_rows[parameter_name]} 行为 "
+                        f"{previous_expression or previous} (匹配值 {previous})，"
+                        f"第 {row} 行为 {expression or default} (匹配值 {default})"
                     )
                     continue
                 declared_parameters.setdefault(parameter_name, default)
+                if expression:
+                    parameter_expressions.setdefault(parameter_name, expression)
+                    parameter_comments.setdefault(parameter_name, default)
                 declared_parameter_rows.setdefault(parameter_name, row)
             continue
 
@@ -1226,9 +1334,46 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
         sheet.name,
         ports,
         declared_parameters=declared_parameters,
+        parameter_expressions=parameter_expressions,
+        parameter_comments=parameter_comments,
     )
     resolve_module_local_defaults(module, reporter)
     return module
+
+
+def find_instance_specs(sheet: Sheet) -> dict[str, InstanceSpec]:
+    """Read the optional 模块名/例化名/例化次数 side table."""
+    aliases = {
+        "module": {"模块名", "module", "module_name", "modulename"},
+        "instance": {"例化名", "实例名", "instance", "instance_name", "instancename"},
+        "count": {"例化次数", "实例数量", "instancecount", "instance_count", "count"},
+    }
+    for header_row in range(1, min(sheet.max_row, 20) + 1):
+        columns: dict[str, int] = {}
+        for column in range(1, sheet.max_column + 1):
+            text = clean(sheet.cell(header_row, column)).casefold().replace(" ", "")
+            for field_name, names in aliases.items():
+                if text in names and field_name not in columns:
+                    columns[field_name] = column
+        if not {"module", "instance", "count"}.issubset(columns):
+            continue
+        specs: dict[str, InstanceSpec] = {}
+        for row in range(header_row + 1, sheet.max_row + 1):
+            module_name = clean(sheet.cell(row, columns["module"])).upper()
+            if not module_name:
+                continue
+            instance_name = clean(sheet.cell(row, columns["instance"])) or None
+            raw_count = clean(sheet.cell(row, columns["count"])) or None
+            count = evaluate_int_expression(raw_count) if raw_count else None
+            specs[module_name] = InstanceSpec(
+                module_name,
+                instance_name=instance_name,
+                count=count,
+                raw_count=raw_count,
+                row=row,
+            )
+        return specs
+    return {}
 
 
 def find_integration(sheet: Sheet) -> Integration | None:
@@ -1362,7 +1507,14 @@ def find_integration(sheet: Sheet) -> Integration | None:
                     and block.module_name not in child_names
                 ):
                     child_names.append(block.module_name)
-        return Integration(sheet.name, row, groups, top_name, child_names)
+        return Integration(
+            sheet.name,
+            row,
+            groups,
+            top_name,
+            child_names,
+            find_instance_specs(sheet),
+        )
     return None
 
 
@@ -1396,16 +1548,77 @@ def resolve_hierarchy_defaults(
     modules: dict[str, Module],
     integration: Integration | None,
     reporter: Reporter,
+    integration_sheet: Sheet | None = None,
 ) -> None:
-    """Resolve blank macro/parameter defaults after the complete hierarchy is known."""
+    """Resolve defaults without implicitly exporting local parameters."""
     ordered = list(modules.values())
-    top = modules.get(integration.top_name) if integration else None
+
+    linked_parameter_defaults: dict[tuple[str, str], str] = {}
+    if integration is not None and integration_sheet is not None:
+        rows_by_group = integration_parameter_rows(integration_sheet, integration)
+        for group_index, group in enumerate(integration.groups):
+            for row in rows_by_group[group_index]:
+                entries: list[tuple[Module, str]] = []
+                for block in group:
+                    if block.anonymous_na:
+                        continue
+                    module = modules.get(block.module_name)
+                    name = clean(
+                        integration_sheet.cell(row, block.port_column)
+                    ).upper()
+                    if module is not None and name in module.parameters:
+                        entries.append((module, name))
+                known = [
+                    (module, name, module.parameters[name])
+                    for module, name in entries
+                    if module.parameters[name]
+                ]
+                if not known:
+                    continue
+                preferred = next(
+                    (
+                        item
+                        for item in known
+                        if item[0].name == integration.top_name
+                    ),
+                    known[0],
+                )
+                value = preferred[2]
+                for module, name in entries:
+                    linked_parameter_defaults[(module.name, name)] = value
+
+        for module in ordered:
+            for name, value in list(module.declared_parameters.items()):
+                linked = linked_parameter_defaults.get((module.name, name))
+                if not value and linked:
+                    module.declared_parameters[name] = linked
+
+            def spread_linked(width: Width) -> Width:
+                if width.kind != "parameter" or width.default:
+                    return width
+                linked = linked_parameter_defaults.get(
+                    (module.name, width.expression)
+                )
+                return replace(width, default=linked) if linked else width
+
+            for port in module.ports:
+                replace_port_dimensions(port, spread_linked)
+            resolve_module_local_defaults(module, reporter)
 
     def finalize_modules() -> None:
         # Only now are truly unresolved values diagnosed. Template-generated
         # symbols retain the documented 114 placeholder so a usable review
         # file can still be emitted; ordinary symbols are hard errors.
         for module in ordered:
+            for name, value in list(module.declared_parameters.items()):
+                if value:
+                    continue
+                reporter.error(
+                    f"页签 {module.sheet_name}: parameter {name} 缺少“数值”默认值，"
+                    "且没有有效的显式 parameter 链接"
+                )
+                module.declared_parameters[name] = "1"
+            resolve_module_local_defaults(module, reporter)
             for port in module.ports:
                 def finalize(width: Width) -> Width:
                     if width.kind not in {"macro", "parameter"} or width.default:
@@ -1444,8 +1657,6 @@ def resolve_hierarchy_defaults(
 
     macro_values: dict[str, set[str]] = {}
     macro_sources: dict[str, list[tuple[str, str]]] = {}
-    parameter_values: dict[str, set[str]] = {}
-    top_parameter_values: dict[str, str] = {}
     for module in hierarchy:
         for name, value in module.macros.items():
             if value:
@@ -1458,10 +1669,6 @@ def resolve_hierarchy_defaults(
                     continue
                 if width.kind == "macro":
                     macro_values.setdefault(width.expression, set()).add(width.default)
-                elif width.kind == "parameter":
-                    parameter_values.setdefault(width.expression, set()).add(width.default)
-                    if module is top:
-                        top_parameter_values.setdefault(width.expression, width.default)
 
     for name, values in macro_values.items():
         if len(values) > 1:
@@ -1476,15 +1683,9 @@ def resolve_hierarchy_defaults(
             )
 
     def inherited(width: Width) -> Width:
-        if width.kind not in {"macro", "parameter"} or width.default:
+        if width.kind != "macro" or width.default:
             return width
-        if width.kind == "macro":
-            candidates = macro_values.get(width.expression, set())
-        else:
-            top_value = top_parameter_values.get(width.expression)
-            if top_value:
-                return replace(width, default=top_value)
-            candidates = parameter_values.get(width.expression, set())
+        candidates = macro_values.get(width.expression, set())
         if len(candidates) == 1:
             return replace(width, default=next(iter(candidates)))
         return width
@@ -1563,9 +1764,34 @@ def parse_workbook(
         for name in hierarchy_names:
             if name not in modules:
                 reporter.error(f"集成页签引用了不存在的模块定义 {name}")
+        for name, spec in integration.instance_specs.items():
+            context = f"集成页签 {integration.sheet_name} 例化配置第 {spec.row} 行"
+            if name not in hierarchy_names:
+                reporter.warning(f"{context}: 模块 {name} 不在当前集成层次中，配置已忽略")
+                continue
+            if spec.instance_name and not IDENTIFIER_RE.fullmatch(spec.instance_name):
+                reporter.error(
+                    f"{context}: 例化名 {spec.instance_name!r} 不是合法 Verilog 标识符"
+                )
+            if spec.raw_count and spec.count is None:
+                reporter.error(
+                    f"{context}: 例化次数 {spec.raw_count!r} 必须是正整数或可计算的正整数表达式"
+                )
+            if name == integration.top_name and (
+                spec.instance_name is not None or spec.raw_count is not None
+            ):
+                reporter.info(f"{context}: TOP 模块不需要例化名或例化次数，相关值已忽略")
     if not modules:
         reporter.error("工作簿中没有识别到模块定义页签")
-    resolve_hierarchy_defaults(modules, integration, reporter)
+    selected_integration_sheet = (
+        workbook.by_name(integration.sheet_name) if integration is not None else None
+    )
+    resolve_hierarchy_defaults(
+        modules,
+        integration,
+        reporter,
+        integration_sheet=selected_integration_sheet,
+    )
     return workbook, modules, integration
 
 
@@ -1889,7 +2115,11 @@ def render_macros(macros: dict[str, str]) -> list[str]:
     if not macros:
         return []
     name_width = max(len(name) for name in macros)
-    lines = [f"`define {name:<{name_width}} {value}" for name, value in macros.items()]
+    # Macro defaults are documentation only.  Real projects commonly provide
+    # the same names globally, so active definitions here would redefine them.
+    lines = [
+        f"// `define {name:<{name_width}} {value}" for name, value in macros.items()
+    ]
     if lines:
         lines.append("")
     return lines
@@ -1946,8 +2176,19 @@ def port_declaration_prefix(
     return f"{port.direction:<{direction_width}} wire{packed_field}"
 
 
+def render_file_header() -> list[str]:
+    """Return the configurable, optionally preserved generated-file header."""
+    return [
+        "/*USER CODE BEGIN file header*/",
+        *VERILOG_FILE_HEADER.splitlines(),
+        "/*USER CODE END   file header*/",
+        "",
+        "// Generated by xlsx2verilog.py. Do not edit outside USER CODE regions.",
+    ]
+
+
 def render_module_header(module: Module, macros: dict[str, str] | None = None) -> list[str]:
-    lines = ["// Generated by xlsx2verilog.py. Do not edit by hand."]
+    lines = render_file_header()
     lines.extend(render_macros(macros if macros is not None else module.macros))
     if module.parameters:
         lines.append(f"module {module.name} #(")
@@ -1955,8 +2196,17 @@ def render_module_header(module: Module, macros: dict[str, str] | None = None) -
         parameter_name_width = max(len(name) for name, _ in parameter_items)
         for index, (name, value) in enumerate(parameter_items):
             comma = "," if index < len(parameter_items) - 1 else ""
+            keyword = (
+                "parameter"
+                if name in module.externally_configurable_parameters
+                else "localparam"
+            )
+            rendered_value = module.parameter_expressions.get(name, value)
+            comment_value = module.parameter_comments.get(name)
+            comment = f"  // {comment_value}" if comment_value else ""
             lines.append(
-                f"    parameter integer {name:<{parameter_name_width}} = {value}{comma}"
+                f"    {keyword:<10} {name:<{parameter_name_width}} = "
+                f"{rendered_value}{comma}{comment}"
             )
         lines.append(") (")
     else:
@@ -2110,8 +2360,17 @@ def split_bit_select(reference: Any) -> tuple[str, str | None, int | None]:
     return match.group(1).strip(), f"[{index}]", index
 
 
-def is_na_connection(value: Any) -> bool:
-    return clean(value).casefold().replace(" ", "") in NA_CONNECTION_VALUES
+def parse_na_connection(value: Any) -> tuple[str | None, str | None] | None:
+    """Return ``(index, target)`` for NA, NA[i], or NA->target."""
+    match = NA_REFERENCE_RE.fullmatch(clean(value))
+    if match is None:
+        return None
+    target = clean(match.group(2)) or None
+    return match.group(1), target
+
+
+def is_verilog_constant(value: str) -> bool:
+    return VERILOG_CONSTANT_RE.fullmatch(clean(value)) is not None
 
 
 def aligned_binding_expressions(
@@ -2224,26 +2483,105 @@ def render_integration(
                     "上下层同名宏必须使用相同数值"
                 )
 
+    # A parameter is local by default.  Only rows explicitly placed under a
+    # ``parameter`` category in the integration sheet create an override path.
+    parameter_rows_by_group = integration_parameter_rows(sheet, integration)
+    # parameter_maps are used when a child-owned dimension must be expressed
+    # in TOP scope.  Unlinked local parameters resolve to their numeric match
+    # values; linked parameters resolve to a TOP localparam name.
     parameter_maps: dict[str, dict[str, str]] = {
         top.name: {name: name for name in top.parameters}
     }
+    instance_parameter_maps: dict[str, dict[str, str]] = {}
     for child in children:
-        mapping: dict[str, str] = {}
-        for name, value in child.parameters.items():
-            if name in top.parameters:
-                mapping[name] = name
-                if top.parameters[name] != value:
-                    reporter.info(
-                        f"集成模块: {child.name}.{name} 默认值 {value} 被 TOP 参数默认值 {top.parameters[name]} 覆盖"
-                    )
-            else:
-                top.parameters[name] = value
-                parameter_maps[top.name][name] = name
-                mapping[name] = name
-                reporter.info(
-                    f"集成模块: {child.name}.{name} 已提升为 TOP 可覆盖参数"
+        parameter_maps[child.name] = dict(child.parameters)
+        instance_parameter_maps[child.name] = {}
+
+    used_top_parameter_names = set(top.parameters)
+
+    def add_top_local_parameter(
+        base_name: str,
+        source_module: Module,
+        source_name: str,
+        row: int,
+    ) -> str:
+        value = source_module.parameters[source_name]
+        candidate = base_name
+        if candidate in top.parameters and top.parameters[candidate] != value:
+            candidate = unique_name(
+                f"LOCAL_{source_module.name}_{source_name}", used_top_parameter_names
+            ).upper()
+        else:
+            used_top_parameter_names.add(candidate)
+        if candidate not in top.parameters:
+            top.parameters[candidate] = value
+            expression = source_module.parameter_expressions.get(source_name)
+            if expression:
+                top.parameter_expressions[candidate] = expression
+                top.parameter_comments[candidate] = source_module.parameter_comments.get(
+                    source_name, value
                 )
-        parameter_maps[child.name] = mapping
+            parameter_maps[top.name][candidate] = candidate
+            reporter.info(
+                f"集成页签 {sheet.name} 第 {row} 行: 自动在 TOP 创建 "
+                f"localparam {candidate}，用于显式 parameter 链接"
+            )
+        return candidate
+
+    for group_index, group in enumerate(integration.groups):
+        for row in sorted(parameter_rows_by_group[group_index]):
+            entries: list[tuple[IntegrationBlock, Module, str]] = []
+            for block in group:
+                if block.anonymous_na:
+                    continue
+                reference = clean(sheet.cell(row, block.port_column)).upper()
+                if not reference:
+                    continue
+                module = modules.get(block.module_name)
+                if module is None:
+                    continue
+                if reference not in module.parameters:
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: "
+                        f"{block.module_name} 没有 parameter {reference}"
+                    )
+                    continue
+                entries.append((block, module, reference))
+            if len(entries) < 2:
+                if entries:
+                    block, _, name = entries[0]
+                    reporter.info(
+                        f"集成页签 {sheet.name} 第 {row} 行: parameter "
+                        f"{block.module_name}.{name} 没有链接对端，保持 local"
+                    )
+                continue
+
+            top_entry = next(
+                (entry for entry in entries if entry[0].module_name == top.name), None
+            )
+            if top_entry is not None:
+                _, source_module, source_name = top_entry
+                local_name = source_name
+                local_value = source_module.parameters[source_name]
+            else:
+                _, source_module, source_name = entries[0]
+                local_name = add_top_local_parameter(
+                    source_name, source_module, source_name, row
+                )
+                local_value = top.parameters[local_name]
+
+            for block, module, name in entries:
+                if module.name == top.name:
+                    continue
+                instance_parameter_maps[module.name][name] = local_name
+                parameter_maps[module.name][name] = local_name
+                module.externally_configurable_parameters.add(name)
+                if module.parameters[name] != local_value:
+                    reporter.info(
+                        f"集成页签 {sheet.name} 第 {row} 行: {module.name}.{name} "
+                        f"匹配值 {module.parameters[name]} 由 TOP localparam "
+                        f"{local_name}={local_value} 覆盖"
+                    )
 
     bindings: dict[str, dict[str, Binding]] = {child.name: {} for child in children}
     generate_specs: dict[str, GenerateSpec] = {}
@@ -2252,6 +2590,26 @@ def render_integration(
     wires: list[Wire] = []
     adapter_assignments: list[Assignment] = []
     used_signals = set(top_ports)
+    instance_names: dict[str, str] = {}
+    used_instance_names: set[str] = set()
+    generated_indices: dict[str, str] = {}
+    used_generated_indices: set[str] = set()
+    for child in children:
+        configured = integration.instance_specs.get(child.name)
+        instance_name = (
+            configured.instance_name
+            if configured and configured.instance_name
+            else f"U_{child.name}"
+        )
+        if instance_name in used_instance_names:
+            reporter.error(
+                f"集成页签 {sheet.name}: 例化名 {instance_name} 被多个模块重复使用"
+            )
+        used_instance_names.add(instance_name)
+        instance_names[child.name] = instance_name
+        generated_indices[child.name] = unique_name(
+            f"i_gen_{instance_name}", used_generated_indices
+        ).lower()
 
     def indexed_dimension(port: Port) -> Width | None:
         dimensions = (
@@ -2449,9 +2807,10 @@ def render_integration(
         port: Port,
         row: int,
         index: str | None = None,
+        target: str | None = None,
     ) -> None:
         if block.module_name == top.name:
-            reporter.warning(
+            reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: TOP 端口 "
                 f"{top.name}.{port.name} 不能通过 NA 创建内部占位信号"
             )
@@ -2462,17 +2821,47 @@ def render_integration(
                 f"{block.module_name}.{port.name} 不支持 NA[{index}] generate"
             )
             return
-        signal_name = unique_name(port.name, used_signals)
+        if target and is_verilog_constant(target):
+            if index:
+                register_generate_marker(block.module_name, index, port, row)
+            expression = target if port.direction == "input" else None
+            bind(block.module_name, port, expression, row)
+            reporter.info(
+                f"集成页签 {sheet.name} 第 {row} 行: "
+                f"{block.module_name}.{port.name} 连接到常量 {target}"
+                if expression is not None
+                else f"集成页签 {sheet.name} 第 {row} 行: "
+                f"{block.module_name}.{port.name} 是输出端，NA->{target} 按开路处理"
+            )
+            return
+        if target:
+            if not IDENTIFIER_RE.fullmatch(target):
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
+                    f"{target!r} 不是合法 Verilog 标识符或受支持常量"
+                )
+                return
+            if target in used_signals:
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
+                    f"{target} 与已有信号重名"
+                )
+                return
+            signal_name = target
+            used_signals.add(signal_name)
+        else:
+            signal_name = unique_name(port.name, used_signals)
         placeholder_arrays = port.arrays
         expression = signal_name
         if index:
             extent = register_generate_marker(block.module_name, index, port, row)
-            count = extent or 1
+            configured = integration.instance_specs.get(block.module_name)
+            count = (configured.count if configured else None) or extent or 1
             placeholder_arrays = (
                 Width("literal", str(count), str(count)),
                 *placeholder_arrays,
             )
-            expression += f"[{index}]"
+            expression += f"[{generated_indices[block.module_name]}]"
         wires.append(
             Wire(
                 name=signal_name,
@@ -2495,6 +2884,8 @@ def render_integration(
             requires_todo=True,
         )
         na_label = f"NA[{index}]" if index else "NA"
+        if target:
+            na_label += f"->{target}"
         reporter.info(
             f"集成页签 {sheet.name} 第 {row} 行: "
             f"{block.module_name}.{port.name} 连接到 {na_label}，"
@@ -2508,6 +2899,8 @@ def render_integration(
     ]
     first_group_na_blocks = [block for block in first_group if block.anonymous_na]
     for row in range(integration.header_row + 1, sheet.max_row + 1):
+        if row in parameter_rows_by_group[0]:
+            continue
         top_reference = sheet.cell(row, top_block.port_column)
         top_port_name, top_bit_select, top_bit_index = split_bit_select(
             top_reference
@@ -2516,29 +2909,43 @@ def render_integration(
         if top_bit_select is None:
             top_port_name, top_index = split_index_marker(top_reference)
         row_entries: list[tuple[IntegrationBlock, str, str | None]] = []
-        row_na_entries: list[tuple[IntegrationBlock, str | None]] = []
+        row_na_entries: list[tuple[IntegrationBlock, str | None, str | None]] = []
         for block in first_group_child_blocks:
             reference = clean(sheet.cell(row, block.port_column))
             if not reference:
                 continue
-            port_name, index = split_index_marker(reference)
-            if is_na_connection(port_name):
-                row_na_entries.append((block, index))
+            na_reference = parse_na_connection(reference)
+            if na_reference is not None:
+                index, target = na_reference
+                row_na_entries.append((block, index, target))
             else:
+                port_name, index = split_index_marker(reference)
                 row_entries.append((block, port_name, index))
-        row_na_entries.extend(
-            (block, split_index_marker(sheet.cell(row, block.port_column))[1])
-            for block in first_group_na_blocks
-            if clean(sheet.cell(row, block.port_column))
-        )
+        for block in first_group_na_blocks:
+            reference = clean(sheet.cell(row, block.port_column))
+            if not reference:
+                continue
+            parsed_na = parse_na_connection(reference)
+            if parsed_na is not None:
+                row_na_entries.append((block, *parsed_na))
         row_na_indices = {
-            index for _, index in row_na_entries if index is not None
+            index for _, index, _ in row_na_entries if index is not None
         }
+        row_na_targets = {
+            target for _, _, target in row_na_entries if target is not None
+        }
+        if len(row_na_targets) > 1:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个目标 "
+                f"({', '.join(sorted(row_na_targets))})"
+            )
+            continue
+        row_na_target = next(iter(row_na_targets), None)
         if not top_port_name and not row_entries and not row_na_entries:
             continue
         if not top_port_name:
             if not row_entries:
-                reporter.warning(
+                reporter.info(
                     f"集成页签 {sheet.name} 第 {row} 行: NA 没有可拉出的模块端口"
                 )
                 continue
@@ -2560,6 +2967,7 @@ def render_integration(
                             child_port,
                             row,
                             next(iter(row_na_indices), None),
+                            next(iter(row_na_targets), None),
                         )
                         continue
                     expression = (
@@ -2573,8 +2981,9 @@ def render_integration(
             continue
         if row_na_entries:
             na_labels = [
-                f"NA[{index}]" if index else "NA"
-                for _, index in row_na_entries
+                (f"NA[{index}]" if index else "NA")
+                + (f"->{target}" if target else "")
+                for _, index, target in row_na_entries
             ]
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: TOP 端口 "
@@ -2629,6 +3038,39 @@ def render_integration(
                         f"{top.name}.{top_port.name}{top_bit_select} 超出位宽 "
                         f"{resolved_top_width}"
                     )
+            if row_na_target is not None:
+                if not is_verilog_constant(row_na_target):
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: TOP 连接区的 "
+                        f"NA->{row_na_target} 仅支持常量；自定义线名请用于子模块互连区"
+                    )
+                    continue
+                if top_port.direction != "output":
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: 只有 TOP output "
+                        f"可以由 NA->{row_na_target} 赋值，{top.name}.{top_port.name} "
+                        f"为 {top_port.direction}"
+                    )
+                    continue
+                add_assignment(top_port.name, row_na_target, top_port.condition)
+                top_output_driver_conditions.setdefault(top_port.name, []).append(None)
+                reporter.info(
+                    f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
+                    f"{top.name}.{top_port.name} 已由 NA->{row_na_target} 赋值"
+                )
+                for block, child_port in aligned[1:]:
+                    validate_sheet_direction(block, child_port, row)
+                    expression = (
+                        row_na_target if child_port.direction == "input" else None
+                    )
+                    bind(block.module_name, child_port, expression, row)
+                    if expression is None:
+                        reporter.info(
+                            f"集成页签 {sheet.name} 第 {row} 行: "
+                            f"{block.module_name}.{child_port.name} 为输出端，"
+                            f"在 NA->{row_na_target} 常量网络中按开路处理"
+                        )
+                continue
             for block, child_port in aligned[1:]:
                 validate_sheet_direction(block, child_port, row)
                 if top_port.direction == "input" and child_port.direction == "output":
@@ -2670,7 +3112,7 @@ def render_integration(
                 if top_bit_select is not None:
                     expression += top_bit_select
                 elif top_index and marker:
-                    expression += f"[{marker}]"
+                    expression += f"[{generated_indices[block.module_name]}]"
                 top_width = (
                     1
                     if top_bit_select is not None
@@ -2745,10 +3187,12 @@ def render_integration(
                             f"({', '.join(drivers)})"
                         )
 
-    for group_index, group in enumerate(integration.groups[1:], start=2):
+    for group_index, group in enumerate(integration.groups[1:], start=1):
         if len(group) == 1:
             block = group[0]
             for row in range(integration.header_row + 1, sheet.max_row + 1):
+                if row in parameter_rows_by_group[group_index]:
+                    continue
                 port_name = clean(sheet.cell(row, block.port_column))
                 if not port_name:
                     continue
@@ -2765,22 +3209,28 @@ def render_integration(
             continue
 
         for row in range(integration.header_row + 1, sheet.max_row + 1):
+            if row in parameter_rows_by_group[group_index]:
+                continue
             expanded: list[tuple[IntegrationBlock, list[Port]]] = []
-            na_blocks: list[tuple[IntegrationBlock, str | None]] = []
+            na_blocks: list[
+                tuple[IntegrationBlock, str | None, str | None]
+            ] = []
             for block in group:
                 reference = clean(sheet.cell(row, block.port_column))
                 if not reference:
                     continue
-                port_name, index = split_index_marker(reference)
-                if is_na_connection(port_name):
-                    na_blocks.append((block, index))
+                na_reference = parse_na_connection(reference)
+                if na_reference is not None:
+                    index, target = na_reference
+                    na_blocks.append((block, index, target))
                     continue
+                port_name, _ = split_index_marker(reference)
                 ports = get_ports(block.module_name, reference, row)
                 for port in ports:
                     validate_sheet_direction(block, port, row)
                 expanded.append((block, ports))
             if na_blocks and not expanded:
-                reporter.warning(
+                reporter.info(
                     f"集成页签 {sheet.name} 第 {row} 行: 内部连接全部为 NA，"
                     "没有可拉出的模块端口"
                 )
@@ -2792,7 +3242,10 @@ def render_integration(
                     block, port = entries[0]
                     if na_blocks:
                         indices = {
-                            index for _, index in na_blocks if index is not None
+                            index for _, index, _ in na_blocks if index is not None
+                        }
+                        targets = {
+                            target for _, _, target in na_blocks if target is not None
                         }
                         if len(indices) > 1:
                             reporter.error(
@@ -2800,14 +3253,21 @@ def render_integration(
                                 f"generate 索引 ({', '.join(sorted(indices))})"
                             )
                             continue
+                        if len(targets) > 1:
+                            reporter.error(
+                                f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个 "
+                                f"目标 ({', '.join(sorted(targets))})"
+                            )
+                            continue
                         bind_na_placeholder(
                             block,
                             port,
                             row,
                             next(iter(indices), None),
+                            next(iter(targets), None),
                         )
                         continue
-                    reporter.warning(
+                    reporter.info(
                         f"集成页签 {sheet.name} 第 {row} 行: 内部连接只有 {block.module_name}.{port.name} 一端，按未连接处理"
                     )
                     if block.module_name != top.name:
@@ -2945,22 +3405,44 @@ def render_integration(
                     (port.condition,) if port.condition else (),
                 )
 
-    generate_counts: dict[str, tuple[str, int]] = {}
-    for child_name, spec in generate_specs.items():
-        if spec.extents:
-            count = min(spec.extents)
-            detail = "/".join(str(value) for value in dict.fromkeys(spec.extents))
+    generate_counts: dict[str, int] = {}
+    for child in children:
+        child_name = child.name
+        marker_spec = generate_specs.get(child_name)
+        configured = integration.instance_specs.get(child_name)
+        configured_count = configured.count if configured else None
+        if configured_count is not None:
+            count = configured_count
+            generate_counts[child_name] = count
             reporter.info(
-                f"集成模块: {child_name} 的 [{spec.index}] 可解析循环范围为 "
+                f"集成模块: {child_name} 使用显式例化次数 {count}"
+            )
+            if marker_spec and marker_spec.extents:
+                safe_extent = min(marker_spec.extents)
+                if count > safe_extent:
+                    reporter.warning(
+                        f"集成模块: {child_name} 的例化次数 {count} 超过 "
+                        f"[{marker_spec.index}] 可解析安全范围 {safe_extent}，存在索引越界风险"
+                    )
+            continue
+        if marker_spec is None:
+            continue
+        if marker_spec.extents:
+            count = min(marker_spec.extents)
+            detail = "/".join(
+                str(value) for value in dict.fromkeys(marker_spec.extents)
+            )
+            reporter.info(
+                f"集成模块: {child_name} 的 [{marker_spec.index}] 可解析循环范围为 "
                 f"{detail}，generate 使用安全次数 {count}"
             )
         else:
             count = 1
             reporter.warning(
-                f"集成模块: {child_name} 的 [{spec.index}] 无法解析循环次数，"
+                f"集成模块: {child_name} 的 [{marker_spec.index}] 无法解析循环次数，"
                 "generate 默认使用 1"
             )
-        generate_counts[child_name] = (spec.index, count)
+        generate_counts[child_name] = count
 
     lines = render_module_header(top, all_macros)
     lines.extend(["", *user_code_block("before statement")])
@@ -3056,37 +3538,36 @@ def render_integration(
                 target_width=target_width,
             )
 
-    declared_generate_indices: set[str] = set()
     for child in children:
         lines.extend(["", *user_code_block(f"before {child.name}")])
-        parameter_map = parameter_maps[child.name]
-        generate_spec = generate_counts.get(child.name)
-        if generate_spec:
-            index, count = generate_spec
-            if index not in declared_generate_indices:
-                lines.append(f"genvar {index};")
-                declared_generate_indices.add(index)
+        instance_parameter_map = instance_parameter_maps[child.name]
+        generate_count = generate_counts.get(child.name)
+        instance_name = instance_names[child.name]
+        if generate_count is not None:
+            index = generated_indices[child.name]
+            count = generate_count
+            lines.append(f"genvar {index};")
             lines.append("generate")
             lines.append(
                 f"for ({index} = 0; {index} < {count}; "
-                f"{index} = {index} + 1) begin : G_{child.name}"
+                f"{index} = {index} + 1) begin : G_{instance_name}"
             )
-        if child.parameters:
+        if instance_parameter_map:
             lines.append(f"{child.name} #(")
-            items = list(child.parameters)
+            items = list(instance_parameter_map)
             parameter_name_width = max(len(name) for name in items)
             parameter_value_width = max(
-                len(parameter_map[name]) for name in items
+                len(instance_parameter_map[name]) for name in items
             )
-            for index, name in enumerate(items):
-                comma = "," if index < len(items) - 1 else ""
+            for item_index, name in enumerate(items):
+                comma = "," if item_index < len(items) - 1 else ""
                 lines.append(
                     f"    .{name:<{parameter_name_width}} "
-                    f"({parameter_map[name]:<{parameter_value_width}}){comma}"
+                    f"({instance_parameter_map[name]:<{parameter_value_width}}){comma}"
                 )
-            lines.append(f") U_{child.name} (")
+            lines.append(f") {instance_name} (")
         else:
-            lines.append(f"{child.name} U_{child.name} (")
+            lines.append(f"{child.name} {instance_name} (")
         reserved_macros = set(all_macros)
         reserved_macros.update(
             port.condition
@@ -3098,7 +3579,7 @@ def render_integration(
             lines, child, bindings[child.name], reserved_macros
         )
         lines.append(");")
-        if generate_spec:
+        if generate_count is not None:
             lines.append("end")
             lines.append("endgenerate")
         lines.extend(["", *user_code_block(f"after {child.name}")])
@@ -3204,6 +3685,8 @@ def preserve_user_code(
 
     merged = generated
     for region in reversed(new_regions):
+        if OVERWRITE_FILE_HEADER and region.label == "file header":
+            continue
         previous = old_by_key.get((region.label, region.occurrence))
         if previous is None:
             continue
@@ -3231,22 +3714,20 @@ def generate(
 
     rendered: dict[str, str] = {}
     top_name = integration.top_name if integration else None
-    for module in modules.values():
-        if module.name != top_name:
-            # In an integrated hierarchy the upper module owns every macro
-            # definition.  Standalone module generation keeps the old local
-            # macro behavior.
-            rendered[module.name] = render_stub(
-                module, {} if integration is not None else None
-            )
     if integration:
         sheet = workbook.by_name(integration.sheet_name)
         if sheet is None:
             reporter.error(f"找不到集成页签 {integration.sheet_name}")
         else:
+            # Resolve explicit parameter links before rendering child headers;
+            # linked child parameters are overridable, every other parameter
+            # remains local.
             rendered_top = render_integration(
                 sheet, integration, modules, reporter
             )
+            for module in modules.values():
+                if module.name != top_name:
+                    rendered[module.name] = render_stub(module, {})
             # Keep the macro-owning upper module first in the returned path
             # order.  Callers that pass this order to a shared preprocessor
             # then see the upper definitions before child module references.
@@ -3871,7 +4352,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def print_startup_banner(stream: TextIO | None = None) -> None:
+    """Print the V3.1 identification block with one shared centered width."""
+    target = stream or sys.stdout
+    items = [
+        SCRIPT_DISPLAY_NAME,
+        SCRIPT_VERSION,
+        SCRIPT_RELEASE_DATE,
+        SCRIPT_CONTACT,
+    ]
+    width = max(len(item) for item in items)
+    for item in items:
+        print(item.center(width), file=target)
+
+
 def main(argv: Iterable[str] | None = None) -> int:
+    if argv is None:
+        print_startup_banner()
     raw_arguments = list(argv) if argv is not None else sys.argv[1:]
     if argv is None and not raw_arguments and sys.stdin.isatty() and sys.stdout.isatty():
         try:
