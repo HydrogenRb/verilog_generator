@@ -15,6 +15,7 @@ from xlsx2verilog import (
     arrow_menu,
     evaluate_int_expression,
     generate,
+    normalize_diffusion_value,
     parse_workbook,
 )
 from tests_script.run_review_matrix import (
@@ -1272,9 +1273,21 @@ class GenerationTests(unittest.TestCase):
     def test_integer_expression_evaluator_is_safe(self) -> None:
         self.assertEqual(evaluate_int_expression("2 + 3 * 4"), 14)
         self.assertEqual(evaluate_int_expression("(24 / 3) << 1"), 16)
+        self.assertIsNone(evaluate_int_expression("0"))
+        self.assertEqual(evaluate_int_expression("0", allow_zero=True), 0)
+        self.assertEqual(evaluate_int_expression("(3-3)", allow_zero=True), 0)
+        self.assertIsNone(evaluate_int_expression("-1", allow_zero=True))
         self.assertIsNone(evaluate_int_expression("2 ** 10"))
         self.assertIsNone(evaluate_int_expression("__import__('os')"))
         self.assertIsNone(evaluate_int_expression(str(1 << 40)))
+
+    def test_parameter_diffusion_accepts_zero_but_not_negative_values(self) -> None:
+        self.assertEqual(normalize_diffusion_value("0"), "0")
+        self.assertEqual(normalize_diffusion_value("(3-3)"), "(3-3)")
+        with self.assertRaises(ValueError):
+            normalize_diffusion_value("-1")
+        with self.assertRaises(ValueError):
+            normalize_diffusion_value("(1-2)")
 
 
 class TerminalMenuTests(unittest.TestCase):

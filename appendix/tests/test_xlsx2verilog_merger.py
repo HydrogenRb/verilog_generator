@@ -88,6 +88,120 @@ class MergerUnitTests(unittest.TestCase):
             {item.message for item in diagnostics},
         )
 
+    def test_added_and_removed_instances_follow_the_new_structure(self) -> None:
+        old = (
+            "module TOP;\n"
+            "/*USER CODE BEGIN before statement*/\n"
+            "// root hook\n"
+            "/*USER CODE END   before statement*/\n"
+            "/*USER CODE BEGIN before CHILD_A*/\n"
+            "/*USER CODE END   before CHILD_A*/\n"
+            "CHILD_A U_A();\n"
+            "/*USER CODE BEGIN after CHILD_A*/\n"
+            "/*USER CODE END   after CHILD_A*/\n"
+            "endmodule\n"
+        )
+        added = old.replace(
+            "endmodule\n",
+            "/*USER CODE BEGIN before CHILD_B*/\n"
+            "/*USER CODE END   before CHILD_B*/\n"
+            "CHILD_B U_B();\n"
+            "/*USER CODE BEGIN after CHILD_B*/\n"
+            "/*USER CODE END   after CHILD_B*/\n"
+            "endmodule\n",
+        )
+        merged, _ = merge_verilog_text(added, old, "added.v")
+        self.assertIn("CHILD_B U_B();", merged)
+        self.assertIn("// root hook", merged)
+
+        removed, _ = merge_verilog_text(old, added, "removed-empty.v")
+        self.assertNotIn("CHILD_B U_B();", removed)
+        with_user_hook = added.replace(
+            "/*USER CODE BEGIN before CHILD_B*/\n",
+            "/*USER CODE BEGIN before CHILD_B*/\n// keep B hook\n",
+        )
+        with self.assertRaisesRegex(MergeError, "before CHILD_B#1"):
+            merge_verilog_text(old, with_user_hook, "removed-nonempty.v")
+
+    def test_parameter_signal_kind_and_explicit_user_assign_are_preserved(
+        self,
+    ) -> None:
+        old = verilog(
+            "parameter MODE = 1;\n"
+            "localparam LOCKED = 3;\n"
+            "reg [7:0] status;\n"
+            "assign status = 8'hA5; //USER: keep old assignment",
+        )
+        new = verilog(
+            "localparam MODE = 2;\n"
+            "parameter LOCKED = 4;\n"
+            "wire [15:0] status;\n"
+            "assign status = 16'h0000;",
+        )
+        merged, diagnostics = merge_verilog_text(new, old, "manual-edits.v")
+        self.assertIn("parameter MODE = 2;", merged)
+        self.assertNotIn("parameter MODE = 1;", merged)
+        self.assertIn("localparam LOCKED = 4;", merged)
+        self.assertRegex(merged, r"(?m)^reg \[15:0\] status;$")
+        self.assertIn("assign status = 8'hA5; //USER: keep old assignment", merged)
+        self.assertNotIn("16'h0000", merged)
+        self.assertEqual(
+            {
+                "manual-edits.v: 保留 TOP.status 的 reg 声明类型"
+                "（新生成版本为 wire）",
+                "manual-edits.v: 保留 TOP.MODE 的 parameter 参数类型"
+                "（新生成版本为 localparam）",
+                "manual-edits.v: 保留 TOP.LOCKED 的 localparam 参数类型"
+                "（新生成版本为 parameter）",
+                "manual-edits.v: 保留 TOP.status 的 //USER: 手工 assign",
+            },
+            {item.message for item in diagnostics},
+        )
+
+    def test_unmarked_assign_uses_new_code_and_marked_assign_requires_a_target(
+        self,
+    ) -> None:
+        old = verilog("assign status = 8'hA5;")
+        new = verilog("assign status = 16'h0000;")
+        merged, diagnostics = merge_verilog_text(new, old, "unmarked.v")
+        self.assertIn("assign status = 16'h0000;", merged)
+        self.assertNotIn("8'hA5", merged)
+        self.assertFalse(diagnostics)
+
+        marked_old = verilog(
+            "assign removed_status = 8'hA5; //USER: must not disappear"
+        )
+        with self.assertRaisesRegex(MergeError, "缺少 //USER: 手工 assign"):
+            merge_verilog_text(new, marked_old, "removed-assign.v")
+
+        multiline_marker = verilog(
+            "assign removed_status =\n"
+            "    8'hA5; //USER: unsupported multiline assignment"
+        )
+        with self.assertRaisesRegex(MergeError, "完整的单行 assign"):
+            merge_verilog_text(new, multiline_marker, "multiline-assign.v")
+
+    def test_user_assign_can_follow_a_unique_changed_bit_select(self) -> None:
+        old = verilog(
+            "assign status[7:4] = 4'hA; // USER: preserve changed slice"
+        )
+        new = verilog("assign status[15:8] = 8'h00;")
+        merged, diagnostics = merge_verilog_text(new, old, "slice.v")
+        self.assertIn(
+            "assign status[7:4] = 4'hA; // USER: preserve changed slice",
+            merged,
+        )
+        self.assertNotIn("status[15:8]", merged)
+        self.assertEqual(len(diagnostics), 1)
+        self.assertIn("按唯一根信号匹配", diagnostics[0].message)
+
+        ambiguous = verilog(
+            "assign status[15:8] = 8'h00;\n"
+            "assign status[7:0] = 8'h00;"
+        )
+        with self.assertRaisesRegex(MergeError, "匹配到 2 条"):
+            merge_verilog_text(ambiguous, old, "ambiguous-slice.v")
+
     def test_damaged_or_removed_nonempty_region_blocks_merge(self) -> None:
         damaged = "/*USER CODE BEGIN a*/\ntext\n/*USER CODE END b*/\n"
         with self.assertRaisesRegex(MergeError, "不匹配"):
@@ -196,6 +310,20 @@ class EdgeCaseMergeReview(unittest.TestCase):
                 count=1,
             )
             self.assertEqual(declaration_updates, 1)
+            old_top, parameter_updates = re.subn(
+                r"(?m)^(\s*)localparam(?=\s+RST_LANE\s+=)",
+                r"\1parameter",
+                old_top,
+                count=1,
+            )
+            self.assertEqual(parameter_updates, 1)
+            old_top, assignment_updates = re.subn(
+                r"(?m)^assign\s+uid\s+=.*?;$",
+                "assign uid = {UID_SIZE{1'b1}}; //USER: keep project UID",
+                old_top,
+                count=1,
+            )
+            self.assertEqual(assignment_updates, 1)
             top_path.write_text(old_top, encoding="utf-8", newline="\n")
 
             shutil.copy2(EDGE_SAMPLE, adjusted)
@@ -220,6 +348,11 @@ class EdgeCaseMergeReview(unittest.TestCase):
             self.assertRegex(
                 merged_top,
                 r"reg\s+\[9\s+-1:0\]\[114\s+-1:0\]\s+high_clk_after_pll_0;",
+            )
+            self.assertRegex(merged_top, r"(?m)^\s*parameter\s+RST_LANE\s+=")
+            self.assertIn(
+                "assign uid = {UID_SIZE{1'b1}}; //USER: keep project UID",
+                merged_top,
             )
             self.assertIn("// USER: keep me", merged_top)
             self.assertEqual(len(result.changed), 1)

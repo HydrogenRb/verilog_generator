@@ -21,7 +21,7 @@ import re
 from typing import Iterable
 
 
-VERSION = "1.1"
+VERSION = "1.2"
 DEFAULT_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
 USER_CODE_MARKER_RE = re.compile(
     r"(?m)^[ \t]*/\*USER CODE (BEGIN|END)[ \t]+(.+?)[ \t]*\*/[ \t]*\r?$"
@@ -38,6 +38,19 @@ SIGNAL_DECLARATION_RE = re.compile(
 SIGNAL_DECLARATOR_TAIL_RE = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z0-9_$]*)"
     r"(?:[ \t]*\[[^\[\]\r\n]+\])*[ \t]*[,;]?[ \t]*$"
+)
+PARAMETER_DECLARATION_RE = re.compile(
+    r"^[ \t]*(?P<kind>localparam|parameter)\b(?P<body>[^\r\n]*)"
+)
+PARAMETER_NAME_RE = re.compile(
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_$]*)[ \t]*="
+)
+ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*assign[ \t]+(?P<lhs>[^=;\r\n]+?)[ \t]*=[^;\r\n]*;[ \t]*$"
+)
+USER_ASSIGN_COMMENT_RE = re.compile(r"//[ \t]*USER[ \t]*:", re.IGNORECASE)
+SIMPLE_ASSIGN_TARGET_RE = re.compile(
+    r"^(?P<name>[A-Za-z_][A-Za-z0-9_$]*)(?:\[[^\[\]]+\])*$"
 )
 
 
@@ -61,6 +74,26 @@ class SignalDeclaration:
     kind: str
     kind_start: int
     kind_end: int
+
+
+@dataclass(frozen=True)
+class ParameterDeclaration:
+    module_name: str
+    parameter_name: str
+    kind: str
+    kind_start: int
+    kind_end: int
+
+
+@dataclass(frozen=True)
+class AssignmentStatement:
+    module_name: str
+    lhs: str
+    root_signal: str | None
+    statement: str
+    statement_start: int
+    statement_end: int
+    user_owned: bool
 
 
 @dataclass(frozen=True)
@@ -267,6 +300,282 @@ def preserve_signal_declaration_kinds(
     return preserved, diagnostics
 
 
+def parse_parameter_declarations(
+    text: str,
+    regions: list[UserCodeRegion],
+    context: str,
+) -> dict[tuple[str, str], ParameterDeclaration]:
+    """Find one-line parameter declarations keyed by module and name."""
+    masked = _mask_verilog_comments(text)
+    protected_ranges = [
+        (region.content_start, region.content_end) for region in regions
+    ]
+
+    def is_protected(position: int) -> bool:
+        return any(start <= position < end for start, end in protected_ranges)
+
+    declarations: dict[tuple[str, str], ParameterDeclaration] = {}
+    current_module: str | None = None
+    offset = 0
+    for line in masked.splitlines(keepends=True):
+        if is_protected(offset):
+            offset += len(line)
+            continue
+        module_match = MODULE_BEGIN_RE.match(line)
+        if module_match is not None:
+            if current_module is not None:
+                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+            current_module = module_match.group("name")
+            offset += len(line)
+            continue
+        if MODULE_END_RE.match(line) is not None:
+            current_module = None
+            offset += len(line)
+            continue
+        if current_module is None:
+            offset += len(line)
+            continue
+        declaration_match = PARAMETER_DECLARATION_RE.match(line)
+        if declaration_match is None:
+            offset += len(line)
+            continue
+        name_match = PARAMETER_NAME_RE.search(declaration_match.group("body"))
+        if name_match is None:
+            offset += len(line)
+            continue
+        kind = declaration_match.group("kind")
+        parameter_name = name_match.group("name")
+        key = (current_module, parameter_name)
+        declaration = ParameterDeclaration(
+            current_module,
+            parameter_name,
+            kind,
+            offset + declaration_match.start("kind"),
+            offset + declaration_match.end("kind"),
+        )
+        previous = declarations.get(key)
+        if previous is not None and previous.kind != declaration.kind:
+            raise MergeError(
+                f"{context}: {current_module}.{parameter_name} 同时声明为 "
+                f"{previous.kind} 和 {declaration.kind}，无法安全匹配"
+            )
+        declarations.setdefault(key, declaration)
+        offset += len(line)
+    return declarations
+
+
+def preserve_parameter_declaration_kinds(
+    new_text: str,
+    existing_text: str,
+    new_regions: list[UserCodeRegion],
+    old_regions: list[UserCodeRegion],
+    context: str,
+) -> tuple[str, list[Diagnostic]]:
+    """Carry old ``localparam/parameter`` choices into matching declarations."""
+    old_declarations = parse_parameter_declarations(
+        existing_text,
+        old_regions,
+        f"旧文件 {context}",
+    )
+    new_declarations = parse_parameter_declarations(
+        new_text,
+        new_regions,
+        f"新文件 {context}",
+    )
+    replacements: list[tuple[int, int, str]] = []
+    diagnostics: list[Diagnostic] = []
+    for key, new_declaration in new_declarations.items():
+        old_declaration = old_declarations.get(key)
+        if old_declaration is None or old_declaration.kind == new_declaration.kind:
+            continue
+        replacements.append(
+            (
+                new_declaration.kind_start,
+                new_declaration.kind_end,
+                old_declaration.kind,
+            )
+        )
+        diagnostics.append(
+            Diagnostic(
+                "info",
+                f"{context}: 保留 {key[0]}.{key[1]} 的 "
+                f"{old_declaration.kind} 参数类型"
+                f"（新生成版本为 {new_declaration.kind}）",
+            )
+        )
+    preserved = new_text
+    for start, end, kind in reversed(replacements):
+        preserved = preserved[:start] + kind + preserved[end:]
+    return preserved, diagnostics
+
+
+def parse_assignments(
+    text: str,
+    regions: list[UserCodeRegion],
+    context: str,
+    *,
+    validate_user_markers: bool = False,
+) -> list[AssignmentStatement]:
+    """Find conservative one-line continuous assignments outside USER blocks."""
+    masked = _mask_verilog_comments(text)
+    protected_ranges = [
+        (region.content_start, region.content_end) for region in regions
+    ]
+
+    def is_protected(position: int) -> bool:
+        return any(start <= position < end for start, end in protected_ranges)
+
+    assignments: list[AssignmentStatement] = []
+    current_module: str | None = None
+    offset = 0
+    original_lines = text.splitlines(keepends=True)
+    masked_lines = masked.splitlines(keepends=True)
+    if len(original_lines) != len(masked_lines):
+        raise MergeError(f"{context}: 注释屏蔽后行结构异常")
+    for original_line, masked_line in zip(original_lines, masked_lines):
+        user_owned = USER_ASSIGN_COMMENT_RE.search(original_line) is not None
+        if is_protected(offset):
+            offset += len(original_line)
+            continue
+        module_match = MODULE_BEGIN_RE.match(masked_line)
+        if module_match is not None:
+            if validate_user_markers and user_owned:
+                raise MergeError(
+                    f"{context}: //USER: 只支持模块内完整的单行 assign"
+                )
+            if current_module is not None:
+                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+            current_module = module_match.group("name")
+            offset += len(original_line)
+            continue
+        if MODULE_END_RE.match(masked_line) is not None:
+            if validate_user_markers and user_owned:
+                raise MergeError(
+                    f"{context}: //USER: 只支持模块内完整的单行 assign"
+                )
+            current_module = None
+            offset += len(original_line)
+            continue
+        if current_module is None:
+            if validate_user_markers and user_owned:
+                raise MergeError(
+                    f"{context}: //USER: 必须标在模块内的单行 assign 末尾"
+                )
+            offset += len(original_line)
+            continue
+        assignment_match = ASSIGNMENT_RE.match(masked_line.rstrip("\r\n"))
+        if assignment_match is None:
+            if validate_user_markers and user_owned:
+                raise MergeError(
+                    f"{context}: //USER: 只支持模块内完整的单行 assign"
+                )
+            offset += len(original_line)
+            continue
+        lhs = re.sub(r"[ \t]+", "", assignment_match.group("lhs"))
+        root_match = SIMPLE_ASSIGN_TARGET_RE.fullmatch(lhs)
+        statement = original_line.rstrip("\r\n")
+        assignments.append(
+            AssignmentStatement(
+                current_module,
+                lhs,
+                root_match.group("name") if root_match is not None else None,
+                statement,
+                offset,
+                offset + len(statement),
+                user_owned,
+            )
+        )
+        offset += len(original_line)
+    return assignments
+
+
+def preserve_user_assignments(
+    new_text: str,
+    existing_text: str,
+    new_regions: list[UserCodeRegion],
+    old_regions: list[UserCodeRegion],
+    context: str,
+) -> tuple[str, list[Diagnostic]]:
+    """Keep old one-line assigns explicitly marked with ``//USER:``.
+
+    Exact left-hand-side matching is preferred.  If a user changed only a bit
+    or part select, a unique root-signal match is accepted as a conservative
+    fallback.  Missing or ambiguous targets abort instead of dropping or
+    attaching hand-written logic to the wrong generated assignment.
+    """
+    old_assignments = [
+        item
+        for item in parse_assignments(
+            existing_text,
+            old_regions,
+            f"旧文件 {context}",
+            validate_user_markers=True,
+        )
+        if item.user_owned
+    ]
+    if not old_assignments:
+        return new_text, []
+    new_assignments = parse_assignments(
+        new_text,
+        new_regions,
+        f"新文件 {context}",
+    )
+    by_exact: dict[tuple[str, str], list[AssignmentStatement]] = {}
+    by_root: dict[tuple[str, str], list[AssignmentStatement]] = {}
+    for item in new_assignments:
+        by_exact.setdefault((item.module_name, item.lhs), []).append(item)
+        if item.root_signal is not None:
+            by_root.setdefault((item.module_name, item.root_signal), []).append(item)
+
+    replacements: list[tuple[int, int, str]] = []
+    diagnostics: list[Diagnostic] = []
+    claimed_positions: set[int] = set()
+    for old_assignment in old_assignments:
+        exact_key = (old_assignment.module_name, old_assignment.lhs)
+        candidates = by_exact.get(exact_key, [])
+        used_root_fallback = False
+        if not candidates and old_assignment.root_signal is not None:
+            root_key = (old_assignment.module_name, old_assignment.root_signal)
+            candidates = by_root.get(root_key, [])
+            used_root_fallback = bool(candidates)
+        label = f"{old_assignment.module_name}.{old_assignment.lhs}"
+        if not candidates:
+            raise MergeError(
+                f"{context}: 新结构缺少 //USER: 手工 assign {label}"
+            )
+        if len(candidates) != 1:
+            raise MergeError(
+                f"{context}: //USER: 手工 assign {label} 在新结构中匹配到 "
+                f"{len(candidates)} 条，无法安全迁移"
+            )
+        candidate = candidates[0]
+        if candidate.statement_start in claimed_positions:
+            raise MergeError(
+                f"{context}: 多条 //USER: 手工 assign 同时匹配 "
+                f"{candidate.module_name}.{candidate.lhs}"
+            )
+        claimed_positions.add(candidate.statement_start)
+        replacements.append(
+            (
+                candidate.statement_start,
+                candidate.statement_end,
+                old_assignment.statement,
+            )
+        )
+        fallback_note = "（按唯一根信号匹配）" if used_root_fallback else ""
+        diagnostics.append(
+            Diagnostic(
+                "info",
+                f"{context}: 保留 {label} 的 //USER: 手工 assign{fallback_note}",
+            )
+        )
+
+    preserved = new_text
+    for start, end, statement in reversed(replacements):
+        preserved = preserved[:start] + statement + preserved[end:]
+    return preserved, diagnostics
+
+
 def merge_verilog_text(
     new_text: str,
     existing_text: str,
@@ -311,8 +620,26 @@ def merge_verilog_text(
         context,
     )
     diagnostics.extend(declaration_diagnostics)
-    # ``wire`` and ``reg`` have different lengths, so declaration migration
-    # may shift every later USER region.  Reparse before restoring contents.
+    # Migrated keywords and hand-written assignments can have different
+    # lengths, so reparse USER offsets after every preservation layer.
+    merged_regions = parse_user_code_regions(merged, f"新文件 {context}")
+    merged, parameter_diagnostics = preserve_parameter_declaration_kinds(
+        merged,
+        existing_text,
+        merged_regions,
+        old_regions,
+        context,
+    )
+    diagnostics.extend(parameter_diagnostics)
+    merged_regions = parse_user_code_regions(merged, f"新文件 {context}")
+    merged, assignment_diagnostics = preserve_user_assignments(
+        merged,
+        existing_text,
+        merged_regions,
+        old_regions,
+        context,
+    )
+    diagnostics.extend(assignment_diagnostics)
     merged_regions = parse_user_code_regions(merged, f"新文件 {context}")
     for region in reversed(merged_regions):
         previous = old_by_key.get((region.label, region.occurrence))

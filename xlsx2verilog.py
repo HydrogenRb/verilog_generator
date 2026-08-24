@@ -575,15 +575,21 @@ def normalized_direction(value: Any) -> str | None:
     }.get(text)
 
 
-def evaluate_int_expression(value: Any) -> int | None:
-    """Safely evaluate a small, integer-only arithmetic expression."""
+def evaluate_int_expression(value: Any, *, allow_zero: bool = False) -> int | None:
+    """Safely evaluate a small integer expression.
+
+    Physical widths, array extents and instance counts use the default
+    strictly-positive rule.  Parameter/macro matching values opt into zero so
+    a legal feature-disable value is not confused with a missing dimension.
+    """
+    minimum = 0 if allow_zero else 1
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if value > 0 else None
+        return value if value >= minimum else None
     if isinstance(value, float) and value.is_integer():
         integer = int(value)
-        return integer if integer > 0 else None
+        return integer if integer >= minimum else None
     text = clean(value)
     if not text:
         return None
@@ -652,7 +658,7 @@ def evaluate_int_expression(value: Any) -> int | None:
         result = visit(root)
     except (ValueError, OverflowError, ZeroDivisionError):
         return None
-    return result if result > 0 else None
+    return result if result >= minimum else None
 
 
 def split_top_level_product(
@@ -715,7 +721,10 @@ def normalized_width_default(
     *,
     fallback_uncertain: bool,
 ) -> str:
-    evaluated = evaluate_int_expression(default_value)
+    # A macro/parameter default may intentionally be zero (for example a
+    # feature-enable flag).  Callers that consume a physical dimension still
+    # validate the expression itself with the strictly-positive default mode.
+    evaluated = evaluate_int_expression(default_value, allow_zero=True)
     if evaluated is not None:
         return str(evaluated)
     if default_value is None or not clean(default_value):
@@ -4231,10 +4240,14 @@ def list_diffusible_variables(path: Path) -> tuple[list[DiffusionTarget], Report
 
 def normalize_diffusion_value(value: Any) -> str:
     text = clean(value).replace("（", "(").replace("）", ")")
-    is_natural = text.isdigit() and int(text) > 0
+    is_nonnegative_integer = text.isdigit()
     is_parenthesized = text.startswith("(") and text.endswith(")")
-    if not (is_natural or is_parenthesized) or evaluate_int_expression(text) is None:
-        raise ValueError("扩散值必须是正自然数，或可安全计算且整体带括号的整数表达式")
+    if not (
+        is_nonnegative_integer or is_parenthesized
+    ) or evaluate_int_expression(text, allow_zero=True) is None:
+        raise ValueError(
+            "扩散值必须是非负整数，或可安全计算、结果非负且整体带括号的整数表达式"
+        )
     return text
 
 
@@ -4248,7 +4261,7 @@ def range_values(value: Any, count: int) -> list[str] | None:
 
 
 def seeded_default(factor: str) -> str:
-    number = evaluate_int_expression(factor)
+    number = evaluate_int_expression(factor, allow_zero=True)
     return str(number) if number is not None else str(UNKNOWN_WIDTH)
 
 
@@ -4283,13 +4296,15 @@ def spread_default_cell(
         existing = range_values(defaults[factor_index], count)
         if existing is None:
             scalar = clean(defaults[factor_index])
-            if evaluate_int_expression(scalar) is not None:
+            if evaluate_int_expression(scalar, allow_zero=True) is not None:
                 existing = [scalar] * count
             else:
                 existing = [str(UNKNOWN_WIDTH)] * count
         else:
             existing = [
-                item if evaluate_int_expression(item) is not None else str(UNKNOWN_WIDTH)
+                item
+                if evaluate_int_expression(item, allow_zero=True) is not None
+                else str(UNKNOWN_WIDTH)
                 for item in existing
             ]
         for index, _ in matches:
@@ -4672,7 +4687,7 @@ def interactive_main() -> int:
         )
         if target_index is None:
             continue
-        value = input("请输入正自然数或整体带括号的整数表达式: ").strip()
+        value = input("请输入非负整数或整体带括号、结果非负的整数表达式: ").strip()
         return main(
             [
                 str(workbook),
@@ -4707,7 +4722,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_startup_banner(stream: TextIO | None = None) -> None:
-    """Print the V3.12 identification block with one shared centered width."""
+    """Print the configured identification block with one shared centered width."""
     target = stream or sys.stdout
     items = [
         SCRIPT_DISPLAY_NAME,

@@ -18,6 +18,10 @@ from tests_script.run_review_matrix import (
 from xlsx2verilog import (
     DIAGNOSTIC_VISIBILITY_BY_CODE,
     Reporter,
+    SCRIPT_CONTACT,
+    SCRIPT_DISPLAY_NAME,
+    SCRIPT_RELEASE_DATE,
+    SCRIPT_VERSION,
     generate,
     print_startup_banner,
 )
@@ -154,10 +158,12 @@ class Version3TechReview1Tests(unittest.TestCase):
                     ("para_a", "`lane_num", 4, None),
                     ("para_b", "para_a+1", 5, None),
                     ("DW", "`log2(para_b)", 3, None),
+                    ("feature_off", None, 0, None),
+                    ("macro_off", "`feature_enable", 0, None),
                     ("data", "DW", 3, "o"),
                 ],
             )
-            for row in (3, 4, 5):
+            for row in (3, 4, 5, 6, 7):
                 set_cell(rows, row, 1, "parameter")
             write_xlsx(workbook, [("PARAMETER_EXPRESSIONS", rows)])
 
@@ -167,7 +173,16 @@ class Version3TechReview1Tests(unittest.TestCase):
             text = paths[0].read_text(encoding="utf-8")
             self.assertRegex(text, r"localparam\s+PARA_A\s+= `LANE_NUM,\s+// 4")
             self.assertRegex(text, r"localparam\s+PARA_B\s+= PARA_A\+1,\s+// 5")
-            self.assertRegex(text, r"localparam\s+DW\s+= `LOG2\(PARA_B\)\s+// 3")
+            self.assertRegex(
+                text,
+                r"localparam\s+DW\s+= `LOG2\(PARA_B\),?\s+// 3",
+            )
+            self.assertRegex(text, r"localparam\s+FEATURE_OFF\s+= 0")
+            self.assertRegex(
+                text,
+                r"localparam\s+MACRO_OFF\s+= `FEATURE_ENABLE\s+// 0",
+            )
+            self.assertRegex(text, r"(?m)^// `define FEATURE_ENABLE\s+0$")
             self.assertRegex(text, r"output wire\s+\[DW\s+-1:0\]\s+data")
 
     def test_parameter_generation_rejects_statement_injection(self) -> None:
@@ -399,10 +414,10 @@ class Version3TechReview1Tests(unittest.TestCase):
         self.assertEqual(
             [line.strip() for line in banner.getvalue().splitlines()],
             [
-                "CustomScipt xlsx2verilog",
-                "Version V3.12",
-                "2026.8.24",
-                "Contact xxx-xxxx in case",
+                SCRIPT_DISPLAY_NAME,
+                SCRIPT_VERSION,
+                SCRIPT_RELEASE_DATE,
+                SCRIPT_CONTACT,
             ],
         )
 

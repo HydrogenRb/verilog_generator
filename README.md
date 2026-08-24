@@ -4,7 +4,7 @@
 
 当前能力的完整索引见[功能特性表](doc/TechReport/功能特性表.md)，内部结构见[代码结构与维护指南](doc/TechReport/代码结构与维护指南.md)。
 
-已有 RTL 项目需要接收一版新的生成结果时，可使用独立附录工具[xlsx2verilog_merger](appendix/README.md)：它以新生成结构覆盖旧自动代码，同时按 USER CODE 标签保留人工代码，并按`模块名.信号名`保留用户选择的`wire/reg`声明类型；工具提供预检查、备份和失败回滚。
+已有 RTL 项目需要接收一版新的生成结果时，可使用独立附录工具[xlsx2verilog_merger](appendix/README.md)：它以新生成结构覆盖旧自动代码，同时按 USER CODE 标签保留人工代码，按稳定键保留用户选择的`wire/reg`和`localparam/parameter`关键字；旧工程中带`//USER:`的单行 assign 可整行保留。工具提供预检查、备份和失败回滚。
 
 ## 快速使用
 
@@ -33,7 +33,7 @@ python .\xlsx2verilog.py .\design.xlsx --spread-value WIDTH "(3+5)"
 
 命令行参数仍全部保留。无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；使用 `↑`、`↓` 移动选项，按 `Enter` 确认，按 `Esc` 返回上级菜单或退出。主菜单包含“生成”“查看”“校验”“严格校验”“扩散变量值”和“退出”，可继续选择 XLSX 和输出目录。工作簿中有多个有效的集成页签时，菜单会再列出“页签名 → TOP 模块名”供选择；只有一个`集成`或`集成_xxx`页签时自动使用，不显示这一级菜单。显式传入 XLSX 或 `--list`、`--check`、`--strict` 等参数时直接按命令行模式执行，不显示菜单；多集成页签工作簿必须通过`--integration 页签名`消除歧义，管道、CI 等非交互环境不会等待输入。修改 XLSX 的 `--spread-value` 是唯一例外：无论从菜单还是 CLI 进入，都必须再次输入 `y` 才会修改。
 
-每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.12`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
+每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.13`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
 
 ## 文件顶部配置
 
@@ -76,7 +76,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 |---|---|
 | `端口名` | 合法的 Verilog 标识符；同一模块中的重复名称合并为同一个物理端口 |
 | `位宽` | packed 位宽；支持正整数、整体带括号的安全整数表达式、宏（如 `` `DFT_BUS``）、parameter（如 `DATA_WIDTH`）、由任意顶层 `*` 分隔的多维 packed array，或 interface modport（如 `sky_cs_if.mst`） |
-| `数值` | 位宽宏或 parameter 的默认值；支持整数表达式；位宽为空时 `1` 表示标量 |
+| `数值` | 位宽宏或 parameter 的匹配默认值；支持结果非负的整数表达式（包括 `0`）；普通端口位宽为空时仍按标量 `1` 处理 |
 | `i/o` | 支持 `i/o/io`、`input/output/inout`、`输入/输出/双向`；`inout`声明不附加`wire`；interface 行使用 `NA`/`N/A`/`interface`；单元格为空时暂按 `inout` 生成，并在代码中加入 TODO 备注 |
 | `数组`（可选） | 信号的外层 packed 数组维度；生成时统一放在端口名左侧、位宽之前；任意顶层 `*` 表示多维；别名为 `数组维度`、`数组深度`、`array`、`depth` |
 | `数组数值`（可选） | 数组深度宏或 parameter 的默认值；别名为 `数组默认值`、`arrayvalue`、`array_default`、`depthdefault`、`depth_default` |
@@ -84,12 +84,12 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。生成时模块名、宏和 parameter 规范为大写，默认实例名为`U_<MODULE>`；元数据表中的自定义例化名及普通信号、端口名严格保持 XLSX 中的大小写。输出文件名统一为小写。Verilog 标识符大小写敏感，因此`Data`和`data`是两个不同信号，集成页签也必须使用与模块页完全相同的拼写。
 
 - 宏位宽只生成注释参考，例如 ``// `define DFT_BUS 64``，不会在真实项目中主动定义或重定义宏。
-- 非反引号符号位宽会生成模块参数；V3.12 默认使用不可由上层覆盖的`localparam`。
+- 非反引号符号位宽会生成模块参数；当前版本默认使用不可由上层覆盖的`localparam`。
 - 数字位宽 `N` 会生成 `[N -1:0]`；数字 `1` 生成标量。
 - 重复名称可以出现在多行或不同模块中。单个 Verilog 模块只声明一次同名端口；同一模块后续同名行合并到第一次定义。
 - 普通模块页签中的所有 output 会在模块内部连续赋零，方便生成结果直接通过基础语法检查。
 
-分类为`parameter`（也接受`parameters`、`参数`、`参数定义`）时，该分类内的行不是端口，而是当前模块的显式参数声明：`端口名`列填写参数名，`数值`列填写用于位宽匹配的正整数默认值，`i/o`留空。分类会向后续空分类行继承；名称统一转成大写，也支持`DW_{{i}}`逐项展开。`位宽`列留空时，生成值直接取`数值`；非空时则作为要生成的单行 Verilog 常量表达式，支持完整宏、宏调用、其他 parameter、系统函数、数值字面量及常用运算符。宏名和 parameter 引用随生成规范转成大写，系统函数名保持原样；`数值`列仍独立完成静态位宽匹配并生成行尾注释，不会尝试求值该表达式。旧式把完整宏直接写在`数值`列仍兼容。表达式不能包含换行、分号或注释，避免生成非预期语句。所有参数均不再生成`integer`。
+分类为`parameter`（也接受`parameters`、`参数`、`参数定义`）时，该分类内的行不是端口，而是当前模块的显式参数声明：`端口名`列填写参数名，`数值`列填写用于位宽匹配的非负整数默认值（允许 `0`），`i/o`留空。分类会向后续空分类行继承；名称统一转成大写，也支持`DW_{{i}}`逐项展开。`位宽`列留空时，生成值直接取`数值`；非空时则作为要生成的单行 Verilog 常量表达式，支持完整宏、宏调用、其他 parameter、系统函数、数值字面量及常用运算符。宏名和 parameter 引用随生成规范转成大写，系统函数名保持原样；`数值`列仍独立完成静态位宽匹配并生成行尾注释，不会尝试求值该表达式。旧式把完整宏直接写在`数值`列仍兼容。表达式不能包含换行、分号或注释，避免生成非预期语句。所有参数均不再生成`integer`。`0`只放宽 parameter/宏匹配值；直接数字位宽、数组深度和例化次数仍必须大于 `0`。
 
 例如以下三行（`数值`分别填写`4/5/3`）：
 
@@ -133,7 +133,7 @@ localparam DW     = `LOG2(PARA_B)   // 3
 
 `parameter`分类中的显式声明也参与变量发现和扩散；扩散一个 parameter 时，会同时更新其显式声明行及使用该 parameter 的位宽行，避免声明值和引用值产生新的局部冲突。
 
-扩散值允许正自然数或整体带括号的安全整数表达式，例如 `8`、`(3+5)`；不接受未加外层括号的 `3+5`。普通单维直接覆盖`数值`；多维只覆盖变量所在因子，其他空因子使用可计算的数字位宽，否则填 `114`。模板变量会写成显式范围，例如把 `BUS_REQ` 扩散为 `(3+5)` 后可得到：
+扩散值允许非负整数或整体带括号、可安全计算且结果非负的整数表达式，例如 `0`、`8`、`(3-3)`、`(3+5)`；不接受未加外层括号的 `3+5`，也不接受负数结果。普通单维直接覆盖`数值`；多维只覆盖变量所在因子，其他空因子使用可计算的数字位宽，否则填 `114`。模板变量会写成显式范围，例如把 `BUS_REQ` 扩散为 `(3+5)` 后可得到：
 
 ```text
 位宽: BUS_{{z}}*DW
@@ -260,7 +260,7 @@ NA 必须写在真实端口的“对端”单元格中，不能用它替代需�
 
 TOP 连接区的`NA->0/NA->1`属于常量驱动功能；`NA->signame`属于命名观察功能。后者不会改写 TOP 端口名，也不会增加 TOP 驱动，只创建一根观察 wire，因此可以与同一行已有的正常子模块连接并存。interface TOP 端口不支持连续赋值观察 wire，会输出`E_INTERFACE_CONNECTION`。
 
-### V3.12 参数、宏和位宽裁决
+### V3.13 参数、宏和位宽裁决
 
 - 同一模块内，同名宏/parameter 的非空数值必须一致；部分行留空时自动继承该模块的已知值。上层已有值而下层留空时也会向下传播。
 - 所有参数默认局部：生成`localparam`且实例不传参。只有集成页签`parameter`分类中显式链接的子模块参数才生成`parameter`，并由 TOP localparam 传入。没有 TOP 端点的子模块互连会自动创建 TOP localparam，并输出 info。
@@ -305,7 +305,7 @@ warning[W_WIDTH_MISMATCH][RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应�
 
 `review_test_cases/13_test_for_techreview3/techreview2version3.xlsx`覆盖用户代码段、`NA[i]`内部 generate、`z=0:31`范围展开和`RISCV_CRG`的 32 个模板端口。原件继承四组刻意保留的宏冲突，预期直接校验失败；`tests_script/test_version2_review3.py`在临时副本上统一宏值后回归。
 
-`review_test_cases/14_edge_case_test_problem/eage_case.xlsx`是 V3.12 主验收样例：参数分类在 TOP 和`RISCV_CORE_TEST`间显式链接；`RST_LANE`使用`` `GLB_RST_LANE``并以`1`匹配；`NA->ready_test_process`创建命名 wire；`NA->1`把三个 TOP valid 输出赋 1；`MEM_DAT`使用`PROJECT_PERSONAL_MEM_DAT`实例名；`RISCV_CRG`显式例化 10 次。该样例仍刻意保留模板变量、占位参数和位宽差异 warning，因此普通`--check`成功，`--strict`预期失败。
+`review_test_cases/14_edge_case_test_problem/eage_case.xlsx`是 V3 主验收样例：参数分类在 TOP 和`RISCV_CORE_TEST`间显式链接；`RST_LANE`使用`` `GLB_RST_LANE``并以`1`匹配；`NA->ready_test_process`创建命名 wire；`NA->1`把三个 TOP valid 输出赋 1；`MEM_DAT`使用`PROJECT_PERSONAL_MEM_DAT`实例名；`RISCV_CRG`显式例化 10 次。该样例仍刻意保留模板变量、占位参数和位宽差异 warning，因此普通`--check`成功，`--strict`预期失败。
 
 ## 文档归档
 
@@ -326,8 +326,8 @@ python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xl
 python .\xlsx2verilog.py .\review_test_cases\09_version_2\test.xlsx --check
 python .\xlsx2verilog.py .\review_test_cases\10_special_case\review2case.xlsx --check
 python .\xlsx2verilog.py .\review_test_cases\13_test_for_techreview3\techreview2version3.xlsx --check
-# V3.12 主验收样例：普通检查返回 0；其已知 warning 会令 --strict 失败
+# V3 主验收样例：普通检查返回 0；其已知 warning 会令 --strict 失败
 python .\xlsx2verilog.py .\review_test_cases\14_edge_case_test_problem\eage_case.xlsx --check
 ```
 
-测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.12 新规则由`tests_script/test_version3_review1.py`覆盖；独立 merger 的事务与第 14 号真实覆盖回归位于`appendix/tests/`。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)。
+测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3 新规则由`tests_script/test_version3_review1.py`覆盖；独立 merger 的事务与第 14 号真实覆盖回归位于`appendix/tests/`。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)。
