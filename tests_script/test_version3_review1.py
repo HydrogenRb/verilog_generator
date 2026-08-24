@@ -136,6 +136,53 @@ class Version3TechReview1Tests(unittest.TestCase):
                 any("自动在 TOP 创建 localparam P_A" in item.message for item in reporter.items)
             )
 
+    def test_parameter_generation_accepts_macro_and_parameter_expressions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "parameter-expressions.xlsx"
+            rows = module_sheet(
+                "PARAMETER_EXPRESSIONS",
+                [
+                    ("para_a", "`lane_num", 4, None),
+                    ("para_b", "para_a+1", 5, None),
+                    ("DW", "`log2(para_b)", 3, None),
+                    ("data", "DW", 3, "o"),
+                ],
+            )
+            for row in (3, 4, 5):
+                set_cell(rows, row, 1, "parameter")
+            write_xlsx(workbook, [("PARAMETER_EXPRESSIONS", rows)])
+
+            paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(reporter.has_errors)
+            self.assertEqual([path.name for path in paths], ["parameter_expressions.v"])
+            text = paths[0].read_text(encoding="utf-8")
+            self.assertRegex(text, r"localparam\s+PARA_A\s+= `LANE_NUM,\s+// 4")
+            self.assertRegex(text, r"localparam\s+PARA_B\s+= PARA_A\+1,\s+// 5")
+            self.assertRegex(text, r"localparam\s+DW\s+= `LOG2\(PARA_B\)\s+// 3")
+            self.assertRegex(text, r"output wire\s+\[DW\s+-1:0\]\s+data")
+
+    def test_parameter_generation_rejects_statement_injection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "unsafe-parameter-expression.xlsx"
+            rows = module_sheet(
+                "UNSAFE_PARAMETER",
+                [("DW", "para_a; assign hacked = 1", 3, None)],
+            )
+            set_cell(rows, 3, 1, "parameter")
+            write_xlsx(workbook, [("UNSAFE_PARAMETER", rows)])
+
+            paths, reporter = generate(workbook, root / "generated")
+            self.assertEqual(paths, [])
+            self.assertTrue(reporter.has_errors)
+            self.assertTrue(
+                any(
+                    item.code == "E_PARAMETER" and "安全的单行" in item.message
+                    for item in reporter.items
+                )
+            )
+
     def test_custom_count_warns_when_index_range_is_too_small(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

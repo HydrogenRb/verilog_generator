@@ -105,6 +105,17 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 CELL_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
 MACRO_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_$]*)$")
 MACRO_REFERENCE_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_$]*)")
+PARAMETER_EXPRESSION_TOKEN_RE = re.compile(
+    r"(?P<space>[ \t]+)|"
+    r"(?P<macro>`[A-Za-z_][A-Za-z0-9_$]*)|"
+    r"(?P<system>\$[A-Za-z_][A-Za-z0-9_$]*)|"
+    r"(?P<based>(?:[0-9][0-9_]*)?'[sS]?[dDhHbBoO][0-9a-fA-F_xXzZ?]+)|"
+    r"(?P<unbased>'[01xXzZ])|"
+    r"(?P<number>[0-9][0-9_]*)|"
+    r"(?P<identifier>[A-Za-z_][A-Za-z0-9_$]*)|"
+    r"(?P<operator><<<|>>>|===|!==|<<|>>|<=|>=|==|!=|&&|\|\||"
+    r"\*\*|::|[+\-*/%&|^~!<>(){}\[\]?:,])"
+)
 INTERFACE_TYPE_RE = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_$]*::)*"
     r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$"
@@ -952,6 +963,75 @@ def uppercase_macro_references(text: Any) -> str:
     )
 
 
+def normalize_parameter_expression(
+    value: Any,
+    context: str,
+    reporter: Reporter,
+) -> str:
+    """Validate and normalize a generated Verilog parameter expression.
+
+    The expression is never evaluated: the parameter row's ``数值`` column is
+    the independent static value used by hierarchy/width checks.  This scanner
+    only admits tokens used by single-line Verilog constant expressions, which
+    lets parameter references, macro references/calls, system functions and
+    operators pass through without opening a statement/comment injection path.
+    Generated parameter and macro identifiers follow the project's uppercase
+    naming rule; system function names such as ``$clog2`` keep their spelling.
+    """
+    expression = clean(value)
+    if not expression:
+        return ""
+    if any(marker in expression for marker in ("\r", "\n", ";", "//", "/*", "*/")):
+        reporter.error(
+            f"{context}: parameter 生成表达式必须是安全的单行 Verilog 常量表达式，"
+            "不能包含换行、分号或注释",
+            code="E_PARAMETER",
+        )
+        return ""
+
+    normalized: list[str] = []
+    delimiters: list[str] = []
+    matching_open = {")": "(", "]": "[", "}": "{"}
+    position = 0
+    while position < len(expression):
+        match = PARAMETER_EXPRESSION_TOKEN_RE.match(expression, position)
+        if match is None:
+            fragment = expression[position : position + 16]
+            reporter.error(
+                f"{context}: parameter 生成表达式 {expression!r} 含不支持的内容 "
+                f"{fragment!r}",
+                code="E_PARAMETER",
+            )
+            return ""
+        token = match.group(0)
+        kind = match.lastgroup
+        if kind == "macro":
+            token = f"`{token[1:].upper()}"
+        elif kind == "identifier":
+            token = token.upper()
+        elif kind == "operator":
+            if token in "([{":
+                delimiters.append(token)
+            elif token in ")]}" and (
+                not delimiters or delimiters.pop() != matching_open[token]
+            ):
+                reporter.error(
+                    f"{context}: parameter 生成表达式 {expression!r} 的括号不匹配",
+                    code="E_PARAMETER",
+                )
+                return ""
+        normalized.append(token)
+        position = match.end()
+
+    if delimiters:
+        reporter.error(
+            f"{context}: parameter 生成表达式 {expression!r} 的括号不匹配",
+            code="E_PARAMETER",
+        )
+        return ""
+    return "".join(normalized)
+
+
 def template_default_value(raw_default: Any, values: list[str], index: int) -> Any:
     text = clean(raw_default)
     if not text:
@@ -1202,20 +1282,16 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 raw_default = uppercase_macro_references(
                     substitute_template(raw_default, expansion)
                 )
-                raw_expression = uppercase_macro_references(
-                    substitute_template(sheet.cell(row, columns["width"]), expansion)
+                raw_expression = substitute_template(
+                    sheet.cell(row, columns["width"]), expansion
                 )
                 expression = ""
                 if clean(raw_expression):
-                    macro_match = MACRO_RE.fullmatch(clean(raw_expression))
-                    if macro_match is None:
-                        reporter.error(
-                            f"{expanded_context}: parameter {parameter_name} 的“位宽”"
-                            "仅支持完整宏引用，例如 `GLB_LANE_NUM",
-                            code="E_PARAMETER",
-                        )
-                    else:
-                        expression = f"`{macro_match.group(1).upper()}"
+                    expression = normalize_parameter_expression(
+                        raw_expression,
+                        f"{expanded_context}: parameter {parameter_name} 的“位宽”",
+                        reporter,
+                    )
                     default = normalized_width_default(
                         raw_default,
                         f"{expanded_context}: parameter {parameter_name} 的匹配数值",
