@@ -18,9 +18,11 @@ try:
     )
 
     APPENDIX_AVAILABLE = True
-except ModuleNotFoundError:
-    # The current V3 archive contains only the main generator; keep the former
-    # appendix regression discoverable without making the main suite unloadable.
+except ModuleNotFoundError as exc:
+    if exc.name != "appendix.xvlink_core":
+        raise
+    # The current V3 archive does not contain the former xvlink visual tool;
+    # keep that regression discoverable alongside the independent merger.
     APPENDIX_AVAILABLE = False
 from tests_script.run_review_matrix import module_sheet, write_xlsx
 from xlsx2verilog import Reporter, parse_workbook
@@ -30,7 +32,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SAMPLE = ROOT / "main_test.xlsx"
 
 
-@unittest.skipUnless(APPENDIX_AVAILABLE, "appendix project is not present in the V3 archive")
+@unittest.skipUnless(
+    APPENDIX_AVAILABLE,
+    "legacy xvlink visual appendix is not present in the V3 archive",
+)
 class AppendixCoreTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

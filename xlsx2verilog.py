@@ -48,9 +48,55 @@ SHOW_ERROR_MESSAGES = True
 SHOW_WARNING_MESSAGES = True
 SHOW_INFO_MESSAGES = True
 
+# Fine-grained terminal visibility.  Set one diagnostic code to False to hide
+# only that kind of message.  Diagnostics remain recorded and continue to
+# affect error / --strict return codes.  The three SHOW_* switches above are
+# master switches and take precedence over this table.
+DIAGNOSTIC_VISIBILITY_BY_CODE = {
+    # Errors: malformed input or unsafe generation/overwrite.
+    "E_GENERAL": True,
+    "E_WIDTH": True,
+    "E_TEMPLATE": True,
+    "E_CONDITION": True,
+    "E_MODULE": True,
+    "E_PORT": True,
+    "E_PARAMETER": True,
+    "E_INTEGRATION": True,
+    "E_INSTANCE": True,
+    "E_DIRECTION": True,
+    "E_PORT_REFERENCE": True,
+    "E_GENERATE_INDEX": True,
+    "E_NA_TARGET": True,
+    "E_BIT_SELECT": True,
+    "E_INTERFACE_CONNECTION": True,
+    "E_DRIVER_CONFLICT": True,
+    "E_USER_CODE": True,
+    "E_FILE_IO": True,
+    # Warnings: generation can continue, but engineering review is needed.
+    "W_GENERAL": True,
+    "W_WIDTH_PLACEHOLDER": True,
+    "W_WIDTH_MISMATCH": True,
+    "W_TEMPLATE_REPAIR": True,
+    "W_TEMPLATE_BINDING": True,
+    "W_IO_DEFAULTED": True,
+    "W_MODULE_SKIPPED": True,
+    "W_NO_INTEGRATION": True,
+    "W_INSTANCE_UNUSED": True,
+    "W_DRIVER_RISK": True,
+    "W_GENERATE_RANGE": True,
+    # Information: deterministic decisions and automatic recovery.
+    "I_GENERAL": True,
+    "I_PARAMETER_LINK": True,
+    "I_DIRECTION_INFERRED": True,
+    "I_TEMPLATE_PARTIAL": True,
+    "I_NA_CONNECTION": True,
+    "I_UNCONNECTED": True,
+    "I_INSTANCE": True,
+}
+
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.1"
+SCRIPT_VERSION = "Version V3.12"
 SCRIPT_RELEASE_DATE = "2026.8.24"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
@@ -117,21 +163,22 @@ def clean(value: Any) -> str:
 class Diagnostic:
     level: str
     message: str
+    code: str
 
 
 class Reporter:
     def __init__(self) -> None:
         self.items: list[Diagnostic] = []
 
-    def warning(self, message: str) -> None:
-        self.items.append(Diagnostic("警告", message))
+    def warning(self, message: str, *, code: str = "W_GENERAL") -> None:
+        self.items.append(Diagnostic("警告", message, code))
 
-    def info(self, message: str) -> None:
+    def info(self, message: str, *, code: str = "I_GENERAL") -> None:
         """Record an informational decision that must not fail ``--strict``."""
-        self.items.append(Diagnostic("信息", message))
+        self.items.append(Diagnostic("信息", message, code))
 
-    def error(self, message: str) -> None:
-        self.items.append(Diagnostic("错误", message))
+    def error(self, message: str, *, code: str = "E_GENERAL") -> None:
+        self.items.append(Diagnostic("错误", message, code))
 
     @property
     def has_errors(self) -> bool:
@@ -165,7 +212,12 @@ class Reporter:
         for level in ("错误", "警告", "信息"):
             if not visibility[level]:
                 continue
-            grouped = [item for item in self.items if item.level == level]
+            grouped = [
+                item
+                for item in self.items
+                if item.level == level
+                and DIAGNOSTIC_VISIBILITY_BY_CODE.get(item.code, True)
+            ]
             if not grouped:
                 continue
             prefix, style = styles[level]
@@ -175,7 +227,10 @@ class Reporter:
                 file=target,
             )
             for item in grouped:
-                print(f"{paint}{prefix}[{item.message}]{reset}", file=target)
+                print(
+                    f"{paint}{prefix}[{item.code}][{item.message}]{reset}",
+                    file=target,
+                )
 
 
 @dataclass
@@ -636,7 +691,8 @@ def dimension_defaults(
     if len(parts) == count:
         return parts
     reporter.error(
-        f"{context}: 位宽与数值的 * 维度数量不匹配 ({count}/{len(parts)})"
+        f"{context}: 位宽与数值的 * 维度数量不匹配 ({count}/{len(parts)})",
+        code="E_WIDTH",
     )
     return [None] * count
 
@@ -657,9 +713,15 @@ def normalized_width_default(
         # after the whole hierarchy is known.
         return ""
     if fallback_uncertain:
-        reporter.warning(f"{context}: 位宽默认值无法确定，使用占位值 {UNKNOWN_WIDTH}")
+        reporter.warning(
+            f"{context}: 位宽默认值无法确定，使用占位值 {UNKNOWN_WIDTH}",
+            code="W_WIDTH_PLACEHOLDER",
+        )
         return str(UNKNOWN_WIDTH)
-    reporter.error(f"{context}: 无法计算默认值 {clean(default_value)!r}")
+    reporter.error(
+        f"{context}: 无法计算默认值 {clean(default_value)!r}",
+        code="E_WIDTH",
+    )
     return "1"
 
 
@@ -726,11 +788,15 @@ def analyze_width(
         if inferred is not None:
             return Width("literal", str(inferred), str(inferred))
         reporter.warning(
-            f"{context}: 表达式 {text!r} 无法确定位宽，使用占位值 {UNKNOWN_WIDTH}"
+            f"{context}: 表达式 {text!r} 无法确定位宽，使用占位值 {UNKNOWN_WIDTH}",
+            code="W_WIDTH_PLACEHOLDER",
         )
         return Width("literal", str(UNKNOWN_WIDTH), str(UNKNOWN_WIDTH))
 
-    reporter.error(f"{context}: 不支持的位宽 {text!r}；请使用正整数、`MACRO 或 PARAMETER")
+    reporter.error(
+        f"{context}: 不支持的位宽 {text!r}；请使用正整数、`MACRO 或 PARAMETER",
+        code="E_WIDTH",
+    )
     return Width("literal", "1", "1")
 
 
@@ -799,7 +865,8 @@ def normalize_template_text(value: Any, context: str, reporter: Reporter) -> str
     normalized = MISSING_TEMPLATE_CLOSE_RE.sub(r"{{\1}}", normalized)
     if normalized != text:
         reporter.warning(
-            f"{context}: 模板花括号不完整 {text!r}，按 {normalized!r} 处理；请修正 XLSX"
+            f"{context}: 模板花括号不完整 {text!r}，按 {normalized!r} 处理；请修正 XLSX",
+            code="W_TEMPLATE_REPAIR",
         )
     return normalized
 
@@ -821,7 +888,8 @@ def template_values_in_row(
             result[variable] = values
         elif previous != values:
             reporter.error(
-                f"{context}: 模板变量 {variable} 在同一行定义了冲突的取值列表"
+                f"{context}: 模板变量 {variable} 在同一行定义了冲突的取值列表",
+                code="E_TEMPLATE",
             )
 
     for column in range(1, sheet.max_column + 1):
@@ -840,10 +908,16 @@ def template_values_in_row(
             variable = variable_match.group(1)
             values = [item.strip() for item in re.split(r"[,，、;；]", match.group(1))]
             if not values or not all(values):
-                reporter.error(f"{context}: 模板变量 {variable} 的取值列表包含空值")
+                reporter.error(
+                    f"{context}: 模板变量 {variable} 的取值列表包含空值",
+                    code="E_TEMPLATE",
+                )
                 continue
             if len(values) != len(set(values)):
-                reporter.error(f"{context}: 模板变量 {variable} 的取值列表包含重复值")
+                reporter.error(
+                    f"{context}: 模板变量 {variable} 的取值列表包含重复值",
+                    code="E_TEMPLATE",
+                )
                 continue
             record(variable, values)
         for match in re.finditer(
@@ -858,7 +932,8 @@ def template_values_in_row(
             if count > MAX_TEMPLATE_RANGE_ITEMS:
                 reporter.error(
                     f"{context}: 模板变量 {variable} 的范围包含 {count} 项，"
-                    f"超过上限 {MAX_TEMPLATE_RANGE_ITEMS}"
+                    f"超过上限 {MAX_TEMPLATE_RANGE_ITEMS}",
+                    code="E_TEMPLATE",
                 )
                 continue
             step = 1 if last >= first else -1
@@ -947,7 +1022,8 @@ def parse_category(
     if condition_match is None:
         if re.search(r"条件\s*[:：]", text):
             reporter.error(
-                f"{context}: 分类条件缺少合法宏名 {text!r}；示例：条件：FEATURE_X"
+                f"{context}: 分类条件缺少合法宏名 {text!r}；示例：条件：FEATURE_X",
+                code="E_CONDITION",
             )
         return text, None
     condition = condition_match.group(1)
@@ -1009,7 +1085,8 @@ def resolve_module_local_defaults(module: Module, reporter: Reporter) -> None:
             label = f"宏 {name}" if kind == "macro" else f"parameter {name}"
             reporter.error(
                 f"页签 {module.sheet_name}: {label} 默认值冲突 "
-                f"({'/'.join(sorted(defaults))})"
+                f"({'/'.join(sorted(defaults))})",
+                code="E_PARAMETER" if kind == "parameter" else "E_WIDTH",
             )
     unambiguous = {
         key: next(iter(defaults))
@@ -1035,7 +1112,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
     header_row, columns = header
     source_module_name = module_name_above_header(sheet, header_row, columns["port"])
     if not IDENTIFIER_RE.fullmatch(source_module_name):
-        reporter.error(f"页签 {sheet.name}: 模块名 {source_module_name!r} 不是合法 Verilog 标识符")
+        reporter.error(
+            f"页签 {sheet.name}: 模块名 {source_module_name!r} 不是合法 Verilog 标识符",
+            code="E_MODULE",
+        )
         return None
     module_name = source_module_name.upper()
 
@@ -1079,7 +1159,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             subject = "parameter 名" if active_parameter_category else "端口名"
             reporter.error(
                 f"{context}: {subject}模板变量 {names} 未找到取值列表；"
-                f"请在同一分类中使用 {example}是{{a,b}} 或 {example}={{a,b}}"
+                f"请在同一分类中使用 {example}是{{a,b}} 或 {example}={{a,b}}",
+                code="E_TEMPLATE",
             )
             continue
         if port_variables:
@@ -1106,7 +1187,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 if not IDENTIFIER_RE.fullmatch(parameter_name):
                     reporter.error(
                         f"{expanded_context}: parameter 名 {parameter_name!r} "
-                        "不是合法 Verilog 标识符"
+                        "不是合法 Verilog 标识符",
+                        code="E_PARAMETER",
                     )
                     continue
                 raw_default = sheet.cell(row, columns["value"])
@@ -1129,7 +1211,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     if macro_match is None:
                         reporter.error(
                             f"{expanded_context}: parameter {parameter_name} 的“位宽”"
-                            "仅支持完整宏引用，例如 `GLB_LANE_NUM"
+                            "仅支持完整宏引用，例如 `GLB_LANE_NUM",
+                            code="E_PARAMETER",
                         )
                     else:
                         expression = f"`{macro_match.group(1).upper()}"
@@ -1155,7 +1238,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                         f"页签 {sheet.name}: parameter {parameter_name} 默认值冲突；"
                         f"第 {declared_parameter_rows[parameter_name]} 行为 "
                         f"{previous_expression or previous} (匹配值 {previous})，"
-                        f"第 {row} 行为 {expression or default} (匹配值 {default})"
+                        f"第 {row} 行为 {expression or default} (匹配值 {default})",
+                        code="E_PARAMETER",
                     )
                     continue
                 declared_parameters.setdefault(parameter_name, default)
@@ -1193,14 +1277,16 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 if previous_values != raw_expansion_values:
                     reporter.error(
                         f"{context}: 模板展开产生重复端口 "
-                        f"{port_name!r}"
+                        f"{port_name!r}",
+                        code="E_TEMPLATE",
                     )
                     continue
             assignments = ", ".join(f"{name}={value}" for name, value in expansion.items())
             expanded_context = f"{context} ({assignments})" if assignments else context
             if not IDENTIFIER_RE.fullmatch(port_name):
                 reporter.error(
-                    f"{expanded_context}: 端口名 {port_name!r} 不是合法 Verilog 标识符"
+                    f"{expanded_context}: 端口名 {port_name!r} 不是合法 Verilog 标识符",
+                    code="E_PORT",
                 )
                 continue
             normalized_template_source = (
@@ -1222,7 +1308,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 ):
                     reporter.error(
                         f"{expanded_context}: 模板来源或展开值与已有端口 "
-                        f"{port_name!r} 冲突"
+                        f"{port_name!r} 冲突",
+                        code="E_TEMPLATE",
                     )
                 continue
 
@@ -1249,7 +1336,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 names = "、".join(unresolved_width)
                 reporter.warning(
                     f"{expanded_context}: 位宽引用未绑定模板变量 {names}，"
-                    f"使用占位值 {UNKNOWN_WIDTH}；请补充变量取值或修正变量名"
+                    f"使用占位值 {UNKNOWN_WIDTH}；请补充变量取值或修正变量名",
+                    code="W_TEMPLATE_BINDING",
                 )
                 raw_width = str(UNKNOWN_WIDTH)
             unresolved_array = template_variables(raw_array)
@@ -1257,7 +1345,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 names = "、".join(unresolved_array)
                 reporter.warning(
                     f"{expanded_context}: 数组维度引用未绑定模板变量 {names}，"
-                    f"使用占位值 {UNKNOWN_WIDTH}；请补充变量取值或修正变量名"
+                    f"使用占位值 {UNKNOWN_WIDTH}；请补充变量取值或修正变量名",
+                    code="W_TEMPLATE_BINDING",
                 )
                 raw_array = str(UNKNOWN_WIDTH)
 
@@ -1271,7 +1360,8 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 if listed_direction not in {None, "interface"}:
                     reporter.warning(
                         f"{expanded_context}: interface {interface_type} 忽略 i/o 值 "
-                        f"{sheet.cell(row, columns['direction'])!r}"
+                        f"{sheet.cell(row, columns['direction'])!r}",
+                        code="W_IO_DEFAULTED",
                     )
                 width = Width("literal", "1", "1")
                 _, _, arrays = analyze_port_dimensions(
@@ -1289,14 +1379,16 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     direction = "inout"
                     direction_inferred = True
                     reporter.warning(
-                        f"{expanded_context}: i/o 为空，暂按 inout 生成；请确认并补充方向"
+                        f"{expanded_context}: i/o 为空，暂按 inout 生成；请确认并补充方向",
+                        code="W_IO_DEFAULTED",
                     )
                 else:
                     direction = listed_direction or ""
                 if direction not in {"input", "output", "inout"}:
                     reporter.error(
                         f"{expanded_context}: 无法识别 i/o 值 "
-                        f"{raw_direction!r}"
+                        f"{raw_direction!r}",
+                        code="E_DIRECTION",
                     )
                     continue
                 width, packed_dimensions, arrays = analyze_port_dimensions(
@@ -1328,7 +1420,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             seen[port_name] = port
             ports.append(port)
     if not ports:
-        reporter.error(f"页签 {sheet.name}: 没有可生成的端口")
+        reporter.error(
+            f"页签 {sheet.name}: 没有可生成的端口",
+            code="E_PORT",
+        )
     module = Module(
         module_name,
         sheet.name,
@@ -1615,7 +1710,8 @@ def resolve_hierarchy_defaults(
                     continue
                 reporter.error(
                     f"页签 {module.sheet_name}: parameter {name} 缺少“数值”默认值，"
-                    "且没有有效的显式 parameter 链接"
+                    "且没有有效的显式 parameter 链接",
+                    code="E_PARAMETER",
                 )
                 module.declared_parameters[name] = "1"
             resolve_module_local_defaults(module, reporter)
@@ -1631,12 +1727,14 @@ def resolve_hierarchy_defaults(
                     if port.template_source is not None:
                         reporter.warning(
                             f"页签 {module.sheet_name} 第 {port.row} 行: {label} "
-                            f"缺少可扩散数值，使用占位值 {UNKNOWN_WIDTH}"
+                            f"缺少可扩散数值，使用占位值 {UNKNOWN_WIDTH}",
+                            code="W_WIDTH_PLACEHOLDER",
                         )
                         return replace(width, default=str(UNKNOWN_WIDTH))
                     reporter.error(
                         f"页签 {module.sheet_name} 第 {port.row} 行: "
-                        f"{label} 缺少“数值”默认值"
+                        f"{label} 缺少“数值”默认值",
+                        code="E_PARAMETER" if width.kind == "parameter" else "E_WIDTH",
                     )
                     return replace(width, default="1")
 
@@ -1679,7 +1777,8 @@ def resolve_hierarchy_defaults(
             if not details:
                 details = "/".join(sorted(values))
             reporter.error(
-                f"集成模块: 宏 {name} 默认值冲突：{details}"
+                f"集成模块: 宏 {name} 默认值冲突：{details}",
+                code="E_WIDTH",
             )
 
     def inherited(width: Width) -> Width:
@@ -1717,7 +1816,8 @@ def parse_workbook(
         if integration is None:
             names = ", ".join(item.sheet_name for item in integrations) or "无"
             reporter.error(
-                f"指定的集成页签 {integration_sheet!r} 不存在或格式无效；可选页签: {names}"
+                f"指定的集成页签 {integration_sheet!r} 不存在或格式无效；可选页签: {names}",
+                code="E_INTEGRATION",
             )
     elif len(integrations) == 1:
         integration = integrations[0]
@@ -1725,7 +1825,8 @@ def parse_workbook(
         names = ", ".join(item.sheet_name for item in integrations)
         reporter.error(
             f"检测到多个集成页签 ({names})；请在终端菜单选择，"
-            "或通过 --integration 指定"
+            "或通过 --integration 指定",
+            code="E_INTEGRATION",
         )
 
     modules: dict[str, Module] = {}
@@ -1750,39 +1851,62 @@ def parse_workbook(
                 continue
         module = parse_module(sheet, reporter)
         if module is None:
-            reporter.warning(f"页签 {sheet.name}: 未识别为模块定义，已跳过")
+            reporter.warning(
+                f"页签 {sheet.name}: 未识别为模块定义，已跳过",
+                code="W_MODULE_SKIPPED",
+            )
             continue
         if module.name in modules:
-            reporter.error(f"模块名 {module.name} 在多个页签中重复")
+            reporter.error(
+                f"模块名 {module.name} 在多个页签中重复",
+                code="E_MODULE",
+            )
         else:
             modules[module.name] = module
 
     if integration is None and not integrations:
-        reporter.warning("未检测到集成页签，将只生成模块桩文件")
+        reporter.warning(
+            "未检测到集成页签，将只生成模块桩文件",
+            code="W_NO_INTEGRATION",
+        )
     elif integration is not None:
         hierarchy_names = [integration.top_name, *integration.child_names]
         for name in hierarchy_names:
             if name not in modules:
-                reporter.error(f"集成页签引用了不存在的模块定义 {name}")
+                reporter.error(
+                    f"集成页签引用了不存在的模块定义 {name}",
+                    code="E_INTEGRATION",
+                )
         for name, spec in integration.instance_specs.items():
             context = f"集成页签 {integration.sheet_name} 例化配置第 {spec.row} 行"
             if name not in hierarchy_names:
-                reporter.warning(f"{context}: 模块 {name} 不在当前集成层次中，配置已忽略")
+                reporter.warning(
+                    f"{context}: 模块 {name} 不在当前集成层次中，配置已忽略",
+                    code="W_INSTANCE_UNUSED",
+                )
                 continue
             if spec.instance_name and not IDENTIFIER_RE.fullmatch(spec.instance_name):
                 reporter.error(
-                    f"{context}: 例化名 {spec.instance_name!r} 不是合法 Verilog 标识符"
+                    f"{context}: 例化名 {spec.instance_name!r} 不是合法 Verilog 标识符",
+                    code="E_INSTANCE",
                 )
             if spec.raw_count and spec.count is None:
                 reporter.error(
-                    f"{context}: 例化次数 {spec.raw_count!r} 必须是正整数或可计算的正整数表达式"
+                    f"{context}: 例化次数 {spec.raw_count!r} 必须是正整数或可计算的正整数表达式",
+                    code="E_INSTANCE",
                 )
             if name == integration.top_name and (
                 spec.instance_name is not None or spec.raw_count is not None
             ):
-                reporter.info(f"{context}: TOP 模块不需要例化名或例化次数，相关值已忽略")
+                reporter.info(
+                    f"{context}: TOP 模块不需要例化名或例化次数，相关值已忽略",
+                    code="I_INSTANCE",
+                )
     if not modules:
-        reporter.error("工作簿中没有识别到模块定义页签")
+        reporter.error(
+            "工作簿中没有识别到模块定义页签",
+            code="E_MODULE",
+        )
     selected_integration_sheet = (
         workbook.by_name(integration.sheet_name) if integration is not None else None
     )
@@ -2480,7 +2604,8 @@ def render_integration(
                     f"集成模块: 宏 `{name} 默认值冲突："
                     f"页签 {previous_sheet} 为 {previous}；"
                     f"页签 {module.sheet_name} 为 {value}；"
-                    "上下层同名宏必须使用相同数值"
+                    "上下层同名宏必须使用相同数值",
+                    code="E_WIDTH",
                 )
 
     # A parameter is local by default.  Only rows explicitly placed under a
@@ -2524,7 +2649,8 @@ def render_integration(
             parameter_maps[top.name][candidate] = candidate
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: 自动在 TOP 创建 "
-                f"localparam {candidate}，用于显式 parameter 链接"
+                f"localparam {candidate}，用于显式 parameter 链接",
+                code="I_PARAMETER_LINK",
             )
         return candidate
 
@@ -2543,7 +2669,8 @@ def render_integration(
                 if reference not in module.parameters:
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: "
-                        f"{block.module_name} 没有 parameter {reference}"
+                        f"{block.module_name} 没有 parameter {reference}",
+                        code="E_PARAMETER",
                     )
                     continue
                 entries.append((block, module, reference))
@@ -2552,7 +2679,8 @@ def render_integration(
                     block, _, name = entries[0]
                     reporter.info(
                         f"集成页签 {sheet.name} 第 {row} 行: parameter "
-                        f"{block.module_name}.{name} 没有链接对端，保持 local"
+                        f"{block.module_name}.{name} 没有链接对端，保持 local",
+                        code="I_PARAMETER_LINK",
                     )
                 continue
 
@@ -2580,7 +2708,8 @@ def render_integration(
                     reporter.info(
                         f"集成页签 {sheet.name} 第 {row} 行: {module.name}.{name} "
                         f"匹配值 {module.parameters[name]} 由 TOP localparam "
-                        f"{local_name}={local_value} 覆盖"
+                        f"{local_name}={local_value} 覆盖",
+                        code="I_PARAMETER_LINK",
                     )
 
     bindings: dict[str, dict[str, Binding]] = {child.name: {} for child in children}
@@ -2603,7 +2732,8 @@ def render_integration(
         )
         if instance_name in used_instance_names:
             reporter.error(
-                f"集成页签 {sheet.name}: 例化名 {instance_name} 被多个模块重复使用"
+                f"集成页签 {sheet.name}: 例化名 {instance_name} 被多个模块重复使用",
+                code="E_INSTANCE",
             )
         used_instance_names.add(instance_name)
         instance_names[child.name] = instance_name
@@ -2629,7 +2759,8 @@ def render_integration(
         if spec.index != index:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: {child_name} 同时使用了 "
-                f"[{spec.index}] 和 [{index}]，无法生成同一个循环"
+                f"[{spec.index}] 和 [{index}]，无法生成同一个循环",
+                code="E_GENERATE_INDEX",
             )
             return None
         first = indexed_dimension(indexed_port)
@@ -2665,7 +2796,8 @@ def render_integration(
         port = module.port_map.get(port_name)
         if port is None:
             reporter.error(
-                f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有端口 {port_name}"
+                f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有端口 {port_name}",
+                code="E_PORT_REFERENCE",
             )
         return port
 
@@ -2690,7 +2822,8 @@ def render_integration(
         ]
         if not ports:
             reporter.error(
-                f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有与模板端口 {reference} 匹配的展开端口"
+                f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有与模板端口 {reference} 匹配的展开端口",
+                code="E_PORT_REFERENCE",
             )
         return ports
 
@@ -2716,7 +2849,8 @@ def render_integration(
             )
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: 模板端口展开不一致，"
-                f"按展开值连接已有端点，单端项按未连接处理 ({details})"
+                f"按展开值连接已有端点，单端项按未连接处理 ({details})",
+                code="I_TEMPLATE_PARTIAL",
             )
 
         ordered_values: list[tuple[str, ...]] = []
@@ -2757,22 +2891,26 @@ def render_integration(
                 reporter.info(
                     f"集成页签 {sheet.name} 第 {row} 行: "
                     f"{block.module_name}.{port.name} 的 i/o 为空，"
-                    f"按模块定义 {port.direction} 校验"
+                    f"按模块定义 {port.direction} 校验",
+                    code="I_DIRECTION_INFERRED",
                 )
                 return
             else:
                 reporter.warning(
-                    f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的 i/o 值 {raw_direction!r} 无法识别"
+                    f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的 i/o 值 {raw_direction!r} 无法识别",
+                    code="W_IO_DEFAULTED",
                 )
                 return
         if listed_direction != port.direction and port.direction_inferred:
             reporter.warning(
                 f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} "
-                f"由空 i/o 推断为 inout，与集成页签的 {listed_direction} 不同；请人工确认"
+                f"由空 i/o 推断为 inout，与集成页签的 {listed_direction} 不同；请人工确认",
+                code="W_IO_DEFAULTED",
             )
         elif listed_direction != port.direction:
             reporter.error(
-                f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的方向与模块定义不一致 ({listed_direction}/{port.direction})"
+                f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}.{port.name} 的方向与模块定义不一致 ({listed_direction}/{port.direction})",
+                code="E_DIRECTION",
             )
 
     def bind(
@@ -2797,7 +2935,8 @@ def render_integration(
         binding = Binding(expression, conditions, requires_todo)
         if port.name in target and target[port.name] != binding:
             reporter.error(
-                f"集成页签 {sheet.name} 第 {row} 行: {module_name}.{port.name} 被重复连接"
+                f"集成页签 {sheet.name} 第 {row} 行: {module_name}.{port.name} 被重复连接",
+                code="E_PORT_REFERENCE",
             )
             return
         target[port.name] = binding
@@ -2812,13 +2951,15 @@ def render_integration(
         if block.module_name == top.name:
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: TOP 端口 "
-                f"{top.name}.{port.name} 不能通过 NA 创建内部占位信号"
+                f"{top.name}.{port.name} 不能通过 NA 创建内部占位信号",
+                code="I_NA_CONNECTION",
             )
             return
         if index and port.is_interface:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: interface "
-                f"{block.module_name}.{port.name} 不支持 NA[{index}] generate"
+                f"{block.module_name}.{port.name} 不支持 NA[{index}] generate",
+                code="E_INTERFACE_CONNECTION",
             )
             return
         if target and is_verilog_constant(target):
@@ -2831,20 +2972,23 @@ def render_integration(
                 f"{block.module_name}.{port.name} 连接到常量 {target}"
                 if expression is not None
                 else f"集成页签 {sheet.name} 第 {row} 行: "
-                f"{block.module_name}.{port.name} 是输出端，NA->{target} 按开路处理"
+                f"{block.module_name}.{port.name} 是输出端，NA->{target} 按开路处理",
+                code="I_NA_CONNECTION",
             )
             return
         if target:
             if not IDENTIFIER_RE.fullmatch(target):
                 reporter.error(
                     f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
-                    f"{target!r} 不是合法 Verilog 标识符或受支持常量"
+                    f"{target!r} 不是合法 Verilog 标识符或受支持常量",
+                    code="E_NA_TARGET",
                 )
                 return
             if target in used_signals:
                 reporter.error(
                     f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
-                    f"{target} 与已有信号重名"
+                    f"{target} 与已有信号重名",
+                    code="E_NA_TARGET",
                 )
                 return
             signal_name = target
@@ -2889,7 +3033,8 @@ def render_integration(
         reporter.info(
             f"集成页签 {sheet.name} 第 {row} 行: "
             f"{block.module_name}.{port.name} 连接到 {na_label}，"
-            f"已创建 {signal_name} 占位信号并加入 TODO"
+            f"已创建 {signal_name} 占位信号并加入 TODO",
+            code="I_NA_CONNECTION",
         )
 
     first_group = integration.groups[0]
@@ -2937,7 +3082,8 @@ def render_integration(
         if len(row_na_targets) > 1:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个目标 "
-                f"({', '.join(sorted(row_na_targets))})"
+                f"({', '.join(sorted(row_na_targets))})",
+                code="E_NA_TARGET",
             )
             continue
         row_na_target = next(iter(row_na_targets), None)
@@ -2946,17 +3092,20 @@ def render_integration(
         if not top_port_name:
             if not row_entries:
                 reporter.info(
-                    f"集成页签 {sheet.name} 第 {row} 行: NA 没有可拉出的模块端口"
+                    f"集成页签 {sheet.name} 第 {row} 行: NA 没有可拉出的模块端口",
+                    code="I_NA_CONNECTION",
                 )
                 continue
             if len(row_na_indices) > 1:
                 reporter.error(
                     f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个 "
-                    f"generate 索引 ({', '.join(sorted(row_na_indices, key=str))})"
+                    f"generate 索引 ({', '.join(sorted(row_na_indices, key=str))})",
+                    code="E_GENERATE_INDEX",
                 )
                 continue
             reporter.info(
-                f"集成页签 {sheet.name} 第 {row} 行: TOP 端口为空，子模块端口按未连接处理"
+                f"集成页签 {sheet.name} 第 {row} 行: TOP 端口为空，子模块端口按未连接处理",
+                code="I_UNCONNECTED",
             )
             for block, child_port_name, _ in row_entries:
                 for child_port in get_ports(block.module_name, child_port_name, row):
@@ -2988,7 +3137,8 @@ def render_integration(
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: TOP 端口 "
                 f"{top.name}.{top_port_name} 连接到 {', '.join(na_labels)}，"
-                "保留为顶层观察端口，不查询 NA 所在列的模块端口"
+                "保留为顶层观察端口，不查询 NA 所在列的模块端口",
+                code="I_NA_CONNECTION",
             )
         expanded = [(top_block, get_ports(top.name, top_port_name, row))]
         expanded.extend(
@@ -3006,7 +3156,8 @@ def render_integration(
                 for block, child_port in aligned:
                     reporter.info(
                         f"集成页签 {sheet.name} 第 {row} 行: 模板展开项 "
-                        f"{block.module_name}.{child_port.name} 无 TOP 对端，按未连接处理"
+                        f"{block.module_name}.{child_port.name} 无 TOP 对端，按未连接处理",
+                        code="I_UNCONNECTED",
                     )
                     bind(
                         block.module_name,
@@ -3025,7 +3176,8 @@ def render_integration(
                 if top_port.is_interface or top_port.arrays or top_port.packed_dimensions:
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: "
-                        f"{top.name}.{top_port.name}{top_bit_select} 仅支持单维 packed 端口"
+                        f"{top.name}.{top_port.name}{top_bit_select} 仅支持单维 packed 端口",
+                        code="E_BIT_SELECT",
                     )
                 resolved_top_width = simple_packed_width(top_port, all_macros)
                 if (
@@ -3036,27 +3188,31 @@ def render_integration(
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: "
                         f"{top.name}.{top_port.name}{top_bit_select} 超出位宽 "
-                        f"{resolved_top_width}"
+                        f"{resolved_top_width}",
+                        code="E_BIT_SELECT",
                     )
             if row_na_target is not None:
                 if not is_verilog_constant(row_na_target):
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: TOP 连接区的 "
-                        f"NA->{row_na_target} 仅支持常量；自定义线名请用于子模块互连区"
+                        f"NA->{row_na_target} 仅支持常量；自定义线名请用于子模块互连区",
+                        code="E_NA_TARGET",
                     )
                     continue
                 if top_port.direction != "output":
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: 只有 TOP output "
                         f"可以由 NA->{row_na_target} 赋值，{top.name}.{top_port.name} "
-                        f"为 {top_port.direction}"
+                        f"为 {top_port.direction}",
+                        code="E_NA_TARGET",
                     )
                     continue
                 add_assignment(top_port.name, row_na_target, top_port.condition)
                 top_output_driver_conditions.setdefault(top_port.name, []).append(None)
                 reporter.info(
                     f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
-                    f"{top.name}.{top_port.name} 已由 NA->{row_na_target} 赋值"
+                    f"{top.name}.{top_port.name} 已由 NA->{row_na_target} 赋值",
+                    code="I_NA_CONNECTION",
                 )
                 for block, child_port in aligned[1:]:
                     validate_sheet_direction(block, child_port, row)
@@ -3068,14 +3224,16 @@ def render_integration(
                         reporter.info(
                             f"集成页签 {sheet.name} 第 {row} 行: "
                             f"{block.module_name}.{child_port.name} 为输出端，"
-                            f"在 NA->{row_na_target} 常量网络中按开路处理"
+                            f"在 NA->{row_na_target} 常量网络中按开路处理",
+                            code="I_NA_CONNECTION",
                         )
                 continue
             for block, child_port in aligned[1:]:
                 validate_sheet_direction(block, child_port, row)
                 if top_port.direction == "input" and child_port.direction == "output":
                     reporter.error(
-                        f"集成页签 {sheet.name} 第 {row} 行: TOP 输入 {top_port.name} 与子模块输出 {block.module_name}.{child_port.name} 方向冲突"
+                        f"集成页签 {sheet.name} 第 {row} 行: TOP 输入 {top_port.name} 与子模块输出 {block.module_name}.{child_port.name} 方向冲突",
+                        code="E_DIRECTION",
                     )
                 # A TOP output may intentionally fan out to child inputs. If
                 # no child output/inout drives it, the undriven-output pass
@@ -3092,14 +3250,16 @@ def render_integration(
                     reporter.warning(
                         f"{top.name}.{top_port.name}信号和"
                         f"{block.module_name}.{child_port.name}信号应该连接，"
-                        "但是其位宽不匹配"
+                        "但是其位宽不匹配",
+                        code="W_WIDTH_MISMATCH",
                     )
                 child_index = row_markers.get(block.module_name)
                 marker = top_index or child_index
                 if top_index and child_index and top_index != child_index:
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: {top.name}.{top_port.name} "
-                        f"与 {block.module_name}.{child_port.name} 使用不同索引指示符"
+                        f"与 {block.module_name}.{child_port.name} 使用不同索引指示符",
+                        code="E_GENERATE_INDEX",
                     )
                 if marker:
                     register_generate_marker(
@@ -3184,7 +3344,8 @@ def render_integration(
                         reporter.warning(
                             f"集成页签 {sheet.name} 第 {row} 行: TOP 输出 "
                             f"{top.name}.{top_port.name} 存在多个子模块驱动端 "
-                            f"({', '.join(drivers)})"
+                            f"({', '.join(drivers)})",
+                            code="W_DRIVER_RISK",
                         )
 
     for group_index, group in enumerate(integration.groups[1:], start=1):
@@ -3232,7 +3393,8 @@ def render_integration(
             if na_blocks and not expanded:
                 reporter.info(
                     f"集成页签 {sheet.name} 第 {row} 行: 内部连接全部为 NA，"
-                    "没有可拉出的模块端口"
+                    "没有可拉出的模块端口",
+                    code="I_NA_CONNECTION",
                 )
                 continue
             for entries in aligned_expansions(expanded, row):
@@ -3250,13 +3412,15 @@ def render_integration(
                         if len(indices) > 1:
                             reporter.error(
                                 f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个 "
-                                f"generate 索引 ({', '.join(sorted(indices))})"
+                                f"generate 索引 ({', '.join(sorted(indices))})",
+                                code="E_GENERATE_INDEX",
                             )
                             continue
                         if len(targets) > 1:
                             reporter.error(
                                 f"集成页签 {sheet.name} 第 {row} 行: NA 使用了多个 "
-                                f"目标 ({', '.join(sorted(targets))})"
+                                f"目标 ({', '.join(sorted(targets))})",
+                                code="E_NA_TARGET",
                             )
                             continue
                         bind_na_placeholder(
@@ -3268,7 +3432,8 @@ def render_integration(
                         )
                         continue
                     reporter.info(
-                        f"集成页签 {sheet.name} 第 {row} 行: 内部连接只有 {block.module_name}.{port.name} 一端，按未连接处理"
+                        f"集成页签 {sheet.name} 第 {row} 行: 内部连接只有 {block.module_name}.{port.name} 一端，按未连接处理",
+                        code="I_UNCONNECTED",
                     )
                     if block.module_name != top.name:
                         expression = (
@@ -3284,7 +3449,8 @@ def render_integration(
                 interface_flags = [port.is_interface for _, port in entries]
                 if any(interface_flags) and not all(interface_flags):
                     reporter.error(
-                        f"集成页签 {sheet.name} 第 {row} 行: interface 不能与普通端口直接互连"
+                        f"集成页签 {sheet.name} 第 {row} 行: interface 不能与普通端口直接互连",
+                        code="E_INTERFACE_CONNECTION",
                     )
                     continue
                 if all(interface_flags):
@@ -3298,7 +3464,8 @@ def render_integration(
                     ]
                     if len(drivers) == 0:
                         reporter.warning(
-                            f"集成页签 {sheet.name} 第 {row} 行: 内部连接没有 output 驱动端"
+                            f"集成页签 {sheet.name} 第 {row} 行: 内部连接没有 output 驱动端",
+                            code="W_DRIVER_RISK",
                         )
                         width_source = entries[0]
                     elif len(drivers) > 1:
@@ -3306,7 +3473,8 @@ def render_integration(
                             f"{block.module_name}.{port.name}" for block, port in drivers
                         )
                         reporter.error(
-                            f"集成页签 {sheet.name} 第 {row} 行: 内部连接存在多个驱动端 ({names})"
+                            f"集成页签 {sheet.name} 第 {row} 行: 内部连接存在多个驱动端 ({names})",
+                            code="E_DRIVER_CONFLICT",
                         )
                         width_source = drivers[0]
                     else:
@@ -3321,7 +3489,8 @@ def render_integration(
                     reporter.warning(
                         f"{source_block.module_name}.{source_port_for_warning.name}"
                         f"信号和{item_block.module_name}.{port.name}信号应该连接，"
-                        "但是其位宽不匹配"
+                        "但是其位宽不匹配",
+                        code="W_WIDTH_MISMATCH",
                     )
                 signal_base = source_port.name
                 signal_name = unique_name(f"w_{signal_base}", used_signals)
@@ -3394,7 +3563,8 @@ def render_integration(
         for port in child.ports:
             if port.name not in bindings[child.name]:
                 reporter.info(
-                    f"集成页签 {sheet.name}: 未列出 {child.name}.{port.name}，自动按未连接端口处理"
+                    f"集成页签 {sheet.name}: 未列出 {child.name}.{port.name}，自动按未连接端口处理",
+                    code="I_UNCONNECTED",
                 )
                 bindings[child.name][port.name] = Binding(
                     (
@@ -3415,14 +3585,16 @@ def render_integration(
             count = configured_count
             generate_counts[child_name] = count
             reporter.info(
-                f"集成模块: {child_name} 使用显式例化次数 {count}"
+                f"集成模块: {child_name} 使用显式例化次数 {count}",
+                code="I_INSTANCE",
             )
             if marker_spec and marker_spec.extents:
                 safe_extent = min(marker_spec.extents)
                 if count > safe_extent:
                     reporter.warning(
                         f"集成模块: {child_name} 的例化次数 {count} 超过 "
-                        f"[{marker_spec.index}] 可解析安全范围 {safe_extent}，存在索引越界风险"
+                        f"[{marker_spec.index}] 可解析安全范围 {safe_extent}，存在索引越界风险",
+                        code="W_GENERATE_RANGE",
                     )
             continue
         if marker_spec is None:
@@ -3434,13 +3606,15 @@ def render_integration(
             )
             reporter.info(
                 f"集成模块: {child_name} 的 [{marker_spec.index}] 可解析循环范围为 "
-                f"{detail}，generate 使用安全次数 {count}"
+                f"{detail}，generate 使用安全次数 {count}",
+                code="I_INSTANCE",
             )
         else:
             count = 1
             reporter.warning(
                 f"集成模块: {child_name} 的 [{marker_spec.index}] 无法解析循环次数，"
-                "generate 默认使用 1"
+                "generate 默认使用 1",
+                code="W_GENERATE_RANGE",
             )
         generate_counts[child_name] = count
 
@@ -3608,7 +3782,10 @@ def parse_user_code_regions(
     matched_begins = sum(match.group(1) == "BEGIN" for match in markers)
     matched_ends = sum(match.group(1) == "END" for match in markers)
     if begin_tokens != matched_begins or end_tokens != matched_ends:
-        reporter.error(f"{context}: 用户代码段标记格式损坏，拒绝覆盖文件")
+        reporter.error(
+            f"{context}: 用户代码段标记格式损坏，拒绝覆盖文件",
+            code="E_USER_CODE",
+        )
         return None
 
     regions: list[UserCodeRegion] = []
@@ -3619,18 +3796,25 @@ def parse_user_code_regions(
         label = marker.group(2).strip()
         if kind == "BEGIN":
             if active is not None:
-                reporter.error(f"{context}: 用户代码段不允许嵌套，拒绝覆盖文件")
+                reporter.error(
+                    f"{context}: 用户代码段不允许嵌套，拒绝覆盖文件",
+                    code="E_USER_CODE",
+                )
                 return None
             active = (label, marker.end())
             continue
         if active is None:
-            reporter.error(f"{context}: 用户代码段 END 缺少对应 BEGIN，拒绝覆盖文件")
+            reporter.error(
+                f"{context}: 用户代码段 END 缺少对应 BEGIN，拒绝覆盖文件",
+                code="E_USER_CODE",
+            )
             return None
         begin_label, content_start = active
         if label != begin_label:
             reporter.error(
                 f"{context}: 用户代码段 BEGIN {begin_label!r} 与 END {label!r} "
-                "不匹配，拒绝覆盖文件"
+                "不匹配，拒绝覆盖文件",
+                code="E_USER_CODE",
             )
             return None
         occurrence = occurrences.get(label, 0)
@@ -3647,7 +3831,8 @@ def parse_user_code_regions(
         active = None
     if active is not None:
         reporter.error(
-            f"{context}: 用户代码段 BEGIN {active[0]!r} 缺少对应 END，拒绝覆盖文件"
+            f"{context}: 用户代码段 BEGIN {active[0]!r} 缺少对应 END，拒绝覆盖文件",
+            code="E_USER_CODE",
         )
         return None
     return regions
@@ -3679,7 +3864,8 @@ def preserve_user_code(
         )
         reporter.error(
             f"{path}: 旧文件中的用户代码段在新结构中已无对应位置 ({labels})，"
-            "拒绝覆盖文件"
+            "拒绝覆盖文件",
+            code="E_USER_CODE",
         )
         return generated
 
@@ -3717,7 +3903,10 @@ def generate(
     if integration:
         sheet = workbook.by_name(integration.sheet_name)
         if sheet is None:
-            reporter.error(f"找不到集成页签 {integration.sheet_name}")
+            reporter.error(
+                f"找不到集成页签 {integration.sheet_name}",
+                code="E_INTEGRATION",
+            )
         else:
             # Resolve explicit parameter links before rendering child headers;
             # linked child parameters are overridable, every other parameter
@@ -3743,7 +3932,10 @@ def generate(
             try:
                 existing = path.read_text(encoding="utf-8")
             except (OSError, UnicodeError) as exc:
-                reporter.error(f"无法读取已有生成文件 {path}: {exc}")
+                reporter.error(
+                    f"无法读取已有生成文件 {path}: {exc}",
+                    code="E_FILE_IO",
+                )
             else:
                 content = preserve_user_code(content, existing, path, reporter)
         merged_contents.append(content)
@@ -4353,7 +4545,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_startup_banner(stream: TextIO | None = None) -> None:
-    """Print the V3.1 identification block with one shared centered width."""
+    """Print the V3.12 identification block with one shared centered width."""
     target = stream or sys.stdout
     items = [
         SCRIPT_DISPLAY_NAME,

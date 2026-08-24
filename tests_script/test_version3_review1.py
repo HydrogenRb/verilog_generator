@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import tempfile
 import unittest
@@ -14,7 +15,12 @@ from tests_script.run_review_matrix import (
     set_cell,
     write_xlsx,
 )
-from xlsx2verilog import Reporter, generate, print_startup_banner
+from xlsx2verilog import (
+    DIAGNOSTIC_VISIBILITY_BY_CODE,
+    Reporter,
+    generate,
+    print_startup_banner,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,7 +210,7 @@ class Version3TechReview1Tests(unittest.TestCase):
             [line.strip() for line in banner.getvalue().splitlines()],
             [
                 "CustomScipt xlsx2verilog",
-                "Version V3.1",
+                "Version V3.12",
                 "2026.8.24",
                 "Contact xxx-xxxx in case",
             ],
@@ -225,6 +231,48 @@ class Version3TechReview1Tests(unittest.TestCase):
         self.assertNotIn("hidden warning", diagnostics.getvalue())
         self.assertNotIn("hidden info", diagnostics.getvalue())
         self.assertTrue(reporter.has_warnings)
+
+    def test_diagnostic_code_switches_are_granular_and_non_suppressing(self) -> None:
+        reporter = Reporter()
+        reporter.warning("hidden width placeholder", code="W_WIDTH_PLACEHOLDER")
+        reporter.warning("visible mismatch", code="W_WIDTH_MISMATCH")
+        reporter.error("visible direction", code="E_DIRECTION")
+        diagnostics = StringIO()
+        with patch.dict(
+            DIAGNOSTIC_VISIBILITY_BY_CODE,
+            {"W_WIDTH_PLACEHOLDER": False},
+        ):
+            reporter.print(diagnostics, color=False)
+        text = diagnostics.getvalue()
+        self.assertNotIn("hidden width placeholder", text)
+        self.assertIn("warning[W_WIDTH_MISMATCH][visible mismatch]", text)
+        self.assertIn("error[E_DIRECTION][visible direction]", text)
+        self.assertIn("=== WARNING (1) ===", text)
+        self.assertTrue(reporter.has_warnings)
+        self.assertTrue(reporter.has_errors)
+
+    def test_every_internal_reporter_call_has_a_registered_code(self) -> None:
+        source = (ROOT / "xlsx2verilog.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        missing: list[int] = []
+        literal_codes: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(
+                node.func, ast.Attribute
+            ):
+                continue
+            if node.func.attr not in {"error", "warning", "info"}:
+                continue
+            code = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "code"),
+                None,
+            )
+            if code is None:
+                missing.append(node.lineno)
+            elif isinstance(code, ast.Constant) and isinstance(code.value, str):
+                literal_codes.add(code.value)
+        self.assertFalse(missing, f"Reporter calls without code: {missing}")
+        self.assertLessEqual(literal_codes, set(DIAGNOSTIC_VISIBILITY_BY_CODE))
 
 
 if __name__ == "__main__":

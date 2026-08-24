@@ -4,6 +4,8 @@
 
 当前能力的完整索引见[功能特性表](doc/TechReport/功能特性表.md)，内部结构见[代码结构与维护指南](doc/TechReport/代码结构与维护指南.md)。
 
+已有 RTL 项目需要接收一版新的生成结果时，可使用独立附录工具[xlsx2verilog_merger](appendix/README.md)：它以新生成结构覆盖旧自动代码，同时按 USER CODE 标签保留旧项目中的人工代码，并提供预检查、备份和失败回滚。
+
 ## 快速使用
 
 ```powershell
@@ -31,7 +33,7 @@ python .\xlsx2verilog.py .\design.xlsx --spread-value WIDTH "(3+5)"
 
 命令行参数仍全部保留。无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；使用 `↑`、`↓` 移动选项，按 `Enter` 确认，按 `Esc` 返回上级菜单或退出。主菜单包含“生成”“查看”“校验”“严格校验”“扩散变量值”和“退出”，可继续选择 XLSX 和输出目录。工作簿中有多个有效的集成页签时，菜单会再列出“页签名 → TOP 模块名”供选择；只有一个`集成`或`集成_xxx`页签时自动使用，不显示这一级菜单。显式传入 XLSX 或 `--list`、`--check`、`--strict` 等参数时直接按命令行模式执行，不显示菜单；多集成页签工作簿必须通过`--integration 页签名`消除歧义，管道、CI 等非交互环境不会等待输入。修改 XLSX 的 `--spread-value` 是唯一例外：无论从菜单还是 CLI 进入，都必须再次输入 `y` 才会修改。
 
-每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.1`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；重定向到文件或 CI 时自动关闭 ANSI 颜色。
+每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.12`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
 
 ## 文件顶部配置
 
@@ -48,9 +50,19 @@ ENABLE_CONDITIONAL_BLOCKS = False
 SHOW_ERROR_MESSAGES = True
 SHOW_WARNING_MESSAGES = True
 SHOW_INFO_MESSAGES = True
+
+DIAGNOSTIC_VISIBILITY_BY_CODE = {
+    "E_DIRECTION": True,
+    "W_WIDTH_PLACEHOLDER": True,
+    "W_WIDTH_MISMATCH": True,
+    "I_UNCONNECTED": True,
+    # 其余代码见脚本开头的完整配置表
+}
 ```
 
-`OVERWRITE_FILE_HEADER=False`时，生成头位于`file header` USER 段，后续重新生成保留现有内容；设为`True`时用`VERILOG_FILE_HEADER`覆盖。`ENABLE_CONDITIONAL_BLOCKS=False`时，`条件：MACRO`只整理分类名称，不生成条件块。三个`SHOW_*_MESSAGES`只控制终端显示：诊断仍会被记录，error 和`--strict`下的 warning 仍照常影响返回码。
+`OVERWRITE_FILE_HEADER=False`时，生成头位于`file header` USER 段，后续重新生成保留现有内容；设为`True`时用`VERILOG_FILE_HEADER`覆盖。`ENABLE_CONDITIONAL_BLOCKS=False`时，`条件：MACRO`只整理分类名称，不生成条件块。
+
+三个`SHOW_*_MESSAGES`是错误、警告、信息的三级总开关。`DIAGNOSTIC_VISIBILITY_BY_CODE`是细粒度开关：把某个代码改为`False`，只隐藏该类型的终端输出。例如关闭`W_WIDTH_PLACEHOLDER`仍保留位宽不匹配`W_WIDTH_MISMATCH`；关闭`I_UNCONNECTED`不影响参数链接`I_PARAMETER_LINK`。总开关优先于细粒度开关。所有开关都只影响显示，诊断仍被记录，error 和`--strict`下的 warning 仍照常影响返回码与写入保护。
 
 ## XLSX 规则
 
@@ -72,7 +84,7 @@ SHOW_INFO_MESSAGES = True
 模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。生成时模块名、宏和 parameter 规范为大写，默认实例名为`U_<MODULE>`；元数据表中的自定义例化名及普通信号、端口名严格保持 XLSX 中的大小写。输出文件名统一为小写。Verilog 标识符大小写敏感，因此`Data`和`data`是两个不同信号，集成页签也必须使用与模块页完全相同的拼写。
 
 - 宏位宽只生成注释参考，例如 ``// `define DFT_BUS 64``，不会在真实项目中主动定义或重定义宏。
-- 非反引号符号位宽会生成模块参数；V3.1 默认使用不可由上层覆盖的`localparam`。
+- 非反引号符号位宽会生成模块参数；V3.12 默认使用不可由上层覆盖的`localparam`。
 - 数字位宽 `N` 会生成 `[N -1:0]`；数字 `1` 生成标量。
 - 重复名称可以出现在多行或不同模块中。单个 Verilog 模块只声明一次同名端口；同一模块后续同名行合并到第一次定义。
 - 普通模块页签中的所有 output 会在模块内部连续赋零，方便生成结果直接通过基础语法检查。
@@ -220,7 +232,7 @@ CHILD U_CHILD (...);
 
 列位置可以扩展，不限于示例中的 B～Y；关键是每个区内的模块组相邻、不同区之间至少留一个空列。脚本同时检查集成页签的 `i/o` 与模块定义是否一致、多驱动、缺失端口及位宽差异。
 
-### V3.1 参数、宏和位宽裁决
+### V3.12 参数、宏和位宽裁决
 
 - 同一模块内，同名宏/parameter 的非空数值必须一致；部分行留空时自动继承该模块的已知值。上层已有值而下层留空时也会向下传播。
 - 所有参数默认局部：生成`localparam`且实例不传参。只有集成页签`parameter`分类中显式链接的子模块参数才生成`parameter`，并由 TOP localparam 传入。没有 TOP 端点的子模块互连会自动创建 TOP localparam，并输出 info。
@@ -254,7 +266,7 @@ CHILD U_CHILD (...);
 样例中两个子模块各有一个重复的 `ahb_test_5`，脚本按允许重复的规则合并到首次定义；APB 两端的数字位宽不同，脚本按最大位宽生成 wire、较窄端口使用低位切片、未驱动高位补零，并输出如下形式的警告：
 
 ```text
-warning[RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是其位宽不匹配]
+warning[W_WIDTH_MISMATCH][RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是其位宽不匹配]
 ```
 
 修正 Excel 后可使用 `--strict` 作为自动化流水线的质量门禁。
@@ -265,7 +277,7 @@ warning[RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是�
 
 `review_test_cases/13_test_for_techreview3/techreview2version3.xlsx`覆盖用户代码段、`NA[i]`内部 generate、`z=0:31`范围展开和`RISCV_CRG`的 32 个模板端口。原件继承四组刻意保留的宏冲突，预期直接校验失败；`tests_script/test_version2_review3.py`在临时副本上统一宏值后回归。
 
-`review_test_cases/14_edge_case_test_problem/eage_case.xlsx`是 V3.1 主验收样例：参数分类在 TOP 和`RISCV_CORE_TEST`间显式链接；`RST_LANE`使用`` `GLB_RST_LANE``并以`1`匹配；`NA->ready_test_process`创建命名 wire；`NA->1`把三个 TOP valid 输出赋 1；`MEM_DAT`使用`PROJECT_PERSONAL_MEM_DAT`实例名；`RISCV_CRG`显式例化 10 次。该样例仍刻意保留模板变量、占位参数和位宽差异 warning，因此普通`--check`成功，`--strict`预期失败。
+`review_test_cases/14_edge_case_test_problem/eage_case.xlsx`是 V3.12 主验收样例：参数分类在 TOP 和`RISCV_CORE_TEST`间显式链接；`RST_LANE`使用`` `GLB_RST_LANE``并以`1`匹配；`NA->ready_test_process`创建命名 wire；`NA->1`把三个 TOP valid 输出赋 1；`MEM_DAT`使用`PROJECT_PERSONAL_MEM_DAT`实例名；`RISCV_CRG`显式例化 10 次。该样例仍刻意保留模板变量、占位参数和位宽差异 warning，因此普通`--check`成功，`--strict`预期失败。
 
 ## 文档归档
 
@@ -275,6 +287,7 @@ warning[RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是�
 
 ```powershell
 python -m unittest discover -s tests_script -v
+python -m unittest discover -s appendix\tests -v
 python -m py_compile .\xlsx2verilog.py
 python .\tests_script\run_review_matrix.py
 python .\tests_script\run_tech_review2_review.py
@@ -285,8 +298,8 @@ python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xl
 python .\xlsx2verilog.py .\review_test_cases\09_version_2\test.xlsx --check
 python .\xlsx2verilog.py .\review_test_cases\10_special_case\review2case.xlsx --check
 python .\xlsx2verilog.py .\review_test_cases\13_test_for_techreview3\techreview2version3.xlsx --check
-# V3.1 主验收样例：普通检查返回 0；其已知 warning 会令 --strict 失败
+# V3.12 主验收样例：普通检查返回 0；其已知 warning 会令 --strict 失败
 python .\xlsx2verilog.py .\review_test_cases\14_edge_case_test_problem\eage_case.xlsx --check
 ```
 
-测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.1 新规则由`tests_script/test_version3_review1.py`覆盖。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。完整实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)。
+测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.12 新规则由`tests_script/test_version3_review1.py`覆盖；独立 merger 的事务与第 14 号真实覆盖回归位于`appendix/tests/`。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)。
