@@ -4,7 +4,7 @@
 
 当前能力的完整索引见[功能特性表](doc/TechReport/功能特性表.md)，内部结构见[代码结构与维护指南](doc/TechReport/代码结构与维护指南.md)。
 
-已有 RTL 项目需要接收一版新的生成结果时，可使用独立附录工具[xlsx2verilog_merger](appendix/README.md)：它以新生成结构覆盖旧自动代码，同时按 USER CODE 标签保留人工代码，按稳定键保留用户选择的`wire/reg`和`localparam/parameter`关键字；旧工程中带`//USER:`的单行 assign 可整行保留。工具提供预检查、备份和失败回滚。
+已有 RTL 项目需要接收一版新的生成结果时，可使用 V3.31 独立附录工具[xlsx2verilog_merger](appendix/README.md)：它以新生成结构覆盖旧自动代码，同时按 USER CODE 标签保留人工代码，按稳定键保留用户选择的`wire/reg`和`localparam/parameter`关键字；旧工程中带`//USER:`或`//USER：`的活动/注释 assign、信号声明和实例端口连接可整行保留。工具逐项打印保留、覆盖、备份和写入日志，默认把生产旧文件备份到新代码侧，并提供预检查和失败回滚。
 
 ## 快速使用
 
@@ -33,7 +33,7 @@ python .\xlsx2verilog.py .\design.xlsx --spread-value WIDTH "(3+5)"
 
 命令行参数仍全部保留。无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；使用 `↑`、`↓` 移动选项，按 `Enter` 确认，按 `Esc` 返回上级菜单或退出。主菜单包含“生成”“查看”“校验”“严格校验”“扩散变量值”和“退出”，可继续选择 XLSX 和输出目录。工作簿中有多个有效的集成页签时，菜单会再列出“页签名 → TOP 模块名”供选择；只有一个`集成`或`集成_xxx`页签时自动使用，不显示这一级菜单。显式传入 XLSX 或 `--list`、`--check`、`--strict` 等参数时直接按命令行模式执行，不显示菜单；多集成页签工作簿必须通过`--integration 页签名`消除歧义，管道、CI 等非交互环境不会等待输入。修改 XLSX 的 `--spread-value` 是唯一例外：无论从菜单还是 CLI 进入，都必须再次输入 `y` 才会修改。
 
-每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.3`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
+每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.31`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
 
 ## 文件顶部配置
 
@@ -272,7 +272,7 @@ NA 必须写在真实端口的“对端”单元格中，不能用它替代需�
 
 TOP 连接区的`NA->0/NA->1`属于常量驱动功能；`NA->signame`属于命名观察功能。后者不会改写 TOP 端口名，也不会增加 TOP 驱动，只创建一根观察 wire，因此可以与同一行已有的正常子模块连接并存。interface TOP 端口不支持连续赋值观察 wire，会输出`E_INTERFACE_CONNECTION`。
 
-### V3.3 参数、宏和位宽裁决
+### V3.31 参数、宏和位宽裁决
 
 - 同一模块内，同名宏/parameter 的非空数值必须一致；部分行留空时自动继承该模块的已知值。上层已有值而下层留空时也会向下传播。
 - 所有参数默认局部：生成`localparam`且实例不传参。只有集成页签`parameter`分类中显式链接的子模块参数才生成`parameter`，并由 TOP localparam 传入。没有 TOP 端点的子模块互连会自动创建 TOP localparam，并输出 info。
@@ -349,4 +349,4 @@ python .\xlsx2verilog.py .\review_test_cases\14_edge_case_test_problem\eage_case
 python .\xlsx2verilog.py .\review_test_cases\17_v3_techreview2_width_boundary\width_boundary.xlsx --check
 ```
 
-测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.1、V3.2 与 V3.3 规则分别由`tests_script/test_version3_review1.py`、`tests_script/test_version3_review2.py`、`tests_script/test_version3_review3.py`覆盖；独立 merger 的事务与第 14 号真实覆盖回归位于`appendix/tests/`。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)，V3.2 裁决矩阵见[《V3.2 位宽不匹配分析》](doc/TechReport/V3.2位宽不匹配分析.md)。
+测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.1、V3.2 与 V3.3/V3.31 规则分别由`tests_script/test_version3_review1.py`、`tests_script/test_version3_review2.py`、`tests_script/test_version3_review3.py`覆盖；独立 merger 的 V3.31 单行保护、逐项日志、新代码侧备份、事务和第 14 号真实覆盖回归位于`appendix/tests/`。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)，V3.2 裁决矩阵见[《V3.2 位宽不匹配分析》](doc/TechReport/V3.2位宽不匹配分析.md)。

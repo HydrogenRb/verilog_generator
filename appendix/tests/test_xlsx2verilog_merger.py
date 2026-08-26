@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from appendix import xlsx2verilog_merger as merger
 from appendix.xlsx2verilog_merger import MergeError, merge_paths, merge_verilog_text
-from xlsx2verilog import generate, write_xlsx_cell_updates
+from xlsx2verilog import SCRIPT_VERSION, generate, write_xlsx_cell_updates
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,7 +38,8 @@ class MergerUnitTests(unittest.TestCase):
         self.assertIn("wire new_generated;", merged)
         self.assertNotIn("wire old_generated;", merged)
         self.assertIn("assign user_logic = 1'b1;", merged)
-        self.assertFalse(diagnostics)
+        self.assertEqual(len(diagnostics), 1)
+        self.assertIn("保留 USER CODE 段 before statement#1", diagnostics[0].message)
 
     def test_matching_module_signal_preserves_reg_or_wire_kind(self) -> None:
         old = (
@@ -84,9 +85,82 @@ class MergerUnitTests(unittest.TestCase):
                 "multi.v: 保留 TOP.status 的 reg 声明类型（新生成版本为 wire）",
                 "multi.v: 保留 TOP.state 的 reg 声明类型（新生成版本为 wire）",
                 "multi.v: 保留 CHILD.state 的 wire 声明类型（新生成版本为 reg）",
+                "multi.v: 保留 USER CODE 段 before statement#1",
             },
             {item.message for item in diagnostics},
         )
+
+    def test_v331_preserves_commented_assign_declaration_and_port_lines(
+        self,
+    ) -> None:
+        old = verilog(
+            "//input wire [7:0] sig_a; //user: not use\n"
+            "//assign sig_a //user: assign later\n"
+            "CHILD U_CHILD (\n"
+            "    .sigA (temp_w_sig_a), //user: change the input source\n"
+            "    //.sigB (temp_w_sigb) //user： not use\n"
+            ");"
+        )
+        new = verilog(
+            "input wire [15:0] sig_a;\n"
+            "assign sig_a = '0;\n"
+            "CHILD U_CHILD (\n"
+            "    .sigA (generated_sig_a),\n"
+            "    .sigB (generated_sig_b)\n"
+            ");"
+        )
+
+        merged, diagnostics = merge_verilog_text(new, old, "v331-lines.v")
+        self.assertIn("//input wire [7:0] sig_a; //user: not use", merged)
+        self.assertIn("//assign sig_a //user: assign later", merged)
+        self.assertIn(
+            ".sigA (temp_w_sig_a), //user: change the input source",
+            merged,
+        )
+        self.assertIn("//.sigB (temp_w_sigb) //user： not use", merged)
+        self.assertNotIn("[15:0] sig_a", merged)
+        self.assertNotIn("generated_sig_a", merged)
+        self.assertNotIn("generated_sig_b", merged)
+        self.assertEqual(
+            {
+                "signal 声明",
+                "手工 assign",
+                "实例端口连接",
+            },
+            {
+                label
+                for label in ("signal 声明", "手工 assign", "实例端口连接")
+                if any(label in item.message for item in diagnostics)
+            },
+        )
+        self.assertEqual(
+            sum("实例端口连接" in item.message for item in diagnostics), 2
+        )
+
+    def test_v331_user_line_targets_must_exist_and_be_unambiguous(self) -> None:
+        removed_signal = verilog("//wire removed; //user: do not lose")
+        with self.assertRaisesRegex(MergeError, "缺少 //USER: signal 声明"):
+            merge_verilog_text(verilog("wire other;"), removed_signal, "removed.v")
+
+        old_port = verilog(
+            "CHILD U_OLD (\n"
+            "    .sigA (manual) //user: keep\n"
+            ");"
+        )
+        duplicated_port = verilog(
+            "CHILD U_A (\n"
+            "    .sigA (a)\n"
+            ");\n"
+            "CHILD U_B (\n"
+            "    .sigA (b)\n"
+            ");"
+        )
+        with self.assertRaisesRegex(MergeError, "匹配到 2 条"):
+            merge_verilog_text(duplicated_port, old_port, "ambiguous-port.v")
+
+    def test_main_and_merger_versions_are_v331(self) -> None:
+        self.assertEqual(SCRIPT_VERSION, "Version V3.31")
+        self.assertEqual(merger.VERSION, SCRIPT_VERSION)
 
     def test_added_and_removed_instances_follow_the_new_structure(self) -> None:
         old = (
@@ -235,6 +309,38 @@ class MergerUnitTests(unittest.TestCase):
             self.assertIn("// USER", merged)
             self.assertEqual((backup / "top.v").read_text(encoding="utf-8"), old)
             self.assertEqual(result.backup_directory, backup.resolve())
+
+    def test_default_backup_is_anchored_on_new_code_side_and_logs_actions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            new_side = root / "new_code_side"
+            production_side = root / "production_side"
+            source = new_side / "generated"
+            target = production_side / "rtl"
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            old = verilog("wire old_generated;")
+            (source / "top.v").write_text(
+                verilog("wire new_generated;"), encoding="utf-8"
+            )
+            (target / "top.v").write_text(old, encoding="utf-8")
+
+            result = merge_paths(source, target)
+            self.assertIsNotNone(result.backup_directory)
+            assert result.backup_directory is not None
+            result.backup_directory.relative_to(new_side.resolve())
+            with self.assertRaises(ValueError):
+                result.backup_directory.relative_to(production_side)
+            self.assertEqual(
+                (result.backup_directory / "top.v").read_text(encoding="utf-8"),
+                old,
+            )
+            messages = [item.message for item in result.diagnostics]
+            self.assertTrue(any("将覆盖目标文件" in item for item in messages))
+            self.assertTrue(any("已备份旧生产文件" in item for item in messages))
+            self.assertTrue(any("已写入合并结果" in item for item in messages))
 
     def test_mid_transaction_failure_rolls_back_every_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

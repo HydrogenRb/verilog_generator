@@ -100,7 +100,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.3"
+SCRIPT_VERSION = "Version V3.31"
 SCRIPT_RELEASE_DATE = "2026.8.26"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
