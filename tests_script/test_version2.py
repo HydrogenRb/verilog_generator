@@ -71,7 +71,14 @@ class Version2GenerationTests(unittest.TestCase):
             top = (output / "top.v").read_text(encoding="utf-8")
             self.assertNotIn("localparam", top)
             self.assertNotIn(".WIDTH", top)
-            self.assertRegex(top, r"wire \[8\s+-1:0\]\s+w_payload;")
+            self.assertRegex(top, r"wire \[WIDTH\s+-1:0\]\s+w_payload;")
+            self.assertTrue(
+                any(
+                    item.code == "W_PARAMETER_NOT_EXPORTED"
+                    and "SOURCE.WIDTH" in item.message
+                    for item in reporter.items
+                )
+            )
             source = (output / "source.v").read_text(encoding="utf-8")
             sink = (output / "sink.v").read_text(encoding="utf-8")
             self.assertRegex(source, r"localparam\s+WIDTH\s+= 8")

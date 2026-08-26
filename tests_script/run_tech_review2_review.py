@@ -90,14 +90,14 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
     )
     result.check(
         re.search(
-            r"(?m)^\s*wire\s+\[`LANE_NUM\s+-1:0\]\[`TEST_SIZE\s+-1:0\]\s+w_array;$",
+            r"(?m)^\s*wire\s+\[`LANE_NUM\s+-1:0\]\[`Test_size\s+-1:0\]\s+w_array;$",
             top,
         )
         and re.search(
-            r"(?m)^\s*output wire\s+\[`LANE_NUM\s+-1:0\]\[`TEST_SIZE\s+-1:0\]\s+array,?$",
+            r"(?m)^\s*output wire\s+\[`LANE_NUM\s+-1:0\]\[`Test_size\s+-1:0\]\s+array,?$",
             core,
         ),
-        "乘号已按原顺序转换为多维 packed array，且宏规范为大写",
+        "乘号已按原顺序转换为多维 packed array，普通宏保持输入大小写",
         "多维 packed array 声明不符合预期",
     )
     legacy_fallback_warnings = [

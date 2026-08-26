@@ -78,6 +78,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "W_WIDTH_MISMATCH": True,  # 位宽不匹配：显示相连信号的形状差异。
     "W_ZERO_WIDTH": True,  # 零位宽：显示已生成 [0 -1:0] 但需确认工具链行为。
     "W_NA_CONSTANT_WIDTH": True,  # NA 常量：显示定宽常量大于目标或无法安全匹配。
+    "W_PARAMETER_NOT_EXPORTED": True,  # 参数未上拉：TOP wire 使用了未显式链接的子模块 parameter。
     "W_TEMPLATE_REPAIR": True,  # 模板修复：显示自动修复的花括号内容。
     "W_TEMPLATE_BINDING": True,  # 模板绑定：显示变量无法可靠对应的问题。
     "W_IO_DEFAULTED": True,  # 方向推断风险：显示空或非法 i/o 的处理结果。
@@ -94,19 +95,19 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "I_NA_CONNECTION": True,  # NA 连接：显示占位、常量、观察或开路处理。
     "I_UNCONNECTED": True,  # 未连接端口：显示接零、开路或自动补全处理。
     "I_INSTANCE": True,  # 例化信息：显示实例名、次数和 generate 范围。
+    "I_ROW_COMMENTED": True,  # 注释行：显示含 *注释* 的 XLSX 行已停用。
 }
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.2"
-SCRIPT_RELEASE_DATE = "2026.8.24 night"
+SCRIPT_VERSION = "Version V3.3"
+SCRIPT_RELEASE_DATE = "2026.8.26"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 CELL_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
 MACRO_RE = re.compile(r"^`([A-Za-z_][A-Za-z0-9_$]*)$")
-MACRO_REFERENCE_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_$]*)")
 PARAMETER_EXPRESSION_TOKEN_RE = re.compile(
     r"(?P<space>[ \t]+)|"
     r"(?P<macro>`[A-Za-z_][A-Za-z0-9_$]*)|"
@@ -123,6 +124,9 @@ INTERFACE_TYPE_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$"
 )
 TEMPLATE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+MACRO_TEMPLATE_TOKEN_RE = re.compile(
+    r"`(?:[A-Za-z0-9_$]|\{\{[A-Za-z_][A-Za-z0-9_]*\}\})+"
+)
 MISSING_TEMPLATE_OPEN_RE = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 MISSING_TEMPLATE_CLOSE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})")
 UNKNOWN_WIDTH = 114
@@ -154,6 +158,8 @@ SIZED_VERILOG_CONSTANT_RE = re.compile(
     r"[0-9a-fA-F_xXzZ?]+$"
 )
 PARAMETER_CATEGORIES = {"parameter", "parameters", "参数", "参数定义"}
+MACRO_CATEGORIES = {"macro", "macros", "宏", "宏定义"}
+COMMENT_ROW_RE = re.compile(r"\*\s*注释\s*\*")
 NA_CONNECTION_TODO = "//TODO:本信号期望有逻辑功能，请完成"
 MAX_TEMPLATE_RANGE_ITEMS = 4096
 USER_CODE_MARKER_RE = re.compile(
@@ -174,6 +180,15 @@ def column_number(letters: str) -> int:
 
 def clean(value: Any) -> str:
     return "" if value is None else str(value).strip()
+
+
+def row_is_commented(sheet: Sheet, row: int) -> bool:
+    """Whether an XLSX row is explicitly disabled by a ``*注释*`` marker."""
+    return any(
+        column not in sheet.ignored_columns
+        and COMMENT_ROW_RE.search(clean(sheet.cell(row, column))) is not None
+        for column in range(1, sheet.max_column + 1)
+    )
 
 
 @dataclass
@@ -500,6 +515,10 @@ class Module:
     declared_parameters: dict[str, str] = field(default_factory=dict)
     parameter_expressions: dict[str, str] = field(default_factory=dict)
     parameter_comments: dict[str, str] = field(default_factory=dict)
+    declared_macros: dict[str, str] = field(default_factory=dict)
+    disabled_ports: set[str] = field(default_factory=set)
+    disabled_templates: set[str] = field(default_factory=set)
+    disabled_parameters: set[str] = field(default_factory=set)
     externally_configurable_parameters: set[str] = field(default_factory=set)
 
     @property
@@ -551,6 +570,8 @@ def integration_parameter_rows(
             )
             if raw_category:
                 active = is_parameter_category(raw_category)
+            if row_is_commented(sheet, row):
+                continue
             if active and any(
                 clean(sheet.cell(row, block.port_column)) for block in group
             ):
@@ -579,6 +600,14 @@ def normalized_direction(value: Any) -> str | None:
         "interface": "interface",
         "if": "interface",
     }.get(text)
+
+
+def natural_number_text(value: Any) -> str | None:
+    """Return one normalized nonnegative integer literal, without expressions."""
+    text = clean(value)
+    if re.fullmatch(r"[0-9](?:_?[0-9])*", text) is None:
+        return None
+    return str(int(text.replace("_", "")))
 
 
 def evaluate_int_expression(value: Any, *, allow_zero: bool = False) -> int | None:
@@ -762,7 +791,7 @@ def normalized_parameter_default(
     text = clean(default_value)
     macro_match = MACRO_RE.fullmatch(text)
     if macro_match:
-        return f"`{macro_match.group(1).upper()}"
+        return f"`{macro_match.group(1)}"
     return normalized_width_default(
         default_value,
         context,
@@ -799,7 +828,7 @@ def analyze_width(
     text = clean(raw_width)
     macro_match = MACRO_RE.fullmatch(text)
     if macro_match:
-        text = f"`{macro_match.group(1).upper()}"
+        text = f"`{macro_match.group(1)}"
         default = normalized_width_default(
             default_value,
             f"{context}: 宏 {text}",
@@ -981,11 +1010,31 @@ def substitute_template(text: Any, values: dict[str, str]) -> str:
     return TEMPLATE_RE.sub(lambda match: values.get(match.group(1), match.group(0)), clean(text))
 
 
-def uppercase_macro_references(text: Any) -> str:
-    """Uppercase complete Verilog macro identifiers in an expanded expression."""
-    return MACRO_REFERENCE_RE.sub(
-        lambda match: f"`{match.group(1).upper()}", clean(text)
-    )
+def substitute_template_expression(text: Any, values: dict[str, str]) -> str:
+    """Expand templates while uppercasing only macro names that were templated.
+
+    Verilog macros are case-sensitive.  Ordinary macro references therefore
+    preserve the workbook spelling, while the historical `` `DW_{{i}}``
+    convention intentionally canonicalizes its expanded macro to uppercase.
+    """
+    source = clean(text)
+
+    def expand_macro(match: re.Match[str]) -> str:
+        token = match.group(0)
+        expanded = substitute_template(token, values)
+        return (
+            expanded.upper()
+            if TEMPLATE_RE.search(token) and not TEMPLATE_RE.search(expanded)
+            else expanded
+        )
+
+    source = MACRO_TEMPLATE_TOKEN_RE.sub(expand_macro, source)
+    return substitute_template(source, values)
+
+
+def preserve_macro_references(text: Any) -> str:
+    """Return an expression without changing case-sensitive macro names."""
+    return clean(text)
 
 
 def normalize_parameter_expression(
@@ -1000,8 +1049,8 @@ def normalize_parameter_expression(
     only admits tokens used by single-line Verilog constant expressions, which
     lets parameter references, macro references/calls, system functions and
     operators pass through without opening a statement/comment injection path.
-    Generated parameter and macro identifiers follow the project's uppercase
-    naming rule; system function names such as ``$clog2`` keep their spelling.
+    Generated parameter identifiers remain uppercase. Macro and system-function
+    identifiers preserve the XLSX spelling because both may be case-sensitive.
     """
     expression = clean(value)
     if not expression:
@@ -1031,7 +1080,7 @@ def normalize_parameter_expression(
         token = match.group(0)
         kind = match.lastgroup
         if kind == "macro":
-            token = f"`{token[1:].upper()}"
+            token = token
         elif kind == "identifier":
             token = token.upper()
         elif kind == "operator":
@@ -1143,6 +1192,11 @@ def is_parameter_category(value: Any) -> bool:
     return clean(value).casefold() in PARAMETER_CATEGORIES
 
 
+def is_macro_category(value: Any) -> bool:
+    """Whether a category starts a metadata-only macro-default section."""
+    return clean(value).casefold() in MACRO_CATEGORIES
+
+
 def port_dimensions(port: Port) -> tuple[Width, ...]:
     return (*port.packed_dimensions, port.width, *port.arrays)
 
@@ -1156,7 +1210,7 @@ def replace_port_dimensions(port: Port, transform: Callable[[Width], Width]) -> 
 
 def rebuild_module_symbols(module: Module) -> None:
     parameters = dict(module.declared_parameters)
-    macros: dict[str, str] = {}
+    macros: dict[str, str] = dict(module.declared_macros)
     for name, expression in module.parameter_expressions.items():
         macro_match = MACRO_RE.fullmatch(expression)
         if macro_match:
@@ -1179,6 +1233,9 @@ def resolve_module_local_defaults(module: Module, reporter: Reporter) -> None:
     for name, default in module.declared_parameters.items():
         if default:
             values.setdefault(("parameter", name), set()).add(default)
+    for name, default in module.declared_macros.items():
+        if default:
+            values.setdefault(("macro", f"`{name}"), set()).add(default)
     for port in module.ports:
         for dimension in port_dimensions(port):
             if dimension.kind in {"macro", "parameter"} and dimension.default:
@@ -1226,6 +1283,7 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
 
     ports: list[Port] = []
     declared_parameters: dict[str, str] = {}
+    declared_macros: dict[str, str] = {}
     parameter_expressions: dict[str, str] = {}
     parameter_comments: dict[str, str] = {}
     declared_parameter_rows: dict[str, int] = {}
@@ -1234,6 +1292,11 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
     active_category = NO_GROUP
     active_condition: str | None = None
     active_parameter_category = False
+    active_macro_category = False
+    disabled_row_count = 0
+    disabled_ports: set[str] = set()
+    disabled_templates: set[str] = set()
+    disabled_parameters: set[str] = set()
     category_column = columns["port"] - 1
     for row in range(header_row + 1, sheet.max_row + 1):
         raw_port_name = clean(sheet.cell(row, columns["port"]))
@@ -1249,26 +1312,33 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 row_category, context, reporter
             )
             active_parameter_category = is_parameter_category(active_category)
+            active_macro_category = is_macro_category(active_category)
             active_template_values = {}
         row_template_values = template_values_in_row(sheet, row, context, reporter)
         if row_template_values:
             active_template_values.update(row_template_values)
-
         port_variables = template_variables(raw_port_name)
+        commented = row_is_commented(sheet, row)
         missing_variables = [
             variable for variable in port_variables if variable not in active_template_values
         ]
-        if missing_variables:
+        if missing_variables and not commented:
             names = "、".join(missing_variables)
             example = missing_variables[0]
-            subject = "parameter 名" if active_parameter_category else "端口名"
+            subject = (
+                "parameter 名"
+                if active_parameter_category
+                else "宏名"
+                if active_macro_category
+                else "端口名"
+            )
             reporter.error(
                 f"{context}: {subject}模板变量 {names} 未找到取值列表；"
                 f"请在同一分类中使用 {example}是{{a,b}} 或 {example}={{a,b}}",
                 code="E_TEMPLATE",
             )
             continue
-        if port_variables:
+        if port_variables and not missing_variables:
             expansions = [
                 dict(zip(port_variables, combination))
                 for combination in itertools.product(
@@ -1277,6 +1347,71 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             ]
         else:
             expansions = [{}]
+
+        if commented:
+            disabled_row_count += 1
+            if active_parameter_category:
+                disabled_parameters.update(
+                    substitute_template(raw_port_name, expansion).upper()
+                    for expansion in expansions
+                )
+            elif not active_macro_category:
+                disabled_templates.add(raw_port_name)
+                disabled_ports.update(
+                    substitute_template(raw_port_name, expansion)
+                    for expansion in expansions
+                )
+            reporter.info(
+                f"{context}: 检测到 *注释*，该 XLSX 行不参与生成",
+                code="I_ROW_COMMENTED",
+            )
+            continue
+
+        if active_macro_category:
+            for expansion_index, expansion in enumerate(expansions):
+                assignments = ", ".join(
+                    f"{name}={value}" for name, value in expansion.items()
+                )
+                expanded_context = (
+                    f"{context} ({assignments})" if assignments else context
+                )
+                macro_name = substitute_template(raw_port_name, expansion)
+                if port_variables:
+                    macro_name = macro_name.upper()
+                if macro_name.startswith("`"):
+                    macro_name = macro_name[1:]
+                if not IDENTIFIER_RE.fullmatch(macro_name):
+                    reporter.error(
+                        f"{expanded_context}: 宏名 {macro_name!r} "
+                        "不是合法 Verilog 标识符",
+                        code="E_WIDTH",
+                    )
+                    continue
+                raw_default = sheet.cell(row, columns["value"])
+                if len(port_variables) == 1:
+                    variable = port_variables[0]
+                    raw_default = template_default_value(
+                        raw_default,
+                        active_template_values[variable],
+                        expansion_index,
+                    )
+                raw_default = substitute_template_expression(raw_default, expansion)
+                default = normalized_width_default(
+                    raw_default,
+                    f"{expanded_context}: 宏 `{macro_name}",
+                    reporter,
+                    fallback_uncertain=bool(expansion),
+                )
+                previous = declared_macros.get(macro_name)
+                if previous is not None and previous != default:
+                    reporter.error(
+                        f"页签 {sheet.name}: 宏 `{macro_name} 默认值冲突 "
+                        f"({previous}/{default})",
+                        code="E_WIDTH",
+                    )
+                    continue
+                declared_macros.setdefault(macro_name, default)
+            continue
 
         if active_parameter_category:
             for expansion_index, expansion in enumerate(expansions):
@@ -1304,10 +1439,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                         active_template_values[variable],
                         expansion_index,
                     )
-                raw_default = uppercase_macro_references(
-                    substitute_template(raw_default, expansion)
+                raw_default = preserve_macro_references(
+                    substitute_template_expression(raw_default, expansion)
                 )
-                raw_expression = substitute_template(
+                raw_expression = substitute_template_expression(
                     sheet.cell(row, columns["width"]), expansion
                 )
                 expression = ""
@@ -1414,10 +1549,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                     )
                 continue
 
-            raw_width = substitute_template(base_width, expansion)
-            raw_array = substitute_template(base_array, expansion)
-            raw_width = uppercase_macro_references(raw_width)
-            raw_array = uppercase_macro_references(raw_array)
+            raw_width = substitute_template_expression(base_width, expansion)
+            raw_array = substitute_template_expression(base_array, expansion)
+            raw_width = preserve_macro_references(raw_width)
+            raw_array = preserve_macro_references(raw_array)
             raw_default = base_default
             raw_array_default = base_array_default
             if len(port_variables) == 1:
@@ -1429,8 +1564,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
                 raw_array_default = template_default_value(
                     raw_array_default, domain, expansion_index
                 )
-            raw_default = substitute_template(raw_default, expansion)
-            raw_array_default = substitute_template(raw_array_default, expansion)
+            raw_default = substitute_template_expression(raw_default, expansion)
+            raw_array_default = substitute_template_expression(
+                raw_array_default, expansion
+            )
 
             unresolved_width = template_variables(raw_width)
             if unresolved_width:
@@ -1520,7 +1657,7 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
             )
             seen[port_name] = port
             ports.append(port)
-    if not ports:
+    if not ports and not (declared_parameters or declared_macros or disabled_row_count):
         reporter.error(
             f"页签 {sheet.name}: 没有可生成的端口",
             code="E_PORT",
@@ -1532,6 +1669,10 @@ def parse_module(sheet: Sheet, reporter: Reporter) -> Module | None:
         declared_parameters=declared_parameters,
         parameter_expressions=parameter_expressions,
         parameter_comments=parameter_comments,
+        declared_macros=declared_macros,
+        disabled_ports=disabled_ports,
+        disabled_templates=disabled_templates,
+        disabled_parameters=disabled_parameters,
     )
     resolve_module_local_defaults(module, reporter)
     return module
@@ -1763,6 +1904,12 @@ def resolve_hierarchy_defaults(
                         integration_sheet.cell(row, block.port_column)
                     ).upper()
                     if module is not None and name in module.parameters:
+                        direct_value = natural_number_text(
+                            integration_sheet.cell(row, block.direction_column)
+                        )
+                        if direct_value is not None:
+                            linked_parameter_defaults[(module.name, name)] = direct_value
+                            continue
                         entries.append((module, name))
                 known = [
                     (module, name, module.parameters[name])
@@ -1784,6 +1931,14 @@ def resolve_hierarchy_defaults(
                     linked_parameter_defaults[(module.name, name)] = value
 
         for module in ordered:
+            for name, value in list(module.declared_macros.items()):
+                if value:
+                    continue
+                reporter.error(
+                    f"页签 {module.sheet_name}: 宏 `{name} 缺少“数值”默认值",
+                    code="E_WIDTH",
+                )
+                module.declared_macros[name] = "1"
             for name, value in list(module.declared_parameters.items()):
                 linked = linked_parameter_defaults.get((module.name, name))
                 if not value and linked:
@@ -1862,6 +2017,7 @@ def resolve_hierarchy_defaults(
                 source = (module.sheet_name, value)
                 if source not in macro_sources.setdefault(name, []):
                     macro_sources[name].append(source)
+                macro_values.setdefault(f"`{name}", set()).add(value)
         for port in module.ports:
             for width in port_dimensions(port):
                 if not width.default:
@@ -1991,9 +2147,13 @@ def parse_workbook(
                     f"{context}: 例化名 {spec.instance_name!r} 不是合法 Verilog 标识符",
                     code="E_INSTANCE",
                 )
-            if spec.raw_count and spec.count is None:
+            if spec.raw_count and spec.count is None and not (
+                MACRO_RE.fullmatch(spec.raw_count)
+                or IDENTIFIER_RE.fullmatch(spec.raw_count)
+            ):
                 reporter.error(
-                    f"{context}: 例化次数 {spec.raw_count!r} 必须是正整数或可计算的正整数表达式",
+                    f"{context}: 例化次数 {spec.raw_count!r} 必须是正整数、"
+                    "可计算的正整数表达式、`MACRO 或 TOP parameter",
                     code="E_INSTANCE",
                 )
             if name == integration.top_name and (
@@ -2473,9 +2633,16 @@ def render_file_header() -> list[str]:
     ]
 
 
-def render_module_header(module: Module, macros: dict[str, str] | None = None) -> list[str]:
+def render_module_header(
+    module: Module,
+    macros: dict[str, str] | None = None,
+    *,
+    before_module_user: bool = False,
+) -> list[str]:
     lines = render_file_header()
     lines.extend(render_macros(macros if macros is not None else module.macros))
+    if before_module_user:
+        lines.extend([*user_code_block("before module"), ""])
     if module.parameters:
         lines.append(f"module {module.name} #(")
         parameter_items = list(module.parameters.items())
@@ -2626,6 +2793,7 @@ class Assignment:
 class GenerateSpec:
     index: str
     extents: list[int] = field(default_factory=list)
+    extent_expressions: list[str] = field(default_factory=list)
 
 
 def split_index_marker(reference: Any) -> tuple[str, str | None]:
@@ -2774,6 +2942,19 @@ def render_integration(
     # A parameter is local by default.  Only rows explicitly placed under a
     # ``parameter`` category in the integration sheet create an override path.
     parameter_rows_by_group = integration_parameter_rows(sheet, integration)
+    commented_integration_rows_reported: set[int] = set()
+
+    def skip_commented_integration_row(row: int) -> bool:
+        if not row_is_commented(sheet, row):
+            return False
+        if row not in commented_integration_rows_reported:
+            commented_integration_rows_reported.add(row)
+            reporter.info(
+                f"集成页签 {sheet.name} 第 {row} 行: 检测到 *注释*，"
+                "该连接行不参与生成",
+                code="I_ROW_COMMENTED",
+            )
+        return True
     # parameter_maps are used when a child-owned dimension must be expressed
     # in TOP scope.  Unlinked local parameters resolve to their numeric match
     # values; linked parameters resolve to a TOP localparam name.
@@ -2820,6 +3001,7 @@ def render_integration(
     for group_index, group in enumerate(integration.groups):
         for row in sorted(parameter_rows_by_group[group_index]):
             entries: list[tuple[IntegrationBlock, Module, str]] = []
+            direct_entries: list[tuple[IntegrationBlock, Module, str, str]] = []
             for block in group:
                 if block.anonymous_na:
                     continue
@@ -2830,13 +3012,52 @@ def render_integration(
                 if module is None:
                     continue
                 if reference not in module.parameters:
+                    if reference in module.disabled_parameters:
+                        reporter.info(
+                            f"集成页签 {sheet.name} 第 {row} 行: parameter "
+                            f"{block.module_name}.{reference} 已由模块页 *注释* 停用，"
+                            "传参已忽略",
+                            code="I_ROW_COMMENTED",
+                        )
+                        continue
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: "
                         f"{block.module_name} 没有 parameter {reference}",
                         code="E_PARAMETER",
                     )
                     continue
+                direct_value = natural_number_text(
+                    sheet.cell(row, block.direction_column)
+                )
+                if direct_value is not None:
+                    direct_entries.append((block, module, reference, direct_value))
+                    continue
+                raw_direct_value = clean(sheet.cell(row, block.direction_column))
+                if raw_direct_value:
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: parameter "
+                        f"{module.name}.{reference} 的 i/o={raw_direct_value!r} "
+                        "必须留空或填写自然数",
+                        code="E_PARAMETER",
+                    )
+                    continue
                 entries.append((block, module, reference))
+            for block, module, name, direct_value in direct_entries:
+                if module.name == top.name:
+                    reporter.info(
+                        f"集成页签 {sheet.name} 第 {row} 行: TOP parameter "
+                        f"{top.name}.{name} 的数字 i/o={direct_value} 不用于实例传参",
+                        code="I_PARAMETER_LINK",
+                    )
+                    continue
+                instance_parameter_maps[module.name][name] = direct_value
+                parameter_maps[module.name][name] = direct_value
+                module.externally_configurable_parameters.add(name)
+                reporter.info(
+                    f"集成页签 {sheet.name} 第 {row} 行: parameter "
+                    f"{module.name}.{name} 直接传入自然数 {direct_value}",
+                    code="I_PARAMETER_LINK",
+                )
             if len(entries) < 2:
                 if entries:
                     block, _, name = entries[0]
@@ -2904,6 +3125,42 @@ def render_integration(
             f"i_gen_{instance_name}", used_generated_indices
         ).lower()
 
+    def configured_count_width(child_name: str) -> Width | None:
+        configured = integration.instance_specs.get(child_name)
+        if configured is None or configured.raw_count is None:
+            return None
+        if configured.count is not None:
+            value = str(configured.count)
+            return Width("literal", value, value)
+        macro_match = MACRO_RE.fullmatch(configured.raw_count)
+        if macro_match:
+            name = macro_match.group(1)
+            default = all_macros.get(name, "")
+            if not default:
+                reporter.warning(
+                    f"集成模块: {child_name} 的例化次数使用宏 `{name}，"
+                    "但当前层次没有可用于范围检查的宏数值",
+                    code="W_GENERATE_RANGE",
+                )
+            return Width("macro", f"`{name}", default)
+        if IDENTIFIER_RE.fullmatch(configured.raw_count):
+            name = configured.raw_count.upper()
+            default = top.parameters.get(name, "")
+            if not default:
+                reporter.warning(
+                    f"集成模块: {child_name} 的例化次数使用 parameter {name}，"
+                    "但该 parameter 没有被拉到 TOP",
+                    code="W_PARAMETER_NOT_EXPORTED",
+                )
+            return Width("parameter", name, default)
+        return None
+
+    configured_count_widths = {
+        child.name: width
+        for child in children
+        if (width := configured_count_width(child.name)) is not None
+    }
+
     def indexed_dimension(port: Port) -> Width | None:
         dimensions = (
             (*port.arrays, *port.packed_dimensions, port.width)
@@ -2911,6 +3168,20 @@ def render_integration(
             else port.arrays
         )
         return dimensions[0] if dimensions else None
+
+    warned_unexported_parameters: set[tuple[str, str]] = set()
+
+    def report_unexported_parameter(module_name: str, name: str, row: int) -> None:
+        key = (module_name, name)
+        if key in warned_unexported_parameters:
+            return
+        warned_unexported_parameters.add(key)
+        reporter.warning(
+            f"集成页签 {sheet.name} 第 {row} 行: {module_name}.{name} "
+            "parameter 应该被拉到 TOP，但当前没有显式 parameter 链接；"
+            "TOP 中保留该 parameter 名称",
+            code="W_PARAMETER_NOT_EXPORTED",
+        )
 
     def register_generate_marker(
         child_name: str,
@@ -2929,10 +3200,37 @@ def render_integration(
         first = indexed_dimension(indexed_port)
         if first is None:
             return None
+        expression = first.expression
+        if first.kind == "parameter" and child_name != top.name:
+            mapped = instance_parameter_maps.get(child_name, {}).get(expression)
+            if mapped is not None:
+                expression = mapped
+            else:
+                report_unexported_parameter(child_name, expression, row)
+        spec.extent_expressions.append(expression)
         extent = evaluate_int_expression(first.default or first.expression)
         if extent is not None:
             spec.extents.append(extent)
         return extent
+
+    def wire_parameter_map(module: Module, port: Port, row: int) -> dict[str, str]:
+        """Map child-owned parameter dimensions into the generated TOP scope."""
+        result: dict[str, str] = {}
+        explicit_map = instance_parameter_maps.get(module.name, {})
+        for dimension in port_dimensions(port):
+            if dimension.kind != "parameter":
+                continue
+            name = dimension.expression
+            if module.name == top.name:
+                result[name] = name
+                continue
+            mapped = explicit_map.get(name)
+            if mapped is not None:
+                result[name] = mapped
+                continue
+            result[name] = name
+            report_unexported_parameter(module.name, name, row)
+        return result
 
     def add_assignment(
         target: str,
@@ -2960,6 +3258,13 @@ def render_integration(
             return None
         port = module.port_map.get(port_name)
         if port is None:
+            if port_name in module.disabled_ports:
+                reporter.info(
+                    f"集成页签 {sheet.name} 第 {row} 行: "
+                    f"{module_name}.{port_name} 已由模块页 *注释* 停用，连接已忽略",
+                    code="I_ROW_COMMENTED",
+                )
+                return None
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: {module_name} 没有端口 {port_name}",
                 code="E_PORT_REFERENCE",
@@ -2975,6 +3280,13 @@ def render_integration(
             return [port] if port else []
         module = modules.get(module_name)
         if module is None:
+            return []
+        if reference in module.disabled_templates:
+            reporter.info(
+                f"集成页签 {sheet.name} 第 {row} 行: "
+                f"{module_name}.{reference} 已由模块页 *注释* 停用，连接已忽略",
+                code="I_ROW_COMMENTED",
+            )
             return []
         # Match the template row that produced the port, not merely the final
         # name. A regex for ``data_{{i}}`` would also consume an unrelated
@@ -3177,10 +3489,12 @@ def render_integration(
         expression = signal_name
         if index:
             extent = register_generate_marker(block.module_name, index, port, row)
-            configured = integration.instance_specs.get(block.module_name)
-            count = (configured.count if configured else None) or extent or 1
+            count_width = configured_count_widths.get(block.module_name)
+            if count_width is None:
+                count = extent or 1
+                count_width = Width("literal", str(count), str(count))
             placeholder_arrays = (
-                Width("literal", str(count), str(count)),
+                count_width,
                 *placeholder_arrays,
             )
             expression += f"[{generated_indices[block.module_name]}]"
@@ -3189,7 +3503,9 @@ def render_integration(
                 name=signal_name,
                 width=port.width,
                 arrays=placeholder_arrays,
-                parameter_map=parameter_maps.get(block.module_name, {}),
+                parameter_map=wire_parameter_map(
+                    modules[block.module_name], port, row
+                ),
                 interface_type=(
                     port.interface_type.rsplit(".", 1)[0]
                     if port.interface_type
@@ -3282,6 +3598,8 @@ def render_integration(
     ]
     first_group_na_blocks = [block for block in first_group if block.anonymous_na]
     for row in range(integration.header_row + 1, sheet.max_row + 1):
+        if skip_commented_integration_row(row):
+            continue
         if row in parameter_rows_by_group[0]:
             continue
         top_reference = sheet.cell(row, top_block.port_column)
@@ -3577,9 +3895,11 @@ def render_integration(
                         wires.append(
                             Wire(
                                 adapter_name,
-                                Width("literal", str(child_width), str(child_width)),
+                                child_port.width,
                                 (),
-                                {},
+                                wire_parameter_map(
+                                    modules[block.module_name], child_port, row
+                                ),
                             )
                         )
                         expression = adapter_name
@@ -3617,6 +3937,8 @@ def render_integration(
 
     for group_index, group in enumerate(integration.groups[1:], start=1):
         for row in range(integration.header_row + 1, sheet.max_row + 1):
+            if skip_commented_integration_row(row):
+                continue
             if row in parameter_rows_by_group[group_index]:
                 continue
             expanded: list[tuple[IntegrationBlock, list[Port]]] = []
@@ -3749,27 +4071,26 @@ def render_integration(
                     if can_resize
                     else None
                 )
-                wire_width = (
-                    Width("literal", str(maximum_width), str(maximum_width))
-                    if maximum_width is not None
-                    else source_port.width
-                )
+                wire_block, wire_shape_port = width_source
+                if maximum_width is not None:
+                    source_index = entries.index(width_source)
+                    if numeric_widths[source_index] != maximum_width:
+                        maximum_index = numeric_widths.index(maximum_width)
+                        wire_block, wire_shape_port = entries[maximum_index]
                 wires.append(
                     Wire(
                         name=signal_name,
-                        width=wire_width,
-                        arrays=source_port.arrays,
-                        parameter_map=(
-                            {}
-                            if maximum_width is not None
-                            else parameter_maps.get(block.module_name, {})
+                        width=wire_shape_port.width,
+                        arrays=wire_shape_port.arrays,
+                        parameter_map=wire_parameter_map(
+                            modules[wire_block.module_name], wire_shape_port, row
                         ),
                         interface_type=(
-                            source_port.interface_type.rsplit(".", 1)[0]
-                            if source_port.interface_type
+                            wire_shape_port.interface_type.rsplit(".", 1)[0]
+                            if wire_shape_port.interface_type
                             else None
                         ),
-                        packed_dimensions=source_port.packed_dimensions,
+                        packed_dimensions=wire_shape_port.packed_dimensions,
                     )
                 )
                 for entry_index, (item_block, port) in enumerate(entries):
@@ -3821,29 +4142,40 @@ def render_integration(
                     (port.condition,) if port.condition else (),
                 )
 
-    generate_counts: dict[str, int] = {}
+    generate_counts: dict[str, str] = {}
     for child in children:
         child_name = child.name
         marker_spec = generate_specs.get(child_name)
-        configured = integration.instance_specs.get(child_name)
-        configured_count = configured.count if configured else None
-        if configured_count is not None:
-            count = configured_count
-            generate_counts[child_name] = count
+        configured_width = configured_count_widths.get(child_name)
+        if configured_width is not None:
+            count_expression = configured_width.expression
+            numeric_count = evaluate_int_expression(configured_width.default)
+            generate_counts[child_name] = count_expression
             reporter.info(
-                f"集成模块: {child_name} 使用显式例化次数 {count}",
+                f"集成模块: {child_name} 使用显式例化次数 {count_expression}",
                 code="I_INSTANCE",
             )
-            if marker_spec and marker_spec.extents:
+            if marker_spec and marker_spec.extents and numeric_count is not None:
                 safe_extent = min(marker_spec.extents)
-                if count > safe_extent:
+                if numeric_count > safe_extent:
                     reporter.warning(
-                        f"集成模块: {child_name} 的例化次数 {count} 超过 "
+                        f"集成模块: {child_name} 的例化次数 {count_expression} "
+                        f"(匹配值 {numeric_count}) 超过 "
                         f"[{marker_spec.index}] 可解析安全范围 {safe_extent}，存在索引越界风险",
                         code="W_GENERATE_RANGE",
                     )
             continue
         if marker_spec is None:
+            continue
+        symbolic_extents = list(dict.fromkeys(marker_spec.extent_expressions))
+        if len(symbolic_extents) == 1:
+            count_expression = symbolic_extents[0]
+            generate_counts[child_name] = count_expression
+            reporter.info(
+                f"集成模块: {child_name} 的 [{marker_spec.index}] generate "
+                f"使用首维表达式 {count_expression}",
+                code="I_INSTANCE",
+            )
             continue
         if marker_spec.extents:
             count = min(marker_spec.extents)
@@ -3862,9 +4194,9 @@ def render_integration(
                 "generate 默认使用 1",
                 code="W_GENERATE_RANGE",
             )
-        generate_counts[child_name] = count
+        generate_counts[child_name] = str(count)
 
-    lines = render_module_header(top, all_macros)
+    lines = render_module_header(top, all_macros, before_module_user=True)
     lines.extend(["", *user_code_block("before statement")])
     if wires:
         lines.append("")
@@ -3966,11 +4298,10 @@ def render_integration(
         instance_name = instance_names[child.name]
         if generate_count is not None:
             index = generated_indices[child.name]
-            count = generate_count
             lines.append(f"genvar {index};")
             lines.append("generate")
             lines.append(
-                f"for ({index} = 0; {index} < {count}; "
+                f"for ({index} = 0; {index} < {generate_count}; "
                 f"{index} = {index} + 1) begin : G_{instance_name}"
             )
         if instance_parameter_map:
@@ -4164,9 +4495,7 @@ def generate(
             for module in modules.values():
                 if module.name != top_name:
                     rendered[module.name] = render_stub(module, {})
-            # Keep the macro-owning upper module first in the returned path
-            # order.  Callers that pass this order to a shared preprocessor
-            # then see the upper definitions before child module references.
+            # Keep the integration TOP first in the returned path order.
             rendered = {top_name or "TOP": rendered_top, **rendered}
     elif top_name is None:
         for module in modules.values():
@@ -4222,7 +4551,7 @@ def canonical_dimension_symbol(value: Any) -> DiffusionTarget | None:
     text = clean(value)
     macro = MACRO_RE.fullmatch(text)
     if macro:
-        return DiffusionTarget("macro", f"`{macro.group(1).upper()}")
+        return DiffusionTarget("macro", f"`{macro.group(1)}")
     if IDENTIFIER_RE.fullmatch(text):
         return DiffusionTarget("parameter", text.upper())
     return None
@@ -4231,7 +4560,7 @@ def canonical_dimension_symbol(value: Any) -> DiffusionTarget | None:
 def iter_editable_module_rows(
     workbook: Workbook, reporter: Reporter
 ) -> Iterable[
-    tuple[Sheet, int, dict[str, int], dict[str, list[str]], bool]
+    tuple[Sheet, int, dict[str, int], dict[str, list[str]], str | None]
 ]:
     """Yield physical XLSX module rows while never consulting 修改 columns."""
     for sheet in workbook.sheets:
@@ -4240,7 +4569,7 @@ def iter_editable_module_rows(
             continue
         header_row, columns = header
         active_values: dict[str, list[str]] = {}
-        active_parameter_category = False
+        active_section_kind: str | None = None
         category_column = columns["port"] - 1
         for row in range(header_row + 1, sheet.max_row + 1):
             if not clean(sheet.cell(row, columns["port"])):
@@ -4253,15 +4582,23 @@ def iter_editable_module_rows(
             )
             if category:
                 active_values = {}
-                active_parameter_category = is_parameter_category(category)
+                active_section_kind = (
+                    "parameter"
+                    if is_parameter_category(category)
+                    else "macro"
+                    if is_macro_category(category)
+                    else None
+                )
             context = f"页签 {sheet.name} 第 {row} 行"
             active_values.update(template_values_in_row(sheet, row, context, reporter))
+            if row_is_commented(sheet, row):
+                continue
             yield (
                 sheet,
                 row,
                 columns,
                 dict(active_values),
-                active_parameter_category,
+                active_section_kind,
             )
 
 
@@ -4272,7 +4609,7 @@ def expanded_factor_targets(
     """Return target, expansion index and expansion count for one factor."""
     variables = template_variables(factor)
     if not variables:
-        target = canonical_dimension_symbol(uppercase_macro_references(factor))
+        target = canonical_dimension_symbol(preserve_macro_references(factor))
         return [(target, 0, 1)] if target else []
     if any(variable not in domains for variable in variables):
         return []
@@ -4280,7 +4617,9 @@ def expanded_factor_targets(
     result: list[tuple[DiffusionTarget, int, int]] = []
     for index, combination in enumerate(combinations):
         expansion = dict(zip(variables, combination))
-        text = uppercase_macro_references(substitute_template(factor, expansion))
+        text = preserve_macro_references(
+            substitute_template_expression(factor, expansion)
+        )
         target = canonical_dimension_symbol(text)
         if target:
             result.append((target, index, len(combinations)))
@@ -4291,12 +4630,15 @@ def list_diffusible_variables(path: Path) -> tuple[list[DiffusionTarget], Report
     reporter = Reporter()
     workbook = XlsxReader().read(path, ignore_review_columns=False)
     found: dict[tuple[str, str], DiffusionTarget] = {}
-    for sheet, row, columns, domains, is_parameter in iter_editable_module_rows(
+    for sheet, row, columns, domains, section_kind in iter_editable_module_rows(
         workbook, reporter
     ):
-        if is_parameter:
+        if section_kind:
+            raw_name = clean(sheet.cell(row, columns["port"]))
+            if section_kind == "macro" and not raw_name.startswith("`"):
+                raw_name = "`" + raw_name
             for target, _, _ in expanded_factor_targets(
-                clean(sheet.cell(row, columns["port"])), domains
+                raw_name, domains
             ):
                 found.setdefault((target.kind, target.expression), target)
             continue
@@ -4501,7 +4843,7 @@ def diffuse_variable_value(
     targets, discovery_reporter = list_diffusible_variables(path)
     requested = clean(variable)
     if requested.startswith("`"):
-        selected = DiffusionTarget("macro", f"`{requested[1:].upper()}")
+        selected = DiffusionTarget("macro", f"`{requested[1:]}")
     else:
         selected = DiffusionTarget("parameter", requested.upper())
     if selected not in targets:
@@ -4513,12 +4855,15 @@ def diffuse_variable_value(
         before.items.append(item)
     workbook = XlsxReader().read(path, ignore_review_columns=False)
     updates: dict[str, dict[tuple[int, int], str]] = {}
-    for sheet, row, columns, domains, is_parameter in iter_editable_module_rows(
+    for sheet, row, columns, domains, section_kind in iter_editable_module_rows(
         workbook, Reporter()
     ):
-        if is_parameter:
+        if section_kind:
+            raw_name = sheet.cell(row, columns["port"])
+            if section_kind == "macro" and not clean(raw_name).startswith("`"):
+                raw_name = "`" + clean(raw_name)
             replacement = spread_default_cell(
-                sheet.cell(row, columns["port"]),
+                raw_name,
                 sheet.cell(row, columns["value"]),
                 domains,
                 selected,

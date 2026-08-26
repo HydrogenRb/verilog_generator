@@ -79,7 +79,7 @@ class ReaderTests(unittest.TestCase):
         self.assertTrue(interface.is_interface)
         self.assertEqual(interface.interface_type, "sky_cs_if.mst")
         core_array = modules["RISCV_CORE_TEST"].port_map["array"]
-        self.assertEqual(core_array.width.expression, "`TEST_SIZE")
+        self.assertEqual(core_array.width.expression, "`Test_size")
         self.assertEqual(
             [item.expression for item in core_array.packed_dimensions], ["`LANE_NUM"]
         )
@@ -161,7 +161,7 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$")
             self.assertRegex(
                 top,
-                r"(?m)^\s*wire \[`LANE_NUM\s+-1:0\]\[`TEST_SIZE\s+-1:0\]\s+w_array;$",
+                r"(?m)^\s*wire \[`LANE_NUM\s+-1:0\]\[`Test_size\s+-1:0\]\s+w_array;$",
             )
             self.assertRegex(
                 top,
@@ -171,7 +171,7 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*\.array\s+\(w_array\s*\),$")
             self.assertRegex(
                 core,
-                r"(?m)^\s*output wire \[`LANE_NUM\s+-1:0\]\[`TEST_SIZE\s+-1:0\]\s+array,$",
+                r"(?m)^\s*output wire \[`LANE_NUM\s+-1:0\]\[`Test_size\s+-1:0\]\s+array,$",
             )
             self.assertRegex(core, r"(?m)^assign array\s+= '0;$")
             self.assertIn("// 子模块内部连线及 NA 占位信号。", top)
@@ -439,7 +439,7 @@ class GenerationTests(unittest.TestCase):
             )
             self.assertRegex(
                 top,
-                r"wire\s+\[4\s+-1:0\]\[32\s+-1:0\]\s+w_data;",
+                r"wire\s+\[DEPTH\s+-1:0\]\[DATA_WIDTH\s+-1:0\]\s+w_data;",
             )
             self.assertRegex(top, r"(?m)^    \.spare \('0\s*\)$")
             self.assertRegex(source, r"(?m)^assign data\s+= '0;$")
@@ -676,7 +676,7 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("DONE_b", text)
             self.assertRegex(text, r"(?m)^// `define W_A\s+114$")
             self.assertRegex(text, r"(?m)^// `define W_B\s+114$")
-            self.assertNotIn("`define W_a", text)
+            self.assertNotIn("`define w_A", text)
             self.assertRegex(text, r"(?m)^\s*inout\s+needs_review")
             self.assertNotRegex(text, r"(?m)^\s*inout\s+wire\b")
             self.assertIn(

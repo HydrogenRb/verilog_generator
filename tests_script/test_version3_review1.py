@@ -63,7 +63,7 @@ class Version3TechReview1Tests(unittest.TestCase):
 
             self.assertRegex(
                 top,
-                r"wire\s+\[13\s+-1:0\]\s+ready_test_process;",
+                r"wire\s+\[DW_SIG3\s+-1:0\]\s+ready_test_process;",
             )
             self.assertRegex(
                 top,
@@ -81,7 +81,7 @@ class Version3TechReview1Tests(unittest.TestCase):
                 top,
             )
             self.assertNotIn("\n    // 子模块内部连线及 NA 占位信号。", top)
-            self.assertRegex(top, r"(?m)^wire\s+\[13\s+-1:0\]\s+ready_test_process;")
+            self.assertRegex(top, r"(?m)^wire\s+\[DW_SIG3\s+-1:0\]\s+ready_test_process;")
 
             self.assertIn("MEM_DAT PROJECT_PERSONAL_MEM_DAT (", top)
             self.assertIn("genvar i_gen_u_riscv_crg;", top)
@@ -171,18 +171,18 @@ class Version3TechReview1Tests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual([path.name for path in paths], ["parameter_expressions.v"])
             text = paths[0].read_text(encoding="utf-8")
-            self.assertRegex(text, r"localparam\s+PARA_A\s+= `LANE_NUM,\s+// 4")
+            self.assertRegex(text, r"localparam\s+PARA_A\s+= `lane_num,\s+// 4")
             self.assertRegex(text, r"localparam\s+PARA_B\s+= PARA_A\+1,\s+// 5")
             self.assertRegex(
                 text,
-                r"localparam\s+DW\s+= `LOG2\(PARA_B\),?\s+// 3",
+                r"localparam\s+DW\s+= `log2\(PARA_B\),?\s+// 3",
             )
             self.assertRegex(text, r"localparam\s+FEATURE_OFF\s+= 0")
             self.assertRegex(
                 text,
-                r"localparam\s+MACRO_OFF\s+= `FEATURE_ENABLE\s+// 0",
+                r"localparam\s+MACRO_OFF\s+= `feature_enable\s+// 0",
             )
-            self.assertRegex(text, r"(?m)^// `define FEATURE_ENABLE\s+0$")
+            self.assertRegex(text, r"(?m)^// `define feature_enable\s+0$")
             self.assertRegex(text, r"output wire\s+\[DW\s+-1:0\]\s+data")
 
     def test_parameter_generation_rejects_statement_injection(self) -> None:

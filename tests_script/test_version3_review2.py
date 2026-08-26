@@ -56,11 +56,11 @@ class Version3TechReview2Tests(unittest.TestCase):
             text = paths[0].read_text(encoding="utf-8")
             self.assertRegex(text, r"output wire\s+\[0\s+-1:0\]\s+zero_literal")
             self.assertRegex(text, r"input\s+wire\s+\[0\s+-1:0\]\s+zero_expression")
-            self.assertRegex(text, r"input\s+wire\s+\[`OFF_WIDTH\s+-1:0\]\s+zero_macro")
+            self.assertRegex(text, r"input\s+wire\s+\[`off_width\s+-1:0\]\s+zero_macro")
             self.assertRegex(text, r"input\s+wire\s+\[OFF_PARAM\s+-1:0\]\s+zero_parameter")
             self.assertRegex(text, r"output wire\s+\[0\s+-1:0\]\s+zero_array")
             self.assertRegex(text, r"localparam\s+OFF_PARAM\s+= 0")
-            self.assertRegex(text, r"(?m)^// `define OFF_WIDTH\s+0$")
+            self.assertRegex(text, r"(?m)^// `define off_width\s+0$")
             self.assertRegex(text, r"(?m)^assign zero_literal\s+= '0;$")
 
     def test_na_constants_expand_pad_and_warn_when_oversized(self) -> None:

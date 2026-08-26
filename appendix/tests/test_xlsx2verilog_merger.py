@@ -295,7 +295,8 @@ class EdgeCaseMergeReview(unittest.TestCase):
             self.assertIn("i_gen_u_riscv_crg < 10", old_top)
             self.assertRegex(
                 old_top,
-                r"wire\s+\[10\s+-1:0\]\[114\s+-1:0\]\s+high_clk_after_pll_0;",
+                r"wire\s+\[10\s+-1:0\]\[CLK_BUS_0\s+-1:0\]\s+"
+                r"high_clk_after_pll_0;",
             )
             old_top = old_top.replace(
                 "/*USER CODE BEGIN before statement*/",
@@ -303,7 +304,7 @@ class EdgeCaseMergeReview(unittest.TestCase):
                 1,
             )
             old_top, declaration_updates = re.subn(
-                r"(?m)^wire(?=\s+\[10\s+-1:0\]\[114\s+-1:0\]\s+"
+                r"(?m)^wire(?=\s+\[10\s+-1:0\]\[CLK_BUS_0\s+-1:0\]\s+"
                 r"high_clk_after_pll_0;)",
                 "reg",
                 old_top,
@@ -327,7 +328,7 @@ class EdgeCaseMergeReview(unittest.TestCase):
             top_path.write_text(old_top, encoding="utf-8", newline="\n")
 
             shutil.copy2(EDGE_SAMPLE, adjusted)
-            # The integration sheet is sheet1 in the V3.12 review workbook;
+            # The integration sheet is sheet1 in the V3 review workbook;
             # row 6 / column 36 is RISCV_CRG's explicit instance count.
             write_xlsx_cell_updates(
                 adjusted,
@@ -347,7 +348,8 @@ class EdgeCaseMergeReview(unittest.TestCase):
             self.assertNotIn("i_gen_u_riscv_crg < 10", merged_top)
             self.assertRegex(
                 merged_top,
-                r"reg\s+\[9\s+-1:0\]\[114\s+-1:0\]\s+high_clk_after_pll_0;",
+                r"reg\s+\[9\s+-1:0\]\[CLK_BUS_0\s+-1:0\]\s+"
+                r"high_clk_after_pll_0;",
             )
             self.assertRegex(merged_top, r"(?m)^\s*parameter\s+RST_LANE\s+=")
             self.assertIn(

@@ -541,7 +541,7 @@ EXPECTED_PATTERNS: dict[str, list[tuple[str, str]]] = {
     ],
     "02_parameter_macro_shifted": [
         ("top_param.v", r"// `define RST_LANE\s+1"),
-        ("top_param.v", r"wire\s+\[8\s*-1:0\]\s+w_bus;"),
+        ("top_param.v", r"wire\s+\[WIDTH\s*-1:0\]\s+w_bus;"),
     ],
     "03_duplicate_port_rows": [
         ("top_dup.v", r"input\s+wire\s+\[2\s*-1:0\]\s+aaa"),

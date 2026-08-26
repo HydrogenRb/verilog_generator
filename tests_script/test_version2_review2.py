@@ -115,8 +115,8 @@ class Version2TechReview2Tests(unittest.TestCase):
                     rf"localparam\s+{name}\s+= {value}",
                 )
 
-            self.assertRegex(top, r"(?m)^\s*wire\s+\[13\s+-1:0\]\s+ready_to_process;$")
-            self.assertRegex(top, r"(?m)^\s*wire\s+\[12\s+-1:0\]\s+need_to_solve;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[DW_SIG3\s+-1:0\]\s+ready_to_process;$")
+            self.assertRegex(top, r"(?m)^\s*wire\s+\[DW_SIG2\s+-1:0\]\s+need_to_solve;$")
             self.assertRegex(
                 top,
                 r"(?m)^\s*\.ready_to_process\s+\(ready_to_process\s*\)"

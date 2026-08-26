@@ -47,7 +47,7 @@ class AppendixCoreTests(unittest.TestCase):
         core = next(module for module in self.model["modules"] if module["name"] == "RISCV_CORE_TEST")
         array = next(port for port in core["ports"] if port["name"] == "array")
         self.assertEqual(len(array["packed"]), 1)
-        self.assertEqual(array["width"]["expression"], "`TEST_SIZE")
+        self.assertEqual(array["width"]["expression"], "`Test_size")
         suggestions = connection_suggestions(self.model, self.roles)
         self.assertTrue(any(item["confidence"] == "high" for item in suggestions))
         self.assertTrue(all(item["reasons"] for item in suggestions))

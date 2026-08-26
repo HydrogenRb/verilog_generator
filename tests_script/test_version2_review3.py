@@ -76,7 +76,7 @@ class Version2TechReview3Tests(unittest.TestCase):
             top = (root / "generated" / "riscv_top.v").read_text(encoding="utf-8")
             self.assertRegex(
                 top,
-                r"wire\s+\[114\s+-1:0\]\[114\s+-1:0\]\s+"
+                r"wire\s+\[114\s+-1:0\]\[CLK_BUS_0\s+-1:0\]\s+"
                 r"high_clk_after_pll_0;",
             )
             self.assertRegex(
@@ -170,7 +170,7 @@ class Version2TechReview3Tests(unittest.TestCase):
             text = paths[0].read_text(encoding="utf-8")
             self.assertRegex(
                 text,
-                r"localparam\s+LANE_NUM\s+= `GLB_PARAMETER",
+                r"localparam\s+LANE_NUM\s+= `glb_parameter",
             )
             self.assertRegex(text, r"(?m)^\s*input wire \[LANE_NUM\s+-1:0\]\s+DataBus,")
             self.assertRegex(text, r"(?m)^\s*inout\s+\[8\s+-1:0\]\s+BiDir$")
