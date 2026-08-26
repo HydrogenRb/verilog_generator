@@ -152,11 +152,11 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*wire\s+.*\bw_apb_6;$")
             self.assertIn("RISCV_CORE_TEST U_RISCV_CORE_TEST (", top)
             self.assertIn("MEM_PHY U_MEM_PHY (", top)
-            self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(1'b0\s*\),$")
+            self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(\{1\{1'b0\}\}\s*\),$")
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_3\s+\(\s*\),$")
-            self.assertRegex(top, r"(?m)^assign ahb_test_6\s+= 6'b0;$")
+            self.assertRegex(top, r"(?m)^assign ahb_test_6\s+= \{6\{1'b0\}\};$")
             self.assertRegex(core, r"(?m)^assign apb_6\s+= \{LANE_NUM\{1'b0\}\};$")
-            self.assertRegex(phy, r"(?m)^assign apb_1\s+= 1'b0;$")
+            self.assertRegex(phy, r"(?m)^assign apb_1\s+= \{1\{1'b0\}\};$")
             self.assertRegex(top, r"(?m)^// `define DW_SIG1\s+114$")
             self.assertRegex(top, r"(?m)^\s*sky_cs_if\.mst\s+chi_if_risc,$")
             self.assertRegex(
@@ -173,7 +173,10 @@ class GenerationTests(unittest.TestCase):
                 core,
                 r"(?m)^\s*output wire \[`LANE_NUM\s+-1:0\]\[`Test_size\s+-1:0\]\s+array,$",
             )
-            self.assertRegex(core, r"(?m)^assign array\s+= '0;$")
+            self.assertRegex(
+                core,
+                r"(?m)^assign array\s+= \{`LANE_NUM\*`Test_size\{1'b0\}\};$",
+            )
             self.assertIn("// 子模块内部连线及 NA 占位信号。", top)
             self.assertIn("// 没有有效子模块驱动的 TOP 输出在当前配置下置零。", top)
             self.assertIn("// 模块占位逻辑：所有输出均置零。", core)
@@ -345,10 +348,10 @@ class GenerationTests(unittest.TestCase):
             ]
             self.assertEqual(len(set(name_columns)), 1)
 
-            self.assertRegex(top, r"(?m)^    \.short\s{7}\(1'b0\s*\),$")
+            self.assertRegex(top, r"(?m)^    \.short\s{7}\(\{1\{1'b0\}\}\s*\),$")
             self.assertRegex(
                 top,
-                r"(?m)^    \.much_longer \(\{8\{1'b0\}\}\s*\),$",
+                r"(?m)^    \.much_longer \(\{WIDTH\{1'b0\}\}\s*\),$",
             )
             connection_lines = [
                 line
@@ -441,8 +444,14 @@ class GenerationTests(unittest.TestCase):
                 top,
                 r"wire\s+\[DEPTH\s+-1:0\]\[DATA_WIDTH\s+-1:0\]\s+w_data;",
             )
-            self.assertRegex(top, r"(?m)^    \.spare \('0\s*\)$")
-            self.assertRegex(source, r"(?m)^assign data\s+= '0;$")
+            self.assertRegex(
+                top,
+                r"(?m)^    \.spare \(\{DEPTH\*DATA_WIDTH\{1'b0\}\}\s*\)$",
+            )
+            self.assertRegex(
+                source,
+                r"(?m)^assign data\s+= \{DEPTH\*DATA_WIDTH\{1'b0\}\};$",
+            )
             self.assertNotIn("gen_zero_data", source)
             self.assertTrue(
                 destination.endswith("/*USER CODE END   before statement*/\nendmodule\n")
@@ -644,8 +653,14 @@ class GenerationTests(unittest.TestCase):
             self.assertRegex(text, r"(?m)^\s*sky_if\.slv\s+bus_if$")
             self.assertRegex(text, r"(?m)^// `define ROWS\s+2$")
             self.assertRegex(text, r"(?m)^// `define COLS\s+8$")
-            self.assertRegex(text, r"(?m)^\s*assign matrix\s+= '0;$")
-            self.assertRegex(text, r"(?m)^assign cube\s+= '0;$")
+            self.assertRegex(
+                text,
+                r"(?m)^\s*assign matrix\s+= \{`ROWS\*`COLS\{1'b0\}\};$",
+            )
+            self.assertRegex(
+                text,
+                r"(?m)^assign cube\s+= \{`A\*`B\*8\{1'b0\}\};$",
+            )
             self.assertNotIn("gen_zero_cube", text)
             self.assertTrue(any("占位值 114" in item.message for item in reporter.items))
 
@@ -840,7 +855,7 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual({path.name for path in paths}, {"top.v", "child.v"})
             text = (output / "top.v").read_text(encoding="utf-8")
-            self.assertIn("assign signal_a = 1'b0;", text)
+            self.assertIn("assign signal_a = {1{1'b0}};", text)
             self.assertRegex(text, r"(?m)^\s*\.signal_a\s+\(signal_a\),$")
             self.assertIn("bus_a", text)
             self.assertIn("bus_b", text)
@@ -874,7 +889,7 @@ class GenerationTests(unittest.TestCase):
             self.assertNotIn("XLSX2VERILOG_INTERNAL_HAVE_CONNECTION", text)
             self.assertRegex(text, r"(?m)^\s*input\s+wire\s+request,$")
             self.assertRegex(text, r"(?m)^\s*output\s+wire \[8\s*-1:0\]\s+response$")
-            self.assertRegex(text, r"(?m)^\s*assign response = 8'b0;$")
+            self.assertRegex(text, r"(?m)^\s*assign response = \{8\{1'b0\}\};$")
             self.assertNotIn("\n\nendmodule", text)
 
     def test_techreview3_groups_conditions_and_local_alignment(self) -> None:
@@ -1186,7 +1201,7 @@ class GenerationTests(unittest.TestCase):
                 r"(?s)`ifdef FEATURE_RESULT\n"
                 r"\s*// Active child output drives this TOP port\.\n"
                 r"\s*// 子模块输出当前有效，不启用备用置零赋值。\n"
-                r"`else\n\s*assign result = 8'b0;\n`endif",
+                r"`else\n\s*assign result = \{8\{1'b0\}\};\n`endif",
             )
             self.assertRegex(text, r"(?m)^\s*\.result\s+\(result\)$")
 

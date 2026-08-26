@@ -22,7 +22,7 @@
 /*USER CODE END   before module*/
 
 module RISCV_TOP #(
-    localparam UID_SIZE = 5
+    parameter  UID_SIZE = 5
 ) (
     // ----- ----- ----- ----- ----- -----
     // clk & rst
@@ -103,10 +103,10 @@ wire [`LANE_NUM -1:0][`Test_size -1:0] w_array;
 // TOP outputs without an active child driver are tied to zero.
 // 没有有效子模块驱动的 TOP 输出在当前配置下置零。
 assign uid        = {UID_SIZE{1'b0}};
-assign ahb_test_3 = 3'b0;
-assign ahb_test_4 = 4'b0;
-assign ahb_test_5 = 5'b0;
-assign ahb_test_6 = 6'b0;
+assign ahb_test_3 = {3{1'b0}};
+assign ahb_test_4 = {4{1'b0}};
+assign ahb_test_5 = {5{1'b0}};
+assign ahb_test_6 = {6{1'b0}};
 
 /*USER CODE BEGIN before RISCV_CORE_TEST*/
 
@@ -117,8 +117,8 @@ RISCV_CORE_TEST U_RISCV_CORE_TEST (
     .dft_test_en          (dft_test_en         ),
     .dft_out_en           (dft_out_en          ),
     .uid                  (uid                 ),
-    .ahb_test_1           (1'b0                ),
-    .ahb_test_2           (2'b0                ),
+    .ahb_test_1           ({1{1'b0}}           ),
+    .ahb_test_2           ({2{1'b0}}           ),
     .ahb_test_3           (                    ),
     .ahb_test_4           (                    ),
     .ahb_test_5           (                    ),
@@ -171,8 +171,8 @@ MEM_PHY U_MEM_PHY (
     .apb_4               (w_apb_4            ),
     .apb_5               (w_apb_5            ),
     .apb_6               (w_apb_6            ),
-    .ahb_test_1          (1'b0               ),
-    .ahb_test_2          (2'b0               ),
+    .ahb_test_1          ({1{1'b0}}          ),
+    .ahb_test_2          ({2{1'b0}}          ),
     .ahb_test_3          (                   ),
     .ahb_test_4          (                   ),
     .ahb_test_5          (                   ),

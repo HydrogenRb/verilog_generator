@@ -21,7 +21,10 @@ import re
 from typing import Iterable
 
 
-VERSION = "Version V3.31"
+VERSION = "Version V3.4"
+# 默认生产目标。填写例如 ``../../rtl/`` 后，CLI 可以只传新代码路径。
+# 保持为 None 时仍要求显式传入 target_project。
+DEFAULT_TARGET_PROJECT: str | Path | None = None
 DEFAULT_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
 USER_CODE_MARKER_RE = re.compile(
     r"(?m)^[ \t]*/\*USER CODE (BEGIN|END)[ \t]+(.+?)[ \t]*\*/[ \t]*\r?$"
@@ -953,13 +956,47 @@ def _source_files(source: Path) -> list[tuple[Path, Path]]:
     )
 
 
+def _recursive_target_index(target: Path) -> dict[str, Path]:
+    """Index a production tree by case-insensitive file name.
+
+    V3.4 deliberately uses the file name as the target key.  Any duplicate is
+    rejected before merge planning because selecting one path would be unsafe.
+    """
+    by_name: dict[str, list[Path]] = {}
+    for path in target.rglob("*"):
+        if path.suffix.casefold() not in DEFAULT_SUFFIXES:
+            continue
+        if not (path.is_file() or path.is_symlink()):
+            continue
+        by_name.setdefault(path.name.casefold(), []).append(path)
+    duplicates = {
+        name: sorted(paths, key=lambda item: str(item).casefold())
+        for name, paths in by_name.items()
+        if len(paths) > 1
+    }
+    if duplicates:
+        details = "；".join(
+            f"{paths[0].name}: " + "、".join(str(path) for path in paths)
+            for paths in duplicates.values()
+        )
+        raise MergeError(f"目标目录中存在重名 Verilog 文件，无法按文件名定位：{details}")
+    return {name: paths[0] for name, paths in by_name.items()}
+
+
 def _target_for_source(
     source_is_file: bool,
     target: Path,
     relative_path: Path,
+    target_index: dict[str, Path] | None = None,
 ) -> Path:
+    if target.is_dir():
+        if target_index is not None:
+            matched = target_index.get(relative_path.name.casefold())
+            if matched is not None:
+                return matched
+        return target / (relative_path.name if source_is_file else relative_path)
     if source_is_file:
-        return target / relative_path.name if target.is_dir() else target
+        return target
     if target.exists() and not target.is_dir():
         raise MergeError("源路径是目录时，目标路径也必须是目录")
     return target / relative_path
@@ -982,11 +1019,26 @@ def build_merge_plan(
 
     source_files = _source_files(source)
     source_is_file = source.is_file()
+    source_names: dict[str, list[Path]] = {}
+    for _, source_path in source_files:
+        source_names.setdefault(source_path.name.casefold(), []).append(source_path)
+    duplicate_sources = {
+        name: paths for name, paths in source_names.items() if len(paths) > 1
+    }
+    if duplicate_sources:
+        details = "；".join(
+            f"{paths[0].name}: " + "、".join(str(path) for path in paths)
+            for paths in duplicate_sources.values()
+        )
+        raise MergeError(f"新代码中存在重名 Verilog 文件，文件名键不唯一：{details}")
+    target_index = _recursive_target_index(target) if target.is_dir() else None
     plan: list[MergeEntry] = []
     diagnostics: list[Diagnostic] = []
     seen_targets: dict[str, Path] = {}
     for relative_path, source_path in source_files:
-        target_path = _target_for_source(source_is_file, target, relative_path)
+        target_path = _target_for_source(
+            source_is_file, target, relative_path, target_index
+        )
         if _resolved(source_path) == _resolved(target_path):
             raise MergeError(f"源文件与目标文件不能相同: {source_path}")
         if not source_is_file and not _is_within(_resolved(target_path), target):
@@ -1002,6 +1054,9 @@ def build_merge_plan(
         if target_path.is_symlink():
             raise MergeError(f"拒绝覆盖符号链接: {target_path}")
 
+        target_relative_path = (
+            target_path.relative_to(target) if target.is_dir() else relative_path
+        )
         new_text, _ = _read_utf8(source_path)
         original_bytes: bytes | None = None
         original_mode: int | None = None
@@ -1011,28 +1066,33 @@ def build_merge_plan(
             existing_text, original_bytes = _read_utf8(target_path)
             original_mode = stat.S_IMODE(target_path.stat().st_mode)
             merged_text, file_diagnostics = merge_verilog_text(
-                new_text, existing_text, relative_path.as_posix()
+                new_text, existing_text, target_relative_path.as_posix()
             )
             diagnostics.extend(file_diagnostics)
         else:
             # Validate source markers even for newly created files.
-            parse_user_code_regions(new_text, f"新文件 {relative_path.as_posix()}")
+            parse_user_code_regions(
+                new_text, f"新文件 {target_relative_path.as_posix()}"
+            )
             merged_text = new_text
             diagnostics.append(
-                Diagnostic("info", f"{relative_path.as_posix()}: 目标中不存在，将新建")
+                Diagnostic(
+                    "info",
+                    f"{target_relative_path.as_posix()}: 目标中不存在，将新建",
+                )
             )
         changed = original_bytes is None or merged_text.encode("utf-8") != original_bytes
         if original_bytes is not None:
             diagnostics.append(
                 Diagnostic(
                     "info",
-                    f"{relative_path.as_posix()}: "
+                    f"{target_relative_path.as_posix()}: "
                     + ("将覆盖目标文件" if changed else "合并后内容不变"),
                 )
             )
         plan.append(
             MergeEntry(
-                relative_path,
+                target_relative_path,
                 source_path,
                 target_path,
                 merged_text,
@@ -1211,7 +1271,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("new_generated", type=Path, help="新的 .v/.sv 文件或生成目录")
-    parser.add_argument("target_project", type=Path, help="要更新的已有文件或项目目录")
+    parser.add_argument(
+        "target_project",
+        type=Path,
+        nargs="?",
+        help="要更新的已有文件或项目目录；省略时使用文件顶部 DEFAULT_TARGET_PROJECT",
+    )
     parser.add_argument("--check", action="store_true", help="只检查并显示计划，不写文件")
     parser.add_argument("--no-backup", action="store_true", help="不保留持久备份；失败回滚仍有效")
     parser.add_argument("--backup-dir", type=Path, help="指定备份根目录")
@@ -1237,10 +1302,20 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.no_backup and args.backup_dir is not None:
         print("error[--no-backup 与 --backup-dir 不能同时使用]", file=sys.stderr)
         return 2
+    target_project = args.target_project
+    if target_project is None:
+        if DEFAULT_TARGET_PROJECT is None or not str(DEFAULT_TARGET_PROJECT).strip():
+            print(
+                "error[未传入 target_project，且文件顶部 DEFAULT_TARGET_PROJECT 未配置]",
+                file=sys.stderr,
+            )
+            return 2
+        target_project = Path(DEFAULT_TARGET_PROJECT)
+        print(f"info[使用文件顶部默认生产目标: {target_project}]")
     try:
         result = merge_paths(
             args.new_generated,
-            args.target_project,
+            target_project,
             check_only=args.check,
             create_backup=not args.no_backup,
             backup_directory=args.backup_dir,

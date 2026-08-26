@@ -281,7 +281,7 @@ class Version3TechReview3Tests(unittest.TestCase):
             )
             self.assertNotRegex(top, r"\.done\s+\(done\)")
             self.assertRegex(top, r"\.done\s+\(\s*\)")
-            self.assertRegex(top, r"assign\s+done\s+= 1'b0;")
+            self.assertRegex(top, r"assign\s+done\s+= \{1\{1'b0\}\};")
 
 
 if __name__ == "__main__":

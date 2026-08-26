@@ -1,6 +1,6 @@
-# xlsx2verilog_merger V3.31
+# xlsx2verilog_merger V3.4
 
-`xlsx2verilog_merger.py`是独立、零第三方依赖的 Verilog 合并工具，与主生成器共用`Version V3.31`。它不读取 XLSX，也不导入`xlsx2verilog.py`：主生成器负责产生“新版本生成目录”，merger 负责把该目录安全更新到已有生产工程。
+`xlsx2verilog_merger.py`是独立、零第三方依赖的 Verilog 合并工具，与主生成器共用`Version V3.4`。它不读取 XLSX，也不导入`xlsx2verilog.py`：主生成器负责产生“新版本生成目录”，merger 负责把该目录安全更新到已有生产工程。
 
 ## 合并契约
 
@@ -45,7 +45,8 @@ input wire [7:0] sig_c;           //USER: 保留整行声明
 - 默认备份位于新代码侧，而不是生产工程侧：`<新生成路径名>.xlsx2verilog_merger_backup/<时间戳>/`。只备份将被覆盖的旧生产文件，新建文件不伪造备份。
 - `--backup-dir`指定的目录必须同时位于新生成路径和目标生产路径之外；`--no-backup`只关闭持久备份，不关闭事务回滚。
 - 新生成路径不得位于目标生产项目内部，目标项目也不得位于新生成目录内部。
-- 目录计划只遍历新生成侧：新文件会创建，目标中没有对应新文件的旧文件不会删除。
+- 目标为目录时递归扫描全部支持的 Verilog 文件，并以不区分大小写的文件名作为唯一键；同名文件会在计划阶段列出文件名和全部路径并拒绝合并。
+- 新代码中也不允许出现同名 Verilog 文件。唯一目标可以位于生产树任意子目录；没有同名目标的新文件按新代码相对路径创建，生产侧其余旧文件不会删除。
 - 只处理`.v`、`.sv`、`.vh`和`.svh`；拒绝覆盖符号链接。
 - 每条保留或替换都会输出简短`info[...]`日志，包括关键字迁移、`//USER:`整行迁移、USER 段保留、目标文件覆盖/新建/不变、旧文件备份和结果写入。`--check`会打印计划与保留日志，但不会打印实际备份/写入日志。
 
@@ -55,7 +56,7 @@ input wire [7:0] sig_c;           //USER: 保留整行声明
 # 先生成新代码；输出目录必须与生产工程分开
 py.exe .\xlsx2verilog.py .\design.xlsx --integration 集成_TOP -o .\new_generated
 
-# 查看 V3.31 版本
+# 查看 V3.4 版本
 py.exe .\appendix\xlsx2verilog_merger.py --version
 
 # 只检查合并计划，不写文件
@@ -64,6 +65,9 @@ py.exe .\appendix\xlsx2verilog_merger.py .\new_generated .\rtl_project --check
 # 合并；默认备份建立在 new_generated 的同级新代码侧目录
 py.exe .\appendix\xlsx2verilog_merger.py .\new_generated .\rtl_project
 
+# 高频使用：先在脚本顶部配置 DEFAULT_TARGET_PROJECT，再只传新代码路径
+py.exe .\appendix\xlsx2verilog_merger.py .\new_generated
+
 # 自定义备份目录
 py.exe .\appendix\xlsx2verilog_merger.py .\new_generated .\rtl_project --backup-dir .\backup\before_merge
 
@@ -71,13 +75,13 @@ py.exe .\appendix\xlsx2verilog_merger.py .\new_generated .\rtl_project --backup-
 py.exe .\appendix\xlsx2verilog_merger.py .\new_generated .\rtl_project --no-backup
 ```
 
-参数顺序固定为“新生成内容 → 已有生产项目”。源和目标都可以是单个 Verilog 文件；源为目录时，目标必须是目录。成功返回`0`，标记/路径/合并契约校验失败返回`2`，文件系统错误返回`3`。
+参数顺序固定为“新生成内容 → 已有生产项目”。源和目标都可以是单个 Verilog 文件；源为目录时，目标必须是目录。第二参数省略时读取脚本顶部的`DEFAULT_TARGET_PROJECT`；该值仍为`None`或空字符串时明确报错，不会猜测生产路径。成功返回`0`，标记/路径/合并契约校验失败返回`2`，文件系统错误返回`3`。
 
 ## 架构与结构变化
 
 merger 不是完整 Verilog parser，而是面向生成器固定格式的保守文本合并器，分为“计划”和“执行”两阶段：
 
-1. 计划阶段遍历新生成文件，以相对路径定位生产目标；解析 USER 段、模块、单行声明、参数、assign 和命名端口连接；逐层迁移旧决策，并在每层替换后重新解析位置。
+1. 计划阶段遍历新生成文件，并以文件名索引递归定位唯一生产目标；解析 USER 段、模块、单行声明、参数、assign 和命名端口连接；逐层迁移旧决策，并在每层替换后重新解析位置。
 2. 任一文件缺键、歧义或协议损坏时终止，生产目录保持不变。
 3. 执行阶段在新代码侧建立备份，把全部结果暂存到各目标同目录，然后原子替换；异常时按旧字节逆序回滚。
 
@@ -99,4 +103,4 @@ merger 不是完整 Verilog parser，而是面向生成器固定格式的保守�
 py.exe -m unittest discover -s appendix\tests -v
 ```
 
-测试覆盖 USER 段、`wire/reg`、`localparam/parameter`、活动/注释 assign、活动/注释声明、活动/注释实例端口连接、缺失/歧义保护、逐项日志、check-only、新代码侧备份、事务回滚，以及第 14 号真实样例的结构覆盖。
+测试覆盖 USER 段、`wire/reg`、`localparam/parameter`、活动/注释 assign、活动/注释声明、活动/注释实例端口连接、缺失/歧义保护、递归唯一目标、目标重名拒绝、文件顶部默认目标、逐项日志、check-only、新代码侧备份、事务回滚，以及第 14 号真实样例的结构覆盖。

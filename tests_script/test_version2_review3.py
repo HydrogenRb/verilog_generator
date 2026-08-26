@@ -247,7 +247,8 @@ class Version2TechReview3Tests(unittest.TestCase):
                 self.assertIn(f"dyadic_bus_out_{suffix}", top)
                 self.assertRegex(
                     top,
-                    rf"(?m)^assign\s+dyadic_bus_out_{suffix}\s*=\s*'0;",
+                    rf"(?m)^assign\s+dyadic_bus_out_{suffix}\s*=\s*"
+                    rf"\{{BUS_OUT_{suffix.upper()}\*DW\*BUS\{{1'b0\}}\}};",
                 )
 
     def test_na_endpoint_may_omit_module_name_and_headers(self) -> None:

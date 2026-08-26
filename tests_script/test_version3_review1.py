@@ -253,7 +253,7 @@ class Version3TechReview1Tests(unittest.TestCase):
                 text,
                 r"(?m)^assign all_bits\s+= \{A\*B\{1'b1\}\};$",
             )
-            self.assertRegex(text, r"\.data_in\s+\(\{5\*6\{1'b1\}\}\)")
+            self.assertRegex(text, r"\.data_in\s+\(\{X\*Y\{1'b1\}\}\)")
 
     def test_named_na_works_for_top_and_single_real_module_groups(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -329,7 +329,7 @@ class Version3TechReview1Tests(unittest.TestCase):
                 r"(?m)^assign status_alias\s+= status;\s+"
                 r"//TODO:本信号期望有逻辑功能，请完成$",
             )
-            self.assertRegex(text, r"\.data_in\s+\(4'b0\s*\)")
+            self.assertRegex(text, r"\.data_in\s+\(\{4\{1'b0\}\}\s*\)")
             self.assertRegex(
                 text,
                 r"\.data_out\s+\(child_probe\s*\),?\s+"

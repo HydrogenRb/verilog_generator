@@ -4,6 +4,8 @@ import re
 import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -158,9 +160,82 @@ class MergerUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(MergeError, "匹配到 2 条"):
             merge_verilog_text(duplicated_port, old_port, "ambiguous-port.v")
 
-    def test_main_and_merger_versions_are_v331(self) -> None:
-        self.assertEqual(SCRIPT_VERSION, "Version V3.31")
+    def test_main_and_merger_versions_are_v34(self) -> None:
+        self.assertEqual(SCRIPT_VERSION, "Version V3.4")
         self.assertEqual(merger.VERSION, SCRIPT_VERSION)
+
+    def test_v34_recursively_matches_unique_target_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "new"
+            target = root / "production"
+            nested = target / "rtl" / "core"
+            source.mkdir()
+            nested.mkdir(parents=True)
+            (source / "top.v").write_text(
+                verilog("wire new_generated;"), encoding="utf-8"
+            )
+            (nested / "top.v").write_text(
+                verilog("wire old_generated;"), encoding="utf-8"
+            )
+
+            result = merge_paths(source, target, create_backup=False)
+            self.assertIn("wire new_generated;", (nested / "top.v").read_text(encoding="utf-8"))
+            self.assertFalse((target / "top.v").exists())
+            self.assertEqual(result.changed, [(nested / "top.v").resolve()])
+
+    def test_v34_recursive_target_duplicate_reports_every_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "new"
+            target = root / "production"
+            source.mkdir()
+            (target / "a").mkdir(parents=True)
+            (target / "b").mkdir(parents=True)
+            (source / "top.v").write_text(verilog("wire next;"), encoding="utf-8")
+            first = target / "a" / "top.v"
+            second = target / "b" / "TOP.V"
+            first.write_text(verilog("wire first;"), encoding="utf-8")
+            second.write_text(verilog("wire second;"), encoding="utf-8")
+
+            with self.assertRaises(MergeError) as caught:
+                merge_paths(source, target, check_only=True)
+            message = str(caught.exception)
+            self.assertIn("重名", message)
+            self.assertIn(str(first.resolve()), message)
+            self.assertIn(str(second.resolve()), message)
+
+    def test_v34_cli_uses_configured_default_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "new"
+            target = root / "production"
+            source.mkdir()
+            target.mkdir()
+            (source / "top.v").write_text(verilog("wire next;"), encoding="utf-8")
+            (target / "top.v").write_text(verilog("wire old;"), encoding="utf-8")
+            output = StringIO()
+            errors = StringIO()
+            with (
+                patch.object(merger, "DEFAULT_TARGET_PROJECT", target),
+                redirect_stdout(output),
+                redirect_stderr(errors),
+            ):
+                code = merger.main([str(source), "--check"])
+            self.assertEqual(code, 0, errors.getvalue())
+            self.assertIn("使用文件顶部默认生产目标", output.getvalue())
+            self.assertIn("检查完成", output.getvalue())
+
+            output = StringIO()
+            errors = StringIO()
+            with (
+                patch.object(merger, "DEFAULT_TARGET_PROJECT", None),
+                redirect_stdout(output),
+                redirect_stderr(errors),
+            ):
+                code = merger.main([str(source), "--check"])
+            self.assertEqual(code, 2)
+            self.assertIn("DEFAULT_TARGET_PROJECT 未配置", errors.getvalue())
 
     def test_added_and_removed_instances_follow_the_new_structure(self) -> None:
         old = (
