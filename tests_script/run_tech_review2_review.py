@@ -54,10 +54,10 @@ def feature_round() -> tuple[RoundResult, list[Path], Reporter]:
     )
     result.check(
         not reporter.has_errors,
-        "main_test.xlsx 无错误生成 3 个模块",
+        "main_test.xlsx 无错误生成 4 个模块",
         "main_test.xlsx 生成失败",
     )
-    result.check(len(paths) == 3, "生成文件数为 3", f"生成文件数错误：{len(paths)}")
+    result.check(len(paths) == 4, "生成文件数为 4", f"生成文件数错误：{len(paths)}")
     top = (SAMPLE_OUTPUT / "riscv_top.v").read_text(encoding="utf-8") if paths else ""
     core = (
         (SAMPLE_OUTPUT / "riscv_core_test.v").read_text(encoding="utf-8")
@@ -220,13 +220,27 @@ def static_round(paths: list[Path]) -> RoundResult:
         ).read_text(encoding="utf-8")
         for child_name in integration.child_names:
             child = modules[child_name]
+            child_instance = next(
+                (
+                    item
+                    for item in integration.child_instances
+                    if item.module_name == child_name
+                ),
+                None,
+            )
+            configured = integration.instance_specs.get(child_name)
+            instance_name = (
+                (child_instance.label_instance_name if child_instance else None)
+                or (configured.instance_name if configured else None)
+                or f"U_{child_name.upper()}"
+            )
             match = re.search(
-                rf"\bU_{re.escape(child_name.upper())}\s*\((.*?)\n\s*\);",
+                rf"\b{re.escape(instance_name)}\s*\((.*?)\n\s*\);",
                 top,
                 re.S,
             )
             if not match:
-                result.problems.append(f"缺少实例 U_{child_name.upper()}")
+                result.problems.append(f"缺少实例 {instance_name}")
                 continue
             body = match.group(1)
             duplicates = [

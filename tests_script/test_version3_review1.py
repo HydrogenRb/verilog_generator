@@ -83,7 +83,7 @@ class Version3TechReview1Tests(unittest.TestCase):
             self.assertNotIn("\n    // 子模块内部连线及 NA 占位信号。", top)
             self.assertRegex(top, r"(?m)^wire\s+\[DW_SIG3\s+-1:0\]\s+ready_test_process;")
 
-            self.assertIn("MEM_DAT PROJECT_PERSONAL_MEM_DAT (", top)
+            self.assertIn(") PROJECT_PERSONAL_MEM_DAT (", top)
             self.assertIn("genvar i_gen_u_riscv_crg;", top)
             self.assertIn(
                 "for (i_gen_u_riscv_crg = 0; i_gen_u_riscv_crg < 10;",

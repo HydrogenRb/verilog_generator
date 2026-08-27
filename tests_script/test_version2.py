@@ -43,7 +43,7 @@ class Version2GenerationTests(unittest.TestCase):
             mem_instance = top[top.index("U_MEM_PHY") :]
             self.assertNotIn(".test_bus_sig3_dat", mem_instance)
 
-    def test_child_parameters_stay_local_without_explicit_links(self) -> None:
+    def test_child_width_parameter_is_localized_when_top_wire_uses_it(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workbook = root / "parameter-v2.xlsx"
@@ -69,19 +69,20 @@ class Version2GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertFalse(any("位宽不匹配" in item.message for item in reporter.items))
             top = (output / "top.v").read_text(encoding="utf-8")
-            self.assertNotIn("localparam", top)
-            self.assertNotIn(".WIDTH", top)
+            self.assertRegex(top, r"(?m)^localparam\s+WIDTH\s+= 8;$")
+            self.assertNotRegex(top, r"module TOP #\(")
+            self.assertRegex(top, r"\.WIDTH\s+\(WIDTH\s*\)")
             self.assertRegex(top, r"wire \[WIDTH\s+-1:0\]\s+w_payload;")
             self.assertTrue(
                 any(
-                    item.code == "W_PARAMETER_NOT_EXPORTED"
+                    item.code == "W_PARAMETER_AUTO_LOCAL"
                     and "SOURCE.WIDTH" in item.message
                     for item in reporter.items
                 )
             )
             source = (output / "source.v").read_text(encoding="utf-8")
             sink = (output / "sink.v").read_text(encoding="utf-8")
-            self.assertRegex(source, r"localparam\s+WIDTH\s+= 8")
+            self.assertRegex(source, r"parameter\s+WIDTH\s+= 8")
             self.assertRegex(sink, r"localparam\s+WIDTH\s+= 4")
 
     def test_internal_literal_width_uses_maximum_low_bits_and_zero_fill(self) -> None:

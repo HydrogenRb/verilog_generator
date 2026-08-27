@@ -43,6 +43,7 @@ class ReaderTests(unittest.TestCase):
                 "RISCV_TOP",
                 "RISCV_CORE_TEST",
                 "MEM_PHY",
+                "Gen_phy",
             ],
         )
         self.assertEqual(workbook.by_name("RISCV_TOP").cell(1, 2), "RISCV_TOP")
@@ -53,11 +54,15 @@ class ReaderTests(unittest.TestCase):
             SAMPLE, reporter, integration_sheet=SAMPLE_INTEGRATION
         )
         self.assertFalse(reporter.has_errors)
-        self.assertEqual(set(modules), {"RISCV_TOP", "RISCV_CORE_TEST", "MEM_PHY"})
+        self.assertEqual(
+            set(modules), {"RISCV_TOP", "RISCV_CORE_TEST", "MEM_PHY", "GEN_PHY"}
+        )
         self.assertIsNotNone(integration)
         assert integration is not None
         self.assertEqual(integration.top_name, "RISCV_TOP")
-        self.assertEqual(integration.child_names, ["RISCV_CORE_TEST", "MEM_PHY"])
+        self.assertEqual(
+            integration.child_names, ["RISCV_CORE_TEST", "MEM_PHY", "GEN_PHY"]
+        )
         self.assertFalse(any("重复" in item.message for item in reporter.items))
 
         top = modules["RISCV_TOP"]
@@ -140,18 +145,27 @@ class GenerationTests(unittest.TestCase):
             )
             self.assertEqual(
                 {path.name for path in paths},
-                {"riscv_top.v", "riscv_core_test.v", "mem_phy.v"},
+                {"riscv_top.v", "riscv_core_test.v", "mem_phy.v", "gen_phy.v"},
             )
             top = (output / "riscv_top.v").read_text(encoding="utf-8")
             core = (output / "riscv_core_test.v").read_text(encoding="utf-8")
             phy = (output / "mem_phy.v").read_text(encoding="utf-8")
+            gen_phy = (output / "gen_phy.v").read_text(encoding="utf-8")
 
             self.assertRegex(top, r"(?m)^\s*localparam\s+UID_SIZE\s+= 5")
             self.assertRegex(top, r"(?m)^// `define DFT_BUS\s+64$")
             self.assertRegex(top, r"(?m)^\s*wire\s+.*\bw_apb_1;$")
             self.assertRegex(top, r"(?m)^\s*wire\s+.*\bw_apb_6;$")
-            self.assertIn("RISCV_CORE_TEST U_RISCV_CORE_TEST (", top)
-            self.assertIn("MEM_PHY U_MEM_PHY (", top)
+            self.assertIn(") U_RISCV_CORE_TEST (", top)
+            self.assertIn(") U_MEM_PHY (", top)
+            self.assertIn(") GEN_PHY_U (", top)
+            self.assertRegex(top, r"(?m)^localparam PARAMTER\s+= 10;$")
+            self.assertNotRegex(top, r"(?m)^\s*parameter\s+PARAMTER\s+=")
+            self.assertRegex(
+                top,
+                r"(?m)^localparam \[8 -1:0\]\[32 -1:0\] "
+                r"LOCAL_GEN_VAR_1\s+= '\{default: 1\};$",
+            )
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_1\s+\(\{1\{1'b0\}\}\s*\),$")
             self.assertRegex(top, r"(?m)^\s*\.ahb_test_3\s+\(\s*\),$")
             self.assertRegex(top, r"(?m)^assign ahb_test_6\s+= \{6\{1'b0\}\};$")
@@ -247,7 +261,7 @@ class GenerationTests(unittest.TestCase):
                         1,
                     )
 
-            for content in (top, core, phy):
+            for content in (top, core, phy, gen_phy):
                 self.assertEqual(content.count("module "), 1)
                 self.assertEqual(content.count("endmodule"), 1)
                 self.assertEqual(content.count("("), content.count(")"))
@@ -277,7 +291,7 @@ class GenerationTests(unittest.TestCase):
                 integration_sheet=SAMPLE_INTEGRATION,
             )
             self.assertFalse(reporter.has_errors)
-            self.assertEqual(len(paths), 3)
+            self.assertEqual(len(paths), 4)
             self.assertFalse(output.exists())
 
     def test_module_and_instance_fields_are_column_aligned(self) -> None:
@@ -1267,8 +1281,8 @@ class GenerationTests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual({path.name for path in paths}, {"top.v", "source.v", "sink.v"})
             text = (output / "top.v").read_text(encoding="utf-8")
-            self.assertNotIn("localparam", text)
-            self.assertIn("SOURCE U_SOURCE (", text)
+            self.assertRegex(text, r"(?m)^localparam\s+WIDTH\s+= 8;$")
+            self.assertIn(") U_SOURCE (", text)
             self.assertNotIn("module:SOURCE", text)
             wire_lines = [
                 line for line in text.splitlines() if re.match(r"^\s*wire\b", line)

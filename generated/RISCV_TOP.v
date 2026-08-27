@@ -22,7 +22,7 @@
 /*USER CODE END   before module*/
 
 module RISCV_TOP #(
-    parameter  UID_SIZE = 5
+    localparam UID_SIZE = 5
 ) (
     // ----- ----- ----- ----- ----- -----
     // clk & rst
@@ -90,6 +90,13 @@ module RISCV_TOP #(
 
 /*USER CODE END   before statement*/
 
+// Integration-local parameters for NA and child-owned widths.
+// parameter NA 及子模块位宽上拉创建的 TOP 语句区局部参数。
+localparam [8 -1:0][32 -1:0] LOCAL_GEN_VAR_1 = '{default: 1};
+localparam [8 -1:0][32 -1:0] LOCAL_GEN_VAR_2 = '{1,2,3,4,5,6,7,8};
+localparam LANE_NUM        = 1;
+localparam PARAMTER        = 10;
+
 // Internal connections and NA placeholder signals.
 // 子模块内部连线及 NA 占位信号。
 wire                                   w_apb_1;
@@ -99,6 +106,9 @@ wire [LANE_NUM  -1:0]                  w_apb_4;
 wire [LANE_NUM  -1:0]                  w_apb_5;
 wire [LANE_NUM  -1:0]                  w_apb_6;
 wire [`LANE_NUM -1:0][`Test_size -1:0] w_array;
+wire [PARAMTER  -1:0]                  parameter_test;
+wire                                   dat_in;
+wire                                   sig_out;
 
 // TOP outputs without an active child driver are tied to zero.
 // 没有有效子模块驱动的 TOP 输出在当前配置下置零。
@@ -111,7 +121,9 @@ assign ahb_test_6 = {6{1'b0}};
 /*USER CODE BEGIN before RISCV_CORE_TEST*/
 
 /*USER CODE END   before RISCV_CORE_TEST*/
-RISCV_CORE_TEST U_RISCV_CORE_TEST (
+RISCV_CORE_TEST #(
+    .LANE_NUM (LANE_NUM)
+) U_RISCV_CORE_TEST (
     .n_rst                (n_rst               ),
     .clk                  (clk                 ),
     .dft_test_en          (dft_test_en         ),
@@ -157,7 +169,9 @@ RISCV_CORE_TEST U_RISCV_CORE_TEST (
 /*USER CODE BEGIN before MEM_PHY*/
 
 /*USER CODE END   before MEM_PHY*/
-MEM_PHY U_MEM_PHY (
+MEM_PHY #(
+    .PARAMTER (PARAMTER)
+) U_MEM_PHY (
     .n_rst               (n_rst              ),
     .clk                 (clk                ),
     .dft_bus             (dft_bus            ),
@@ -185,10 +199,31 @@ MEM_PHY U_MEM_PHY (
     .test_bus_sig1_valid (test_bus_sig1_valid),
     .test_bus_sig2_valid (test_bus_sig2_valid),
     .test_bus_sig3_valid (test_bus_sig3_valid),
-    .array               (w_array            )
+    .array               (w_array            ),
+    .parameter_test      (parameter_test     ) //TODO:本信号期望有逻辑功能，请完成
 );
 
 /*USER CODE BEGIN after MEM_PHY*/
 
 /*USER CODE END   after MEM_PHY*/
+
+/*USER CODE BEGIN before GEN_PHY*/
+
+/*USER CODE END   before GEN_PHY*/
+genvar i_gen_gen_phy_u;
+generate
+for (i_gen_gen_phy_u = 0; i_gen_gen_phy_u < 8; i_gen_gen_phy_u = i_gen_gen_phy_u + 1) begin : G_GEN_PHY_U
+GEN_PHY #(
+    .GEN_VAR_1 (LOCAL_GEN_VAR_1[i_gen_gen_phy_u]),
+    .GEN_VAR_2 (LOCAL_GEN_VAR_2[i_gen_gen_phy_u])
+) GEN_PHY_U (
+    .dat_in  (dat_in ), //TODO:本信号期望有逻辑功能，请完成
+    .sig_out (sig_out) //TODO:本信号期望有逻辑功能，请完成
+);
+end
+endgenerate
+
+/*USER CODE BEGIN after GEN_PHY*/
+
+/*USER CODE END   after GEN_PHY*/
 endmodule

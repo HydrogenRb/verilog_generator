@@ -78,7 +78,9 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "W_WIDTH_MISMATCH": True,  # 位宽不匹配：显示相连信号的形状差异。
     "W_ZERO_WIDTH": True,  # 零位宽：显示已生成 [0 -1:0] 但需确认工具链行为。
     "W_NA_CONSTANT_WIDTH": True,  # NA 常量：显示定宽常量大于目标或无法安全匹配。
-    "W_PARAMETER_NOT_EXPORTED": True,  # 参数未上拉：TOP wire 使用了未显式链接的子模块 parameter。
+    "W_PARAMETER_NOT_EXPORTED": True,  # 参数未上拉：例化次数等位置引用了 TOP 中不存在的 parameter。
+    "W_PARAMETER_AUTO_LOCAL": True,  # 参数自动局部化：子模块位宽 parameter 未显式链接，TOP 正文已创建 localparam。
+    "W_PARAMETER_NA_REPAIR": True,  # parameter NA 初始化修复：逗号列表含空项，已忽略空项并继续校验元素数。
     "W_TEMPLATE_REPAIR": True,  # 模板修复：显示自动修复的花括号内容。
     "W_TEMPLATE_BINDING": True,  # 模板绑定：显示变量无法可靠对应的问题。
     "W_IO_DEFAULTED": True,  # 方向推断风险：显示空或非法 i/o 的处理结果。
@@ -100,8 +102,8 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.4"
-SCRIPT_RELEASE_DATE = "2026.8.26"
+SCRIPT_VERSION = "Version V3.45"
+SCRIPT_RELEASE_DATE = "2026.8.27"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
 
@@ -130,10 +132,17 @@ MACRO_TEMPLATE_TOKEN_RE = re.compile(
 MISSING_TEMPLATE_OPEN_RE = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 MISSING_TEMPLATE_CLOSE_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})")
 UNKNOWN_WIDTH = 114
+# parameter 分类中的 NA[i]->NAME 会生成 packed 常量数组；每个元素默认
+# 使用 32 bit，便于容纳普通整数、宏和 parameter 表达式。
+PARAMETER_NA_ELEMENT_WIDTH = 32
 IGNORED_COLUMN_HEADERS = {"修改", "修改列"}
 GROUP_SEPARATOR = "// ----- ----- ----- ----- ----- -----"
 NO_GROUP = "no group"
 MODULE_LABEL_RE = re.compile(r"^module\s*[:：]\s*(.+)$", re.IGNORECASE)
+INSTANCE_LABEL_RE = re.compile(
+    r"\s+例化名\s*[:：]\s*([A-Za-z_][A-Za-z0-9_$]*)\s*$",
+    re.IGNORECASE,
+)
 CONDITION_CATEGORY_RE = re.compile(
     r"条件\s*[:：]\s*`?\s*([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE
 )
@@ -533,6 +542,23 @@ class IntegrationBlock:
     direction_column: int
     anonymous_na: bool = False
     commented: bool = False
+    label_instance_name: str | None = None
+
+
+@dataclass(frozen=True)
+class IntegrationChild:
+    """One child instance endpoint in an integration sheet.
+
+    ``module_name`` identifies the generated Verilog module type. ``key`` is
+    the internal identity used to keep multiple instances of the same module
+    independent.  Old workbooks without an inline instance label retain the
+    module name as their key.
+    """
+
+    key: str
+    module_name: str
+    label_instance_name: str | None = None
+    commented: bool = False
 
 
 @dataclass(frozen=True)
@@ -553,6 +579,15 @@ class Integration:
     child_names: list[str]
     instance_specs: dict[str, InstanceSpec] = field(default_factory=dict)
     commented_child_names: set[str] = field(default_factory=set)
+    child_instances: list[IntegrationChild] = field(default_factory=list)
+
+
+def integration_block_key(block: IntegrationBlock, top_name: str) -> str:
+    if block.anonymous_na or block.module_name == top_name:
+        return block.module_name
+    if block.label_instance_name:
+        return f"{block.module_name}::{block.label_instance_name}"
+    return block.module_name
 
 
 def integration_parameter_rows(
@@ -1093,7 +1128,10 @@ def normalize_parameter_expression(
         if kind == "macro":
             token = token
         elif kind == "identifier":
-            token = token.upper()
+            # ``default`` is a case-sensitive SystemVerilog assignment-pattern
+            # keyword. Other identifiers keep the generator's parameter-name
+            # normalization rule.
+            token = "default" if token.casefold() == "default" else token.upper()
         elif kind == "operator":
             if token in "([{":
                 delimiters.append(token)
@@ -1167,8 +1205,8 @@ def find_module_header(sheet: Sheet) -> tuple[int, dict[str, int]] | None:
     return None
 
 
-def parse_module_label(value: Any) -> tuple[str, bool]:
-    """Return a module name and its integration-level ``*注释*`` flag."""
+def parse_module_label_details(value: Any) -> tuple[str, bool, str | None]:
+    """Return module type, comment flag, and an inline instance override."""
     text = clean(value)
     match = MODULE_LABEL_RE.fullmatch(text)
     if match is not None:
@@ -1176,7 +1214,17 @@ def parse_module_label(value: Any) -> tuple[str, bool]:
     commented = COMMENT_ROW_RE.search(text) is not None
     if commented:
         text = COMMENT_ROW_RE.sub("", text).strip()
-    return text, commented
+    instance_match = INSTANCE_LABEL_RE.search(text)
+    instance_name = instance_match.group(1) if instance_match is not None else None
+    if instance_match is not None:
+        text = text[: instance_match.start()].strip()
+    return text, commented, instance_name
+
+
+def parse_module_label(value: Any) -> tuple[str, bool]:
+    """Backward-compatible module label parser."""
+    name, commented, _ = parse_module_label_details(value)
+    return name, commented
 
 
 def module_label_above_header(
@@ -1187,6 +1235,16 @@ def module_label_above_header(
         if value:
             return parse_module_label(value)
     return parse_module_label(sheet.name)
+
+
+def module_label_details_above_header(
+    sheet: Sheet, header_row: int, port_column: int
+) -> tuple[str, bool, str | None]:
+    for row in range(header_row - 1, 0, -1):
+        value = clean(sheet.cell(row, port_column))
+        if value:
+            return parse_module_label_details(value)
+    return parse_module_label_details(sheet.name)
 
 
 def module_name_above_header(sheet: Sheet, header_row: int, port_column: int) -> str:
@@ -1845,7 +1903,7 @@ def find_integration(sheet: Sheet) -> Integration | None:
                 "i/o", "io", "方向", "direction", "dir"
             }:
                 continue
-            module_name, commented = module_label_above_header(
+            module_name, commented, label_instance_name = module_label_details_above_header(
                 sheet, row, port_column
             )
             blocks.append(
@@ -1854,6 +1912,7 @@ def find_integration(sheet: Sheet) -> Integration | None:
                     port_column,
                     direction_column,
                     commented=commented,
+                    label_instance_name=label_instance_name,
                 )
             )
         if len([block for block in blocks if not block.anonymous_na]) < 2:
@@ -1881,11 +1940,29 @@ def find_integration(sheet: Sheet) -> Integration | None:
                 ):
                     child_names.append(block.module_name)
         commented_child_names = {
-            block.module_name
+            integration_block_key(block, top_name)
             for group in groups
             for block in group
             if block.commented and block.module_name != top_name
         }
+        child_instances: list[IntegrationChild] = []
+        seen_child_keys: set[str] = set()
+        for group in groups:
+            for block in group:
+                if block.anonymous_na or block.module_name == top_name:
+                    continue
+                key = integration_block_key(block, top_name)
+                if key in seen_child_keys:
+                    continue
+                seen_child_keys.add(key)
+                child_instances.append(
+                    IntegrationChild(
+                        key,
+                        block.module_name,
+                        block.label_instance_name,
+                        block.commented,
+                    )
+                )
         return Integration(
             sheet.name,
             row,
@@ -1894,6 +1971,7 @@ def find_integration(sheet: Sheet) -> Integration | None:
             child_names,
             find_instance_specs(sheet),
             commented_child_names,
+            child_instances,
         )
     return None
 
@@ -2701,8 +2779,7 @@ def render_module_header(
             keyword = (
                 "parameter"
                 if name in module.externally_configurable_parameters
-                else "parameter"
-                # else "localparam"
+                else "localparam"
             )
             rendered_value = module.parameter_expressions.get(name, value)
             comment_value = module.parameter_comments.get(name)
@@ -2971,8 +3048,53 @@ def render_integration(
     reporter: Reporter,
 ) -> str:
     top = modules[integration.top_name]
+    child_instances = integration.child_instances or [
+        IntegrationChild(name, name)
+        for name in integration.child_names
+        if name in modules
+    ]
+    child_instances = [
+        child for child in child_instances if child.module_name in modules
+    ]
+    child_modules = {
+        child.key: modules[child.module_name] for child in child_instances
+    }
+    # Macro collection is per module type; duplicate instances must not create
+    # artificial conflicts with their own module definition.
     children = [modules[name] for name in integration.child_names if name in modules]
     top_ports = top.port_map
+
+    def block_key(block: IntegrationBlock) -> str:
+        return integration_block_key(block, top.name)
+
+    def child_for_key(key: str) -> IntegrationChild:
+        return next(child for child in child_instances if child.key == key)
+
+    def instance_spec_for_key(key: str) -> InstanceSpec | None:
+        child = child_for_key(key)
+        return integration.instance_specs.get(child.module_name)
+
+    instance_names: dict[str, str] = {}
+    used_instance_names: set[str] = set()
+    generated_indices: dict[str, str] = {}
+    used_generated_indices: set[str] = set()
+    for child in child_instances:
+        configured = instance_spec_for_key(child.key)
+        instance_name = (
+            child.label_instance_name
+            or (configured.instance_name if configured and configured.instance_name else None)
+            or f"U_{child.module_name}"
+        )
+        if instance_name in used_instance_names:
+            reporter.error(
+                f"集成页签 {sheet.name}: 例化名 {instance_name} 被多个模块重复使用",
+                code="E_INSTANCE",
+            )
+        used_instance_names.add(instance_name)
+        instance_names[child.key] = instance_name
+        generated_indices[child.key] = unique_name(
+            f"i_gen_{instance_name}", used_generated_indices
+        ).lower()
 
     all_macros: dict[str, str] = {}
     all_macro_sources: dict[str, str] = {}
@@ -2989,8 +3111,8 @@ def render_integration(
                     code="E_WIDTH",
                 )
 
-    # A parameter is local by default.  Only rows explicitly placed under a
-    # ``parameter`` category in the integration sheet create an override path.
+    # Parameters stay local unless an integration parameter row explicitly
+    # links them or TOP wiring needs an otherwise out-of-scope child width.
     parameter_rows_by_group = integration_parameter_rows(sheet, integration)
     commented_integration_rows_reported: set[int] = set()
 
@@ -3004,8 +3126,10 @@ def render_integration(
             code="E_MODULE",
         )
     for child_name in sorted(integration.commented_child_names):
+        child = child_for_key(child_name)
         reporter.info(
-            f"集成页签 {sheet.name}: 模块 {child_name} 标记为 *注释*，"
+            f"集成页签 {sheet.name}: 模块 {child.module_name} 的实例 "
+            f"{child.label_instance_name or child.module_name} 标记为 *注释*，"
             "保留全部解析和连线结果，但注释其完整实例",
             code="I_ROW_COMMENTED",
         )
@@ -3029,15 +3153,19 @@ def render_integration(
     }
     instance_parameter_maps: dict[str, dict[str, str]] = {}
     wire_parameter_overrides: dict[str, dict[str, str]] = {}
-    for child in children:
-        parameter_maps[child.name] = {
-            name: name for name in child.parameters
+    for child in child_instances:
+        module = child_modules[child.key]
+        parameter_maps[child.key] = {
+            name: name for name in module.parameters
         }
-        instance_parameter_maps[child.name] = {}
-        wire_parameter_overrides[child.name] = {}
+        instance_parameter_maps[child.key] = {}
+        wire_parameter_overrides[child.key] = {}
 
     used_top_parameter_names = set(top.parameters)
     integration_local_parameters: dict[str, str] = {}
+    integration_local_parameter_dimensions: dict[str, tuple[str, ...]] = {}
+    parameter_na_generate_counts: dict[str, str] = {}
+    parameter_na_generate_indices: dict[str, str] = {}
 
     def add_integration_local_parameter(
         requested_name: str,
@@ -3045,6 +3173,7 @@ def render_integration(
         row: int,
         *,
         reason: str = "parameter NA",
+        dimensions: tuple[str, ...] = (),
     ) -> str:
         """Create one V3.4 body-local parameter used by integration wiring."""
         candidate = requested_name.upper()
@@ -3060,7 +3189,10 @@ def render_integration(
                 f"LOCAL_NA_{candidate}", used_top_parameter_names
             ).upper()
         elif candidate in integration_local_parameters:
-            if integration_local_parameters[candidate] == value:
+            if (
+                integration_local_parameters[candidate] == value
+                and integration_local_parameter_dimensions[candidate] == dimensions
+            ):
                 return candidate
             candidate = unique_name(
                 f"LOCAL_NA_{candidate}", used_top_parameter_names
@@ -3068,6 +3200,7 @@ def render_integration(
         else:
             used_top_parameter_names.add(candidate)
         integration_local_parameters[candidate] = value
+        integration_local_parameter_dimensions[candidate] = dimensions
         reporter.info(
             f"集成页签 {sheet.name} 第 {row} 行: 自动在 TOP 语句区创建 "
             f"localparam {candidate}={value}（{reason}）",
@@ -3075,8 +3208,89 @@ def render_integration(
         )
         return candidate
 
-    def configured_instance_count_expression(module_name: str, row: int) -> str:
-        configured = integration.instance_specs.get(module_name)
+    def parameter_na_array_value(
+        raw_value: str,
+        fallback_value: str,
+        row: int,
+        expected_count: int | None,
+    ) -> str:
+        """Validate and render a SystemVerilog assignment-pattern initializer."""
+        context = f"集成页签 {sheet.name} 第 {row} 行 parameter NA[i]"
+        value = clean(raw_value)
+        if not value:
+            normalized = normalize_parameter_expression(
+                fallback_value, context, reporter
+            )
+            return f"'{{default: {normalized or '0'}}}"
+        wrapped = False
+        if value.startswith("'{") and value.endswith("}"):
+            wrapped = True
+            body = value[2:-1]
+        elif value.startswith("{") and value.endswith("}"):
+            # Production workbooks often omit the assignment-pattern apostrophe.
+            # A surrounding brace pair is unambiguous in this dedicated field.
+            wrapped = True
+            body = value[1:-1]
+        else:
+            body = value
+
+        parts: list[str] = []
+        start = 0
+        delimiters: list[str] = []
+        matching_open = {")": "(", "]": "[", "}": "{"}
+        for index, character in enumerate(body):
+            if character in "([{":
+                delimiters.append(character)
+            elif character in ")]}" and delimiters:
+                if delimiters[-1] == matching_open[character]:
+                    delimiters.pop()
+            elif character == "," and not delimiters:
+                parts.append(body[start:index].strip())
+                start = index + 1
+        parts.append(body[start:].strip())
+
+        is_default_pattern = bool(
+            wrapped and re.match(r"(?i)^\s*default\s*:", body)
+        )
+        positional = len(parts) > 1 or (wrapped and not is_default_pattern)
+        if positional:
+            empty_count = sum(not part for part in parts)
+            if empty_count:
+                reporter.warning(
+                    f"{context}: 初始化列表含 {empty_count} 个空项，已忽略；"
+                    "请确认逗号位置符合预期",
+                    code="W_PARAMETER_NA_REPAIR",
+                )
+                parts = [part for part in parts if part]
+            if not parts:
+                normalized_fallback = normalize_parameter_expression(
+                    fallback_value, context, reporter
+                )
+                return f"'{{default: {normalized_fallback or '0'}}}"
+            if expected_count is not None and len(parts) != expected_count:
+                reporter.error(
+                    f"{context}: 初始化列表有效元素数 {len(parts)} 与例化次数 "
+                    f"{expected_count} 不一致",
+                    code="E_PARAMETER",
+                )
+            normalized_parts = [
+                normalize_parameter_expression(part, context, reporter)
+                for part in parts
+            ]
+            if not all(normalized_parts):
+                return "'{default: '0}"
+            return "'{" + ",".join(normalized_parts) + "}"
+
+        normalized = normalize_parameter_expression(body, context, reporter)
+        if not normalized:
+            return "'{default: '0}"
+        if wrapped:
+            return f"'{{{normalized}}}"
+        return f"'{{default: {normalized}}}"
+
+    def configured_instance_count_expression(child_key: str, row: int) -> str:
+        child = child_for_key(child_key)
+        configured = instance_spec_for_key(child_key)
         if configured is not None and configured.raw_count:
             if configured.count is not None:
                 return str(configured.count)
@@ -3087,7 +3301,7 @@ def render_integration(
                 return configured.raw_count.upper()
         reporter.warning(
             f"集成页签 {sheet.name} 第 {row} 行: parameter NA 索引无法找到 "
-            f"{module_name} 的例化次数，使用 1",
+            f"{child.module_name} 的例化次数，使用 1",
             code="W_GENERATE_RANGE",
         )
         return "1"
@@ -3127,6 +3341,14 @@ def render_integration(
             entries: list[tuple[IntegrationBlock, Module, str]] = []
             direct_entries: list[tuple[IntegrationBlock, Module, str, str]] = []
             na_entries: list[tuple[IntegrationBlock, str | None, str | None, str]] = []
+            na_endpoint_values: list[
+                tuple[IntegrationBlock, Module, str, str]
+            ] = []
+            row_has_na = any(
+                parse_na_connection(clean(sheet.cell(row, block.port_column)))
+                is not None
+                for block in group
+            )
             for block in group:
                 raw_reference = clean(sheet.cell(row, block.port_column))
                 if not raw_reference:
@@ -3169,6 +3391,14 @@ def render_integration(
                     )
                     continue
                 raw_direct_value = clean(sheet.cell(row, block.direction_column))
+                if row_has_na and raw_direct_value:
+                    # With a parameter NA endpoint, i/o is initializer data for
+                    # the generated localparam rather than a second override.
+                    entries.append((block, module, reference))
+                    na_endpoint_values.append(
+                        (block, module, reference, raw_direct_value)
+                    )
+                    continue
                 direct_value = direct_parameter_expression(raw_direct_value)
                 if direct_value is not None:
                     direct_entries.append((block, module, reference, direct_value))
@@ -3198,13 +3428,6 @@ def render_integration(
                         code="E_PARAMETER",
                     )
                     continue
-                if any(item[1].name == top.name for item in entries) or direct_entries:
-                    reporter.error(
-                        f"集成页签 {sheet.name} 第 {row} 行: parameter NA 不能与 "
-                        "TOP parameter 来源或直接 i/o 覆盖同时使用",
-                        code="E_PARAMETER",
-                    )
-                    continue
                 if not child_entries:
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: parameter NA 没有 "
@@ -3212,8 +3435,47 @@ def render_integration(
                         code="E_PARAMETER",
                     )
                     continue
-                na_block, na_index, na_target, raw_na_value = na_entries[0]
+                _na_block, na_index, na_target, raw_na_value = na_entries[0]
                 _, first_module, first_name = child_entries[0]
+                value_sources: list[tuple[str, str]] = []
+                if raw_na_value:
+                    value_sources.append(("NA 端点 i/o", raw_na_value))
+                value_sources.extend(
+                    (
+                        f"{module.name}.{name} 的 i/o",
+                        raw_value,
+                    )
+                    for _, module, name, raw_value in na_endpoint_values
+                    if raw_value
+                )
+                distinct_values = list(
+                    dict.fromkeys(clean(value) for _, value in value_sources)
+                )
+                if len(distinct_values) > 1:
+                    details = "；".join(
+                        f"{label}={value!r}" for label, value in value_sources
+                    )
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: parameter NA 存在"
+                        f"多个不一致的初始化来源（{details}）；请只保留一个值，"
+                        "或让各 i/o 内容完全一致",
+                        code="E_PARAMETER",
+                    )
+                    continue
+                explicit_value = distinct_values[0] if distinct_values else ""
+                top_entries = [
+                    entry for entry in entries if entry[1].name == top.name
+                ]
+                if len(top_entries) > 1 and not explicit_value:
+                    names = ", ".join(entry[2] for entry in top_entries)
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: parameter NA 同时"
+                        f"连接多个 TOP parameter（{names}），无法确定初始化来源",
+                        code="E_PARAMETER",
+                    )
+                    continue
+                top_source = top_entries[0][2] if top_entries else ""
+                initializer_value = explicit_value or top_source
                 if na_target is None:
                     reporter.error(
                         f"集成页签 {sheet.name} 第 {row} 行: parameter NA 必须使用 "
@@ -3225,32 +3487,70 @@ def render_integration(
                 if target_number is not None:
                     local_base = first_name
                     local_value = target_number
+                    local_dimensions: tuple[str, ...] = ()
+                    if initializer_value:
+                        reporter.info(
+                            f"集成页签 {sheet.name} 第 {row} 行: NA->{target_number} "
+                            "已直接指定常量，其他 parameter/i/o 来源不参与赋值",
+                            code="I_PARAMETER_LINK",
+                        )
                 else:
                     local_base = na_target
                     if na_index is not None:
-                        local_value = configured_instance_count_expression(
-                            first_module.name, row
+                        child_key = block_key(child_entries[0][0])
+                        count_expression = configured_instance_count_expression(
+                            child_key, row
                         )
-                    elif raw_na_value:
-                        parsed_value = direct_parameter_expression(raw_na_value)
-                        if parsed_value is None:
-                            reporter.error(
-                                f"集成页签 {sheet.name} 第 {row} 行: parameter "
-                                f"{clean(sheet.cell(row, na_block.port_column))} 的 "
-                                f"i/o={raw_na_value!r} 必须是自然数或反引号宏",
-                                code="E_PARAMETER",
-                            )
+                        fallback_value = first_module.parameters[first_name]
+                        local_value = parameter_na_array_value(
+                            initializer_value,
+                            fallback_value,
+                            row,
+                            evaluate_int_expression(count_expression),
+                        )
+                        local_dimensions = (
+                            f"[{count_expression} -1:0]",
+                            f"[{PARAMETER_NA_ELEMENT_WIDTH} -1:0]",
+                        )
+                    elif initializer_value:
+                        local_value = normalize_parameter_expression(
+                            initializer_value,
+                            f"集成页签 {sheet.name} 第 {row} 行 parameter NA",
+                            reporter,
+                        )
+                        if not local_value:
                             continue
-                        local_value = parsed_value
+                        local_dimensions = ()
                     else:
                         local_value = str(UNKNOWN_WIDTH)
+                        local_dimensions = ()
                 local_name = add_integration_local_parameter(
-                    local_base, local_value, row
+                    local_base,
+                    local_value,
+                    row,
+                    dimensions=local_dimensions,
                 )
-                for _, module, name in child_entries:
-                    instance_parameter_maps[module.name][name] = local_name
-                    parameter_maps[module.name][name] = local_name
-                    wire_parameter_overrides[module.name][name] = local_name
+                for child_block, module, name in child_entries:
+                    child_key = block_key(child_block)
+                    instance_value = (
+                        f"{local_name}[{generated_indices[child_key]}]"
+                        if na_index is not None
+                        else local_name
+                    )
+                    if na_index is not None:
+                        previous_index = parameter_na_generate_indices.get(child_key)
+                        if previous_index is not None and previous_index != na_index:
+                            reporter.error(
+                                f"集成页签 {sheet.name} 第 {row} 行: "
+                                f"{module.name} 的 parameter NA 同时使用 "
+                                f"[{previous_index}] 和 [{na_index}]",
+                                code="E_GENERATE_INDEX",
+                            )
+                        parameter_na_generate_counts[child_key] = count_expression
+                        parameter_na_generate_indices[child_key] = na_index
+                    instance_parameter_maps[child_key][name] = instance_value
+                    parameter_maps[child_key][name] = local_name
+                    wire_parameter_overrides[child_key][name] = local_name
                     module.externally_configurable_parameters.add(name)
                 continue
 
@@ -3265,10 +3565,11 @@ def render_integration(
                         code="I_PARAMETER_LINK",
                     )
                     continue
-                instance_parameter_maps[module.name][name] = direct_value
-                parameter_maps[module.name][name] = direct_value
+                child_key = block_key(block)
+                instance_parameter_maps[child_key][name] = direct_value
+                parameter_maps[child_key][name] = direct_value
                 if natural_number_text(direct_value) is not None:
-                    wire_parameter_overrides[module.name][name] = (
+                    wire_parameter_overrides[child_key][name] = (
                         add_integration_local_parameter(
                             name,
                             direct_value,
@@ -3285,11 +3586,12 @@ def render_integration(
 
             if top_direct is not None:
                 source_value = top_direct[3]
-                for _, module, name in child_entries:
-                    instance_parameter_maps[module.name][name] = source_value
-                    parameter_maps[module.name][name] = source_value
+                for child_block, module, name in child_entries:
+                    child_key = block_key(child_block)
+                    instance_parameter_maps[child_key][name] = source_value
+                    parameter_maps[child_key][name] = source_value
                     if natural_number_text(source_value) is not None:
-                        wire_parameter_overrides[module.name][name] = (
+                        wire_parameter_overrides[child_key][name] = (
                             add_integration_local_parameter(
                                 name,
                                 source_value,
@@ -3304,7 +3606,7 @@ def render_integration(
                 entry
                 for entry in entries
                 if entry[1].name == top.name
-                or entry[2] not in instance_parameter_maps[entry[1].name]
+                or entry[2] not in instance_parameter_maps[block_key(entry[0])]
             ]
             if len(remaining_entries) < 2:
                 if remaining_entries:
@@ -3335,11 +3637,12 @@ def render_integration(
                 )
                 local_value = top.parameters[local_name]
 
-            for _, module, name in remaining_entries:
+            for child_block, module, name in remaining_entries:
                 if module.name == top.name:
                     continue
-                instance_parameter_maps[module.name][name] = local_name
-                parameter_maps[module.name][name] = local_name
+                child_key = block_key(child_block)
+                instance_parameter_maps[child_key][name] = local_name
+                parameter_maps[child_key][name] = local_name
                 source_expression = source_module.parameter_expressions.get(
                     source_name, ""
                 )
@@ -3349,7 +3652,7 @@ def render_integration(
                     and natural_number_text(local_value) is not None
                     and name != local_name
                 ):
-                    wire_parameter_overrides[module.name][name] = (
+                    wire_parameter_overrides[child_key][name] = (
                         add_integration_local_parameter(
                             name,
                             local_name,
@@ -3366,38 +3669,18 @@ def render_integration(
                         code="I_PARAMETER_LINK",
                     )
 
-    bindings: dict[str, dict[str, Binding]] = {child.name: {} for child in children}
+    bindings: dict[str, dict[str, Binding]] = {
+        child.key: {} for child in child_instances
+    }
     generate_specs: dict[str, GenerateSpec] = {}
     top_output_drivers: dict[str, list[str]] = {}
     top_output_driver_conditions: dict[str, list[str | None]] = {}
     wires: list[Wire] = []
     adapter_assignments: list[Assignment] = []
     used_signals = set(top_ports)
-    instance_names: dict[str, str] = {}
-    used_instance_names: set[str] = set()
-    generated_indices: dict[str, str] = {}
-    used_generated_indices: set[str] = set()
-    for child in children:
-        configured = integration.instance_specs.get(child.name)
-        instance_name = (
-            configured.instance_name
-            if configured and configured.instance_name
-            else f"U_{child.name}"
-        )
-        if instance_name in used_instance_names:
-            reporter.error(
-                f"集成页签 {sheet.name}: 例化名 {instance_name} 被多个模块重复使用",
-                code="E_INSTANCE",
-            )
-        used_instance_names.add(instance_name)
-        instance_names[child.name] = instance_name
-        generated_indices[child.name] = "i"
-        # generated_indices[child.name] = unique_name(
-        #     f"i_gen_{instance_name}", used_generated_indices
-        # ).lower()
-
-    def configured_count_width(child_name: str) -> Width | None:
-        configured = integration.instance_specs.get(child_name)
+    def configured_count_width(child_key: str) -> Width | None:
+        child = child_for_key(child_key)
+        configured = instance_spec_for_key(child_key)
         if configured is None or configured.raw_count is None:
             return None
         if configured.count is not None:
@@ -3409,7 +3692,7 @@ def render_integration(
             default = all_macros.get(name, "")
             if not default:
                 reporter.warning(
-                    f"集成模块: {child_name} 的例化次数使用宏 `{name}，"
+                    f"集成模块: {child.module_name} 的例化次数使用宏 `{name}，"
                     "但当前层次没有可用于范围检查的宏数值",
                     code="W_GENERATE_RANGE",
                 )
@@ -3419,7 +3702,7 @@ def render_integration(
             default = top.parameters.get(name, "")
             if not default:
                 reporter.warning(
-                    f"集成模块: {child_name} 的例化次数使用 parameter {name}，"
+                    f"集成模块: {child.module_name} 的例化次数使用 parameter {name}，"
                     "但该 parameter 没有被拉到 TOP",
                     code="W_PARAMETER_NOT_EXPORTED",
                 )
@@ -3427,9 +3710,9 @@ def render_integration(
         return None
 
     configured_count_widths = {
-        child.name: width
-        for child in children
-        if (width := configured_count_width(child.name)) is not None
+        child.key: width
+        for child in child_instances
+        if (width := configured_count_width(child.key)) is not None
     }
 
     def indexed_dimension(port: Port) -> Width | None:
@@ -3440,30 +3723,86 @@ def render_integration(
         )
         return dimensions[0] if dimensions else None
 
-    warned_unexported_parameters: set[tuple[str, str]] = set()
+    warned_auto_local_parameters: set[tuple[str, str]] = set()
 
-    def report_unexported_parameter(module_name: str, name: str, row: int) -> None:
-        key = (module_name, name)
-        if key in warned_unexported_parameters:
+    auto_local_parameters: dict[tuple[str, str], str] = {}
+
+    def ensure_top_local_parameter(
+        child_key: str,
+        name: str,
+        row: int,
+        default_hint: str = "",
+    ) -> str:
+        """Create a body-local TOP constant for one child-owned width."""
+        cache_key = (child_key, name)
+        if cache_key in auto_local_parameters:
+            return auto_local_parameters[cache_key]
+        module = child_modules[child_key]
+        declared_by_child = name in module.parameters
+        default = module.parameters.get(name) or default_hint or str(UNKNOWN_WIDTH)
+        if name in top.parameters and top.parameters[name] == default:
+            # A same-name/same-value TOP declaration is already in scope. Reuse
+            # it instead of creating a shadowing body localparam.
+            candidate = name
+        else:
+            requested_name = name
+            if (
+                name in integration_local_parameters
+                and integration_local_parameters[name] != default
+            ):
+                requested_name = f"{module.name}_{name}"
+            candidate = add_integration_local_parameter(
+                requested_name,
+                default,
+                row,
+                reason=f"{module.name}.{name} 未显式链接的位宽 parameter",
+            )
+        if declared_by_child:
+            instance_parameter_maps[child_key].setdefault(name, candidate)
+        parameter_maps[child_key][name] = candidate
+        if declared_by_child:
+            module.externally_configurable_parameters.add(name)
+        auto_local_parameters[cache_key] = candidate
+        location = (
+            "现有 TOP 参数声明"
+            if candidate in top.parameters
+            else "TOP 语句区 localparam"
+        )
+        reporter.info(
+            f"集成页签 {sheet.name} 第 {row} 行: {location} "
+            f"{candidate}={default} 用于 {module.name}.{name}，并同步实例传参",
+            code="I_PARAMETER_LINK",
+        )
+        return candidate
+
+    def report_auto_local_parameter(child_key: str, name: str, row: int) -> None:
+        key = (child_key, name)
+        if key in warned_auto_local_parameters:
             return
-        warned_unexported_parameters.add(key)
+        module = child_modules[child_key]
+        if (
+            name in top.parameters
+            and top.parameters[name] == module.parameters.get(name)
+        ):
+            return
+        warned_auto_local_parameters.add(key)
         reporter.warning(
-            f"集成页签 {sheet.name} 第 {row} 行: {module_name}.{name} "
-            "parameter 应该被拉到 TOP，但当前没有显式 parameter 链接；"
-            "TOP 中保留该 parameter 名称",
-            code="W_PARAMETER_NOT_EXPORTED",
+            f"集成页签 {sheet.name} 第 {row} 行: {module.name}.{name} "
+            "parameter 没有显式链接；已按数值列在 TOP 语句区创建 localparam",
+            code="W_PARAMETER_AUTO_LOCAL",
         )
 
     def register_generate_marker(
-        child_name: str,
+        child_key: str,
         index: str,
         indexed_port: Port,
         row: int,
     ) -> int | None:
-        spec = generate_specs.setdefault(child_name, GenerateSpec(index))
+        spec = generate_specs.setdefault(child_key, GenerateSpec(index))
+        child = child_for_key(child_key)
         if spec.index != index:
             reporter.error(
-                f"集成页签 {sheet.name} 第 {row} 行: {child_name} 同时使用了 "
+                f"集成页签 {sheet.name} 第 {row} 行: {child.module_name} 同时使用了 "
                 f"[{spec.index}] 和 [{index}]，无法生成同一个循环",
                 code="E_GENERATE_INDEX",
             )
@@ -3472,23 +3811,28 @@ def render_integration(
         if first is None:
             return None
         expression = first.expression
-        if first.kind == "parameter" and child_name != top.name:
-            mapped = instance_parameter_maps.get(child_name, {}).get(expression)
+        if first.kind == "parameter" and child_key != top.name:
+            mapped = instance_parameter_maps.get(child_key, {}).get(expression)
             if mapped is not None:
                 expression = mapped
             else:
-                report_unexported_parameter(child_name, expression, row)
+                report_auto_local_parameter(child_key, expression, row)
+                expression = ensure_top_local_parameter(
+                    child_key, expression, row, first.default
+                )
         spec.extent_expressions.append(expression)
         extent = evaluate_int_expression(first.default or first.expression)
         if extent is not None:
             spec.extents.append(extent)
         return extent
 
-    def wire_parameter_map(module: Module, port: Port, row: int) -> dict[str, str]:
+    def wire_parameter_map(
+        child_key: str, module: Module, port: Port, row: int
+    ) -> dict[str, str]:
         """Map child-owned parameter dimensions into the generated TOP scope."""
         result: dict[str, str] = {}
-        explicit_map = instance_parameter_maps.get(module.name, {})
-        width_overrides = wire_parameter_overrides.get(module.name, {})
+        explicit_map = instance_parameter_maps.get(child_key, {})
+        width_overrides = wire_parameter_overrides.get(child_key, {})
         for dimension in port_dimensions(port):
             if dimension.kind != "parameter":
                 continue
@@ -3527,7 +3871,10 @@ def render_integration(
                     result[name] = mapped
                 continue
             result[name] = name
-            report_unexported_parameter(module.name, name, row)
+            report_auto_local_parameter(child_key, name, row)
+            result[name] = ensure_top_local_parameter(
+                child_key, name, row, dimension.default
+            )
         return result
 
     def add_assignment(
@@ -3689,7 +4036,7 @@ def render_integration(
             )
 
     def bind(
-        module_name: str,
+        child_key: str,
         port: Port,
         expression: str | None,
         row: int,
@@ -3697,9 +4044,10 @@ def render_integration(
         *,
         requires_todo: bool = False,
     ) -> None:
-        if module_name == top.name:
+        if child_key == top.name:
             return
-        target = bindings.setdefault(module_name, {})
+        target = bindings.setdefault(child_key, {})
+        module_name = child_modules[child_key].name
         conditions = tuple(
             dict.fromkeys(
                 condition
@@ -3737,14 +4085,15 @@ def render_integration(
                 code="E_INTERFACE_CONNECTION",
             )
             return
+        child_key = block_key(block)
         if target and is_verilog_constant(target):
             if index:
-                register_generate_marker(block.module_name, index, port, row)
+                register_generate_marker(child_key, index, port, row)
             expression = (
                 connection_constant_value(
                     target,
                     port,
-                    parameter_maps.get(block.module_name),
+                    parameter_maps.get(child_key),
                     reporter=reporter,
                     context=(
                         f"集成页签 {sheet.name} 第 {row} 行: "
@@ -3754,7 +4103,7 @@ def render_integration(
                 if port.direction == "input"
                 else None
             )
-            bind(block.module_name, port, expression, row)
+            bind(child_key, port, expression, row)
             reporter.info(
                 f"集成页签 {sheet.name} 第 {row} 行: "
                 f"{block.module_name}.{port.name} 连接到常量 {target}"
@@ -3786,8 +4135,8 @@ def render_integration(
         placeholder_arrays = port.arrays
         expression = signal_name
         if index:
-            extent = register_generate_marker(block.module_name, index, port, row)
-            count_width = configured_count_widths.get(block.module_name)
+            extent = register_generate_marker(child_key, index, port, row)
+            count_width = configured_count_widths.get(child_key)
             if count_width is None:
                 count = extent or 1
                 count_width = Width("literal", str(count), str(count))
@@ -3795,14 +4144,14 @@ def render_integration(
                 count_width,
                 *placeholder_arrays,
             )
-            expression += f"[{generated_indices[block.module_name]}]"
+            expression += f"[{generated_indices[child_key]}]"
         wires.append(
             Wire(
                 name=signal_name,
                 width=port.width,
                 arrays=placeholder_arrays,
                 parameter_map=wire_parameter_map(
-                    modules[block.module_name], port, row
+                    child_key, modules[block.module_name], port, row
                 ),
                 interface_type=(
                     port.interface_type.rsplit(".", 1)[0]
@@ -3813,7 +4162,7 @@ def render_integration(
             )
         )
         bind(
-            block.module_name,
+            child_key,
             port,
             expression,
             row,
@@ -3983,12 +4332,12 @@ def render_integration(
                         continue
                     expression = (
                         connection_zero_value(
-                            child_port, parameter_maps.get(block.module_name)
+                            child_port, parameter_maps.get(block_key(block))
                         )
                         if child_port.direction == "input"
                         else None
                     )
-                    bind(block.module_name, child_port, expression, row)
+                    bind(block_key(block), child_port, expression, row)
             continue
         if row_na_entries:
             na_labels = [
@@ -4007,9 +4356,9 @@ def render_integration(
             (block, get_ports(block.module_name, child_port_name, row))
             for block, child_port_name, _ in row_entries
         )
-        row_markers = {top_block.module_name: top_index}
+        row_markers = {block_key(top_block): top_index}
         row_markers.update(
-            {block.module_name: marker for block, _, marker in row_entries}
+            {block_key(block): marker for block, _, marker in row_entries}
         )
         for aligned in aligned_expansions(expanded, row):
             if not aligned:
@@ -4022,10 +4371,10 @@ def render_integration(
                         code="I_UNCONNECTED",
                     )
                     bind(
-                        block.module_name,
+                        block_key(block),
                         child_port,
                         connection_zero_value(
-                            child_port, parameter_maps.get(block.module_name)
+                            child_port, parameter_maps.get(block_key(block))
                         )
                         if child_port.direction == "input"
                         else None,
@@ -4092,7 +4441,7 @@ def render_integration(
                             connection_constant_value(
                                 row_na_target,
                                 child_port,
-                                parameter_maps.get(block.module_name),
+                                parameter_maps.get(block_key(block)),
                                 reporter=reporter,
                                 context=(
                                     f"集成页签 {sheet.name} 第 {row} 行: "
@@ -4102,7 +4451,7 @@ def render_integration(
                             if child_port.direction == "input"
                             else None
                         )
-                        bind(block.module_name, child_port, expression, row)
+                        bind(block_key(block), child_port, expression, row)
                         if expression is None:
                             reporter.info(
                                 f"集成页签 {sheet.name} 第 {row} 行: "
@@ -4136,7 +4485,8 @@ def render_integration(
                         "但是其位宽不匹配",
                         code="W_WIDTH_MISMATCH",
                     )
-                child_index = row_markers.get(block.module_name)
+                child_key = block_key(block)
+                child_index = row_markers.get(child_key)
                 marker = top_index or child_index
                 if top_index and child_index and top_index != child_index:
                     reporter.error(
@@ -4146,7 +4496,7 @@ def render_integration(
                     )
                 if marker:
                     register_generate_marker(
-                        block.module_name,
+                        child_key,
                         marker,
                         top_port if top_index else child_port,
                         row,
@@ -4155,7 +4505,7 @@ def render_integration(
                 if top_bit_select is not None:
                     expression += top_bit_select
                 elif top_index and marker:
-                    expression += f"[{generated_indices[block.module_name]}]"
+                    expression += f"[{generated_indices[child_key]}]"
                 top_width = (
                     1
                     if top_bit_select is not None
@@ -4196,7 +4546,10 @@ def render_integration(
                                 child_port.width,
                                 (),
                                 wire_parameter_map(
-                                    modules[block.module_name], child_port, row
+                                    child_key,
+                                    modules[block.module_name],
+                                    child_port,
+                                    row,
                                 ),
                             )
                         )
@@ -4208,7 +4561,7 @@ def render_integration(
                             child_port.condition,
                         )
                 bind(
-                    block.module_name,
+                    child_key,
                     child_port,
                     expression,
                     row,
@@ -4304,12 +4657,12 @@ def render_integration(
                     if block.module_name != top.name:
                         expression = (
                             connection_zero_value(
-                                port, parameter_maps.get(block.module_name)
+                                port, parameter_maps.get(block_key(block))
                             )
                             if port.direction == "input"
                             else None
                         )
-                        bind(block.module_name, port, expression, row)
+                        bind(block_key(block), port, expression, row)
                     continue
 
                 interface_flags = [port.is_interface for _, port in entries]
@@ -4376,7 +4729,10 @@ def render_integration(
                         maximum_index = numeric_widths.index(maximum_width)
                         wire_block, wire_shape_port = entries[maximum_index]
                 wire_shape_parameter_map = wire_parameter_map(
-                    modules[wire_block.module_name], wire_shape_port, row
+                    block_key(wire_block),
+                    modules[wire_block.module_name],
+                    wire_shape_port,
+                    row,
                 )
                 wires.append(
                     Wire(
@@ -4407,7 +4763,7 @@ def render_integration(
                         and item_width < maximum_width
                     ):
                         expression = low_bits(signal_name, item_width)
-                    bind(item_block.module_name, port, expression, row)
+                    bind(block_key(item_block), port, expression, row)
 
                 if not all(interface_flags):
                     if len(drivers) == 0:
@@ -4430,16 +4786,18 @@ def render_integration(
 
     # Named-port instantiations may omit ports, but explicitly tie/open all omitted
     # child ports to make the generated integration deterministic and lint-friendly.
-    for child in children:
-        for port in child.ports:
-            if port.name not in bindings[child.name]:
+    for child in child_instances:
+        module = child_modules[child.key]
+        for port in module.ports:
+            if port.name not in bindings[child.key]:
                 reporter.info(
-                    f"集成页签 {sheet.name}: 未列出 {child.name}.{port.name}，自动按未连接端口处理",
+                    f"集成页签 {sheet.name}: 未列出 {module.name}.{port.name}，"
+                    "自动按未连接端口处理",
                     code="I_UNCONNECTED",
                 )
-                bindings[child.name][port.name] = Binding(
+                bindings[child.key][port.name] = Binding(
                     (
-                        connection_zero_value(port, parameter_maps[child.name])
+                        connection_zero_value(port, parameter_maps[child.key])
                         if port.direction == "input"
                         else None
                     ),
@@ -4447,14 +4805,15 @@ def render_integration(
                 )
 
     generate_counts: dict[str, str] = {}
-    for child in children:
-        child_name = child.name
-        marker_spec = generate_specs.get(child_name)
-        configured_width = configured_count_widths.get(child_name)
+    for child in child_instances:
+        child_key = child.key
+        child_name = child.module_name
+        marker_spec = generate_specs.get(child_key)
+        configured_width = configured_count_widths.get(child_key)
         if configured_width is not None:
             count_expression = configured_width.expression
             numeric_count = evaluate_int_expression(configured_width.default)
-            generate_counts[child_name] = count_expression
+            generate_counts[child_key] = count_expression
             reporter.info(
                 f"集成模块: {child_name} 使用显式例化次数 {count_expression}",
                 code="I_INSTANCE",
@@ -4469,12 +4828,21 @@ def render_integration(
                         code="W_GENERATE_RANGE",
                     )
             continue
+        parameter_na_count = parameter_na_generate_counts.get(child_key)
+        if parameter_na_count is not None:
+            generate_counts[child_key] = parameter_na_count
+            reporter.info(
+                f"集成模块: {child_name} 的 parameter NA 索引 generate "
+                f"使用 {parameter_na_count}",
+                code="I_INSTANCE",
+            )
+            continue
         if marker_spec is None:
             continue
         symbolic_extents = list(dict.fromkeys(marker_spec.extent_expressions))
         if len(symbolic_extents) == 1:
             count_expression = symbolic_extents[0]
-            generate_counts[child_name] = count_expression
+            generate_counts[child_key] = count_expression
             reporter.info(
                 f"集成模块: {child_name} 的 [{marker_spec.index}] generate "
                 f"使用首维表达式 {count_expression}",
@@ -4498,17 +4866,19 @@ def render_integration(
                 "generate 默认使用 1",
                 code="W_GENERATE_RANGE",
             )
-        generate_counts[child_name] = str(count)
+        generate_counts[child_key] = str(count)
 
     lines = render_module_header(top, all_macros, before_module_user=True)
     lines.extend(["", *user_code_block("before statement")])
     if integration_local_parameters:
         lines.append("")
-        lines.append("// Local parameters created by parameter NA connections.")
-        lines.append("// parameter NA 连接创建的 TOP 语句区局部参数。")
+        lines.append("// Integration-local parameters for NA and child-owned widths.")
+        lines.append("// parameter NA 及子模块位宽上拉创建的 TOP 语句区局部参数。")
         local_name_width = max(len(name) for name in integration_local_parameters)
         for name, value in integration_local_parameters.items():
-            lines.append(f"localparam {name:<{local_name_width}} = {value};")
+            dimensions = "".join(integration_local_parameter_dimensions[name])
+            prefix = f"localparam {dimensions} " if dimensions else "localparam "
+            lines.append(f"{prefix}{name:<{local_name_width}} = {value};")
     if wires:
         lines.append("")
         lines.append("// Internal connections and NA placeholder signals.")
@@ -4602,18 +4972,24 @@ def render_integration(
                 target_width=target_width,
             )
 
-    for child in children:
-        lines.extend(["", *user_code_block(f"before {child.name}")])
-        instance_parameter_map = instance_parameter_maps[child.name]
-        generate_count = generate_counts.get(child.name)
-        instance_name = instance_names[child.name]
-        commented_instance = child.name in integration.commented_child_names
+    for child in child_instances:
+        module = child_modules[child.key]
+        instance_name = instance_names[child.key]
+        region_identity = (
+            module.name
+            if child.key == module.name
+            else f"{module.name} {instance_name}"
+        )
+        lines.extend(["", *user_code_block(f"before {region_identity}")])
+        instance_parameter_map = instance_parameter_maps[child.key]
+        generate_count = generate_counts.get(child.key)
+        commented_instance = child.key in integration.commented_child_names
         if commented_instance:
             lines.append(
-                f"/* XLSX2VERILOG COMMENTED MODULE BEGIN: {child.name}"
+                f"/* XLSX2VERILOG COMMENTED MODULE BEGIN: {region_identity}"
             )
         if generate_count is not None:
-            index = generated_indices[child.name]
+            index = generated_indices[child.key]
             lines.append(f"genvar {index};")
             lines.append("generate")
             lines.append(
@@ -4621,7 +4997,7 @@ def render_integration(
                 f"{index} = {index} + 1) begin : G_{instance_name}"
             )
         if instance_parameter_map:
-            lines.append(f"{child.name} #(")
+            lines.append(f"{module.name} #(")
             items = list(instance_parameter_map)
             parameter_name_width = max(len(name) for name in items)
             parameter_value_width = max(
@@ -4635,7 +5011,7 @@ def render_integration(
                 )
             lines.append(f") {instance_name} (")
         else:
-            lines.append(f"{child.name} {instance_name} (")
+            lines.append(f"{module.name} {instance_name} (")
         reserved_macros = set(all_macros)
         reserved_macros.update(
             port.condition
@@ -4644,7 +5020,7 @@ def render_integration(
             if port.condition
         )
         append_instance_connections(
-            lines, child, bindings[child.name], reserved_macros
+            lines, module, bindings[child.key], reserved_macros
         )
         lines.append(");")
         if generate_count is not None:
@@ -4652,9 +5028,9 @@ def render_integration(
             lines.append("endgenerate")
         if commented_instance:
             lines.append(
-                f"XLSX2VERILOG COMMENTED MODULE END: {child.name} */"
+                f"XLSX2VERILOG COMMENTED MODULE END: {region_identity} */"
             )
-        lines.extend(["", *user_code_block(f"after {child.name}")])
+        lines.extend(["", *user_code_block(f"after {region_identity}")])
     lines.extend(["endmodule", ""])
     return "\n".join(lines)
 

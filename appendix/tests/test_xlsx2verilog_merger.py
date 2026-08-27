@@ -160,8 +160,8 @@ class MergerUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(MergeError, "匹配到 2 条"):
             merge_verilog_text(duplicated_port, old_port, "ambiguous-port.v")
 
-    def test_main_and_merger_versions_are_v34(self) -> None:
-        self.assertEqual(SCRIPT_VERSION, "Version V3.4")
+    def test_main_and_merger_versions_are_v345(self) -> None:
+        self.assertEqual(SCRIPT_VERSION, "Version V3.45")
         self.assertEqual(merger.VERSION, SCRIPT_VERSION)
 
     def test_v34_recursively_matches_unique_target_filename(self) -> None:
@@ -236,6 +236,86 @@ class MergerUnitTests(unittest.TestCase):
                 code = merger.main([str(source), "--check"])
             self.assertEqual(code, 2)
             self.assertIn("DEFAULT_TARGET_PROJECT 未配置", errors.getvalue())
+
+    def test_v345_user_marker_preserves_commented_parameters(self) -> None:
+        old = verilog(
+            "//localparam AAA = 1; //USER:no change\n"
+            "//parameter BBB = 70; //USER： no change"
+        )
+        new = verilog(
+            "localparam AAA = 2;\n"
+            "parameter BBB = 3;"
+        )
+        merged, diagnostics = merge_verilog_text(new, old, "parameters.v")
+        self.assertIn("//localparam AAA = 1; //USER:no change", merged)
+        self.assertIn("//parameter BBB = 70; //USER： no change", merged)
+        self.assertNotIn("localparam AAA = 2", merged)
+        self.assertNotIn("parameter BBB = 3", merged)
+        self.assertEqual(
+            sum("parameter 声明" in item.message for item in diagnostics),
+            2,
+        )
+
+    def test_v345_ignores_duplicate_target_names_unrelated_to_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "new"
+            target = root / "production"
+            source.mkdir()
+            (target / "rtl").mkdir(parents=True)
+            (target / "legacy_a").mkdir(parents=True)
+            (target / "legacy_b").mkdir(parents=True)
+            (source / "a.v").write_text(verilog("wire next_a;"), encoding="utf-8")
+            (target / "rtl" / "a.v").write_text(
+                verilog("wire old_a;"), encoding="utf-8"
+            )
+            (target / "legacy_a" / "same_b.v").write_text(
+                verilog("wire b1;"), encoding="utf-8"
+            )
+            (target / "legacy_b" / "SAME_B.V").write_text(
+                verilog("wire b2;"), encoding="utf-8"
+            )
+
+            result = merge_paths(source, target, create_backup=False)
+            self.assertEqual(result.changed, [(target / "rtl" / "a.v").resolve()])
+            self.assertIn(
+                "wire next_a;",
+                (target / "rtl" / "a.v").read_text(encoding="utf-8"),
+            )
+
+    def test_v345_cli_confirms_each_change_and_prints_production_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "new"
+            target = root / "production"
+            source.mkdir()
+            target.mkdir()
+            for name in ("a.v", "b.v"):
+                (source / name).write_text(
+                    verilog(f"wire new_{name[0]};"), encoding="utf-8"
+                )
+                (target / name).write_text(
+                    verilog(f"wire old_{name[0]};"), encoding="utf-8"
+                )
+            output = StringIO()
+            errors = StringIO()
+            with (
+                patch("builtins.input", side_effect=["y", "n"]) as confirmed,
+                redirect_stdout(output),
+                redirect_stderr(errors),
+            ):
+                code = merger.main(
+                    [str(source), str(target), "--no-backup"]
+                )
+            self.assertEqual(code, 0, errors.getvalue())
+            self.assertEqual(confirmed.call_count, 2)
+            self.assertIn("wire new_a;", (target / "a.v").read_text(encoding="utf-8"))
+            self.assertIn("wire old_b;", (target / "b.v").read_text(encoding="utf-8"))
+            rendered = output.getvalue()
+            self.assertIn("跳过 1", rendered)
+            self.assertIn("生产文件与路径", rendered)
+            self.assertIn(str((target / "a.v").resolve()), rendered)
+            self.assertNotIn(str((target / "b.v").resolve()) + "\n\n", rendered)
 
     def test_added_and_removed_instances_follow_the_new_structure(self) -> None:
         old = (

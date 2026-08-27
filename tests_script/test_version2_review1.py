@@ -305,7 +305,7 @@ class Version2TechReview1Tests(unittest.TestCase):
                 "for (i_gen_u_mem_dat = 0; i_gen_u_mem_dat < 5;",
                 top,
             )
-            self.assertIn("MEM_DAT U_MEM_DAT (", top)
+            self.assertIn(") U_MEM_DAT (", top)
             self.assertIn(
                 ".bus_in             (bus_in            [i_gen_u_mem_dat]", top
             )

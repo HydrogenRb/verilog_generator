@@ -34,7 +34,9 @@ wire [WIDTH -1:0] w_bus;
 /*USER CODE BEGIN before PRODUCER*/
 
 /*USER CODE END   before PRODUCER*/
-PRODUCER U_PRODUCER (
+PRODUCER #(
+    .WIDTH (WIDTH)
+) U_PRODUCER (
     .n_rst (n_rst),
     .bus   (w_bus),
     .debug (     )

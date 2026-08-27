@@ -128,7 +128,7 @@ class Version3TechReview3Tests(unittest.TestCase):
             warnings = [
                 item.message
                 for item in reporter.items
-                if item.code == "W_PARAMETER_NOT_EXPORTED"
+                if item.code == "W_PARAMETER_AUTO_LOCAL"
             ]
             self.assertTrue(any("CHILD.DATA_W" in message for message in warnings))
             top_path = next(path for path in paths if path.name == "top.v")
@@ -140,6 +140,7 @@ class Version3TechReview3Tests(unittest.TestCase):
                 top,
                 r"wire\s+\[LANE_NUM\s+-1:0\]\[DATA_W\s+-1:0\]\s+lane_out;",
             )
+            self.assertRegex(top, r"(?m)^localparam DATA_W\s+= 8;$")
             self.assertIn("i_gen_u_child_array < LANE_NUM", top)
             self.assertRegex(top, r"\.LANE_NUM\s+\(LANE_NUM\)")
             self.assertLess(

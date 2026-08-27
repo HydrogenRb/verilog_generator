@@ -18,12 +18,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import re
-from typing import Iterable
+from typing import Callable, Iterable
 
 
-VERSION = "Version V3.4"
-# 默认生产目标。填写例如 ``../../rtl/`` 后，CLI 可以只传新代码路径。
-# 保持为 None 时仍要求显式传入 target_project。
+VERSION = "Version V3.45"
+# 默认生产目标配置：
+# 1. 相对路径以“启动 Python 时 terminal 的当前目录”为基准，例如：
+#    DEFAULT_TARGET_PROJECT = Path("../../rtl")
+# 2. Windows 绝对路径建议用 raw string，避免反斜杠转义，例如：
+#    DEFAULT_TARGET_PROJECT = Path(r"D:\project\rtl")
+# 3. 保持 None 时，命令行仍必须显式传入 target_project；脚本不会猜路径。
+# 配置后可执行：python appendix/xlsx2verilog_merger.py ./generated
 DEFAULT_TARGET_PROJECT: str | Path | None = None
 DEFAULT_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
 USER_CODE_MARKER_RE = re.compile(
@@ -96,6 +101,8 @@ class ParameterDeclaration:
     kind: str
     kind_start: int
     kind_end: int
+    statement_start: int
+    statement_end: int
 
 
 @dataclass(frozen=True)
@@ -151,6 +158,7 @@ class MergeEntry:
 class MergeResult:
     changed: list[Path] = field(default_factory=list)
     unchanged: list[Path] = field(default_factory=list)
+    skipped: list[Path] = field(default_factory=list)
     created: list[Path] = field(default_factory=list)
     backup_directory: Path | None = None
     diagnostics: list[Diagnostic] = field(default_factory=list)
@@ -384,6 +392,8 @@ def parse_parameter_declarations(
             kind,
             offset + declaration_match.start("kind"),
             offset + declaration_match.end("kind"),
+            offset,
+            offset + len(line.rstrip("\r\n")),
         )
         previous = declarations.get(key)
         if previous is not None and previous.kind != declaration.kind:
@@ -578,9 +588,9 @@ def parse_user_owned_lines(
     """Parse every supported one-line ``//USER:`` preservation request.
 
     Supported records are a complete active/commented assign, an
-    active/commented wire/reg declaration, and an active/commented named
-    association.  Commented assigns may omit the right-hand side because the
-    signal key alone is sufficient to suppress the regenerated assignment.
+    active/commented wire/reg declaration, an active/commented parameter, and
+    an active/commented named association. Commented records preserve the
+    complete old line while using its stable module/name key.
     """
     masked = _mask_verilog_comments(text)
     protected_ranges = [
@@ -677,6 +687,22 @@ def parse_user_owned_lines(
                 offset += len(original_line)
                 continue
 
+        parameter_match = PARAMETER_DECLARATION_RE.match(code)
+        if parameter_match is not None:
+            name_match = PARAMETER_NAME_RE.search(parameter_match.group("body"))
+            if name_match is not None:
+                result.append(
+                    UserOwnedLine(
+                        "parameter",
+                        current_module,
+                        name_match.group("name"),
+                        None,
+                        statement,
+                    )
+                )
+                offset += len(original_line)
+                continue
+
         connection_match = PORT_CONNECTION_RE.match(code)
         if connection_match is not None:
             result.append(
@@ -693,7 +719,7 @@ def parse_user_owned_lines(
 
         raise MergeError(
             f"{context}: //USER: 仅支持完整的单行 assign、"
-            "单行 wire/reg 声明或单行实例端口连接"
+            "单行 wire/reg 声明、单行 localparam/parameter 或单行实例端口连接"
         )
     return result
 
@@ -724,6 +750,11 @@ def preserve_user_owned_lines(
         f"新文件 {context}",
     )
     new_declarations = parse_signal_declarations(
+        new_text,
+        new_regions,
+        f"新文件 {context}",
+    )
+    new_parameters = parse_parameter_declarations(
         new_text,
         new_regions,
         f"新文件 {context}",
@@ -783,6 +814,17 @@ def preserve_user_owned_lines(
             candidate_start = declaration.statement_start
             candidate_end = declaration.statement_end
             description = "signal 声明"
+        elif old_line.kind == "parameter":
+            parameter = new_parameters.get(
+                (old_line.module_name, old_line.key)
+            )
+            if parameter is None:
+                raise MergeError(
+                    f"{context}: 新结构缺少 //USER: parameter 声明 {label}"
+                )
+            candidate_start = parameter.statement_start
+            candidate_end = parameter.statement_end
+            description = "parameter 声明"
         else:
             connection_candidates = connections_by_key.get(
                 (old_line.module_name, old_line.key), []
@@ -956,19 +998,25 @@ def _source_files(source: Path) -> list[tuple[Path, Path]]:
     )
 
 
-def _recursive_target_index(target: Path) -> dict[str, Path]:
+def _recursive_target_index(
+    target: Path,
+    relevant_names: set[str],
+) -> dict[str, Path]:
     """Index a production tree by case-insensitive file name.
 
-    V3.4 deliberately uses the file name as the target key.  Any duplicate is
-    rejected before merge planning because selecting one path would be unsafe.
+    Only names present in the new-code source are indexed. Duplicate unrelated
+    production files must not block a focused update.
     """
     by_name: dict[str, list[Path]] = {}
     for path in target.rglob("*"):
+        key = path.name.casefold()
+        if key not in relevant_names:
+            continue
         if path.suffix.casefold() not in DEFAULT_SUFFIXES:
             continue
         if not (path.is_file() or path.is_symlink()):
             continue
-        by_name.setdefault(path.name.casefold(), []).append(path)
+        by_name.setdefault(key, []).append(path)
     duplicates = {
         name: sorted(paths, key=lambda item: str(item).casefold())
         for name, paths in by_name.items()
@@ -1031,7 +1079,11 @@ def build_merge_plan(
             for paths in duplicate_sources.values()
         )
         raise MergeError(f"新代码中存在重名 Verilog 文件，文件名键不唯一：{details}")
-    target_index = _recursive_target_index(target) if target.is_dir() else None
+    target_index = (
+        _recursive_target_index(target, set(source_names))
+        if target.is_dir()
+        else None
+    )
     plan: list[MergeEntry] = []
     diagnostics: list[Diagnostic] = []
     seen_targets: dict[str, Path] = {}
@@ -1166,11 +1218,26 @@ def execute_merge_plan(
     backup_directory: Path | None = None,
     backup_anchor: Path | None = None,
     diagnostics: Iterable[Diagnostic] = (),
+    confirm_entry: Callable[[MergeEntry], bool] | None = None,
 ) -> MergeResult:
     """Apply a validated plan, rolling back every replaced file on failure."""
     result = MergeResult(check_only=check_only, diagnostics=list(diagnostics))
     changed_entries = [entry for entry in plan if entry.changed]
     result.unchanged = [entry.target_path for entry in plan if not entry.changed]
+    if not check_only and confirm_entry is not None:
+        accepted: list[MergeEntry] = []
+        for entry in changed_entries:
+            if confirm_entry(entry):
+                accepted.append(entry)
+            else:
+                result.skipped.append(entry.target_path)
+                result.diagnostics.append(
+                    Diagnostic(
+                        "info",
+                        f"{entry.relative_path.as_posix()}: 用户选择 N，已跳过",
+                    )
+                )
+        changed_entries = accepted
     result.changed = [entry.target_path for entry in changed_entries]
     result.created = [entry.target_path for entry in changed_entries if entry.created]
     if check_only or not changed_entries:
@@ -1241,6 +1308,7 @@ def merge_paths(
     check_only: bool = False,
     create_backup: bool = True,
     backup_directory: Path | None = None,
+    confirm_entry: Callable[[MergeEntry], bool] | None = None,
 ) -> MergeResult:
     """Validate and merge one generated file or a complete generated tree."""
     source = _resolved(new_generated)
@@ -1261,6 +1329,7 @@ def merge_paths(
         backup_directory=backup_directory,
         backup_anchor=source,
         diagnostics=diagnostics,
+        confirm_entry=confirm_entry,
     )
 
 
@@ -1291,10 +1360,32 @@ def _print_result(result: MergeResult) -> None:
     action = "检查" if result.check_only else "合并"
     print(
         f"{action}完成：更新 {len(result.changed)}，新建 {len(result.created)}，"
-        f"不变 {len(result.unchanged)}。"
+        f"不变 {len(result.unchanged)}，跳过 {len(result.skipped)}。"
     )
     if result.backup_directory is not None:
         print(f"备份目录：{result.backup_directory}")
+    if result.changed:
+        print("\n生产文件与路径：")
+        for path in result.changed:
+            print(path.name)
+            print(path.resolve())
+            print()
+
+
+def _confirm_entry(entry: MergeEntry) -> bool:
+    action = "新建" if entry.created else "更新"
+    prompt = f"{action} {entry.target_path.resolve()}？[Y/N]: "
+    while True:
+        try:
+            answer = input(prompt).strip().casefold()
+        except (EOFError, KeyboardInterrupt):
+            print("\nwarning[未获得确认，按 N 跳过该文件]", file=sys.stderr)
+            return False
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print("请输入 Y 或 N。")
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -1319,6 +1410,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             check_only=args.check,
             create_backup=not args.no_backup,
             backup_directory=args.backup_dir,
+            confirm_entry=None if args.check else _confirm_entry,
         )
     except MergeError as exc:
         print(f"error[{exc}]", file=sys.stderr)

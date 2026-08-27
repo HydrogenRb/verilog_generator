@@ -8,12 +8,12 @@
 |---|---|---|
 | 第一轮：新功能与边界输入检视 | 通过 | 15 项通过，0 项问题 |
 | 第二轮：历史功能和 real_test 回归 | 通过 | 5 项通过，0 项问题 |
-| 第三轮：生成 Verilog 独立静态检视 | 通过 | 36 项通过，0 项问题 |
+| 第三轮：生成 Verilog 独立静态检视 | 通过 | 41 项通过，0 项问题 |
 
 ## 第一轮：新功能与边界输入检视
 
-- PASS：main_test.xlsx 无错误生成 3 个模块
-- PASS：生成文件数为 3
+- PASS：main_test.xlsx 无错误生成 4 个模块
+- PASS：生成文件数为 4
 - PASS：{{i}} 已展开 sig1
 - PASS：DW_SIG1 不确定位宽使用 114
 - PASS：{{j}} 已展开 sig1，畸形 valid 模板已恢复
@@ -30,7 +30,7 @@
 
 ## 第二轮：历史功能和 real_test 回归
 
-- PASS：unittest 77/77 通过
+- PASS：unittest 83/83 通过
 - PASS：Tech Review 1 matrix 6/6 通过
 - PASS：review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --strict 通过
 - PASS：review_test_cases\08_real_test_2\01_core_layer.xlsx --strict 通过
@@ -70,8 +70,13 @@
 - PASS：mem_phy.v.test_bus_sig1_valid output 已赋零
 - PASS：mem_phy.v.test_bus_sig2_valid output 已赋零
 - PASS：mem_phy.v.test_bus_sig3_valid output 已赋零
+- PASS：gen_phy.v 模块边界唯一
+- PASS：gen_phy.v 括号平衡
+- PASS：gen_phy.v 端口列表完整且无重复
+- PASS：gen_phy.v.sig_out output 已赋零
 - PASS：RISCV_CORE_TEST 每个端口恰好连接一次
 - PASS：MEM_PHY 每个端口恰好连接一次
+- PASS：GEN_PHY 每个端口恰好连接一次
 - PASS：生成代码中不再存在命名模板占位符
 - PASS：生成目录无残留临时文件
 

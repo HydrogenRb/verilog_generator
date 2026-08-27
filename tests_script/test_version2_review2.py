@@ -103,16 +103,16 @@ class Version2TechReview2Tests(unittest.TestCase):
 
             top = (output / "riscv_top.v").read_text(encoding="utf-8")
             core = (output / "riscv_core_test.v").read_text(encoding="utf-8")
-            for name, value in (
-                ("DW_SIG1", "11"),
-                ("DW_SIG2", "12"),
-                ("DW_SIG3", "13"),
-                ("RST_LANE", "1"),
-                ("CLK_LANE", "1"),
+            for kind, name, value in (
+                ("localparam", "DW_SIG1", "11"),
+                ("localparam", "DW_SIG2", "12"),
+                ("parameter", "DW_SIG3", "13"),
+                ("localparam", "RST_LANE", "1"),
+                ("localparam", "CLK_LANE", "1"),
             ):
                 self.assertRegex(
                     core,
-                    rf"localparam\s+{name}\s+= {value}",
+                    rf"{kind}\s+{name}\s+= {value}",
                 )
 
             self.assertRegex(top, r"(?m)^\s*wire\s+\[DW_SIG3\s+-1:0\]\s+ready_to_process;$")
