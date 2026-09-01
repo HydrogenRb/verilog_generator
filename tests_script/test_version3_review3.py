@@ -52,7 +52,7 @@ class Version3TechReview3Tests(unittest.TestCase):
             self.assertRegex(text, r"(?m)^// `define LANE_A\s+2$")
             self.assertRegex(text, r"(?m)^// `define LANE_B\s+4$")
             self.assertIn("[`MixedWidth -1:0] kept", text)
-            self.assertRegex(text, r"localparam\s+CALC_W\s+= `log2\(MIXEDWIDTH\)")
+            self.assertRegex(text, r"parameter\s+CALC_W\s+= `log2\(MIXEDWIDTH\)")
             self.assertNotIn("drop_a", text)
             self.assertNotIn("drop_b", text)
             self.assertNotRegex(text, r"(?:localparam|parameter)\s+MixedWidth")
@@ -141,7 +141,7 @@ class Version3TechReview3Tests(unittest.TestCase):
                 r"wire\s+\[LANE_NUM\s+-1:0\]\[DATA_W\s+-1:0\]\s+lane_out;",
             )
             self.assertRegex(top, r"(?m)^localparam DATA_W\s+= 8;$")
-            self.assertIn("i_gen_u_child_array < LANE_NUM", top)
+            self.assertIn("i < LANE_NUM", top)
             self.assertRegex(top, r"\.LANE_NUM\s+\(LANE_NUM\)")
             self.assertLess(
                 top.index("/*USER CODE BEGIN before module*/"),
@@ -204,7 +204,7 @@ class Version3TechReview3Tests(unittest.TestCase):
                 top,
                 r"wire\s+\[`laneCount\s+-1:0\]\[`dataWidth\s+-1:0\]\s+data_out;",
             )
-            self.assertIn("i_gen_u_macro_child < `laneCount", top)
+            self.assertIn("i < `laneCount", top)
             self.assertIn("// `define laneCount", top)
             self.assertIn("// `define dataWidth", top)
 

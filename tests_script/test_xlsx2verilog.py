@@ -152,7 +152,7 @@ class GenerationTests(unittest.TestCase):
             phy = (output / "mem_phy.v").read_text(encoding="utf-8")
             gen_phy = (output / "gen_phy.v").read_text(encoding="utf-8")
 
-            self.assertRegex(top, r"(?m)^\s*localparam\s+UID_SIZE\s+= 5")
+            self.assertRegex(top, r"(?m)^\s*parameter\s+UID_SIZE\s+= 5")
             self.assertRegex(top, r"(?m)^// `define DFT_BUS\s+64$")
             self.assertRegex(top, r"(?m)^\s*wire\s+.*\bw_apb_1;$")
             self.assertRegex(top, r"(?m)^\s*wire\s+.*\bw_apb_6;$")
@@ -468,7 +468,7 @@ class GenerationTests(unittest.TestCase):
             )
             self.assertNotIn("gen_zero_data", source)
             self.assertTrue(
-                destination.endswith("/*USER CODE END   before statement*/\nendmodule\n")
+                destination.endswith("/*USER CODE END   after statement*/\nendmodule\n")
             )
 
     def test_packed_dimension_columns_are_aligned_for_internal_wires(self) -> None:

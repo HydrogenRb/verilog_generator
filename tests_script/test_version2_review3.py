@@ -82,7 +82,7 @@ class Version2TechReview3Tests(unittest.TestCase):
             self.assertRegex(
                 top,
                 r"\.high_clk_after_pll_0\s+"
-                r"\(high_clk_after_pll_0\s*\[i_gen_u_riscv_crg\]\),?\s+"
+                r"\(high_clk_after_pll_0\s*\[i\]\),?\s+"
                 r"//TODO:本信号期望有逻辑功能，请完成",
             )
             self.assertIn("begin : G_U_RISCV_CRG", top)
@@ -170,7 +170,7 @@ class Version2TechReview3Tests(unittest.TestCase):
             text = paths[0].read_text(encoding="utf-8")
             self.assertRegex(
                 text,
-                r"localparam\s+LANE_NUM\s+= `glb_parameter",
+                r"parameter\s+LANE_NUM\s+= `glb_parameter",
             )
             self.assertRegex(text, r"(?m)^\s*input wire \[LANE_NUM\s+-1:0\]\s+DataBus,")
             self.assertRegex(text, r"(?m)^\s*inout\s+\[8\s+-1:0\]\s+BiDir$")
@@ -328,7 +328,7 @@ class Version2TechReview3Tests(unittest.TestCase):
             )
             self.assertRegex(
                 text,
-                r"\.lanes\s+\(lanes\s*\[i_gen_u_child\]\),?\s+"
+                r"\.lanes\s+\(lanes\s*\[i\]\),?\s+"
                 r"//TODO:本信号期望有逻辑功能，请完成",
             )
             self.assertIn("begin : G_U_CHILD", text)

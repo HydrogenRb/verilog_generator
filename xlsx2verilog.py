@@ -29,6 +29,13 @@ from xml.etree import ElementTree as ET
 # True: honor “条件：MACRO” in category cells and emit conditional Verilog.
 ENABLE_CONDITIONAL_BLOCKS = False
 
+# True 时只写出当前选择的集成 TOP，不再生成任何子模块桩文件。
+ONLY_TOP = False
+
+# parameter 维度按“数值”列比较后不一致时始终给出 warning。False 仅告警；
+# True 还会按完整 packed 总位宽做低位连接，并对未驱动高位自动补 0。
+AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH = False
+
 # Text placed at the beginning of every generated Verilog file.  Edit this
 # plain multi-line string to match the project.  The stable USER markers make
 # the header editable after generation as well.
@@ -76,6 +83,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "W_GENERAL": True,  # 其他未分类警告：显示需要人工确认的风险。
     "W_WIDTH_PLACEHOLDER": True,  # 位宽占位：显示使用 114 代替未知值。
     "W_WIDTH_MISMATCH": True,  # 位宽不匹配：显示相连信号的形状差异。
+    "W_PARAMETER_WIDTH_MISMATCH": True,  # 参数位宽不匹配：按数值列发现参数或多维 packed 形状不一致。
     "W_ZERO_WIDTH": True,  # 零位宽：显示已生成 [0 -1:0] 但需确认工具链行为。
     "W_NA_CONSTANT_WIDTH": True,  # NA 常量：显示定宽常量大于目标或无法安全匹配。
     "W_PARAMETER_NOT_EXPORTED": True,  # 参数未上拉：例化次数等位置引用了 TOP 中不存在的 parameter。
@@ -102,8 +110,8 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.45"
-SCRIPT_RELEASE_DATE = "2026.8.27"
+SCRIPT_VERSION = "Version V3.5.00"
+SCRIPT_RELEASE_DATE = "2026.9.1"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
 
@@ -2174,12 +2182,87 @@ def resolve_hierarchy_defaults(
     finalize_modules()
 
 
+def parse_define_sheet(sheet: Sheet, reporter: Reporter) -> dict[str, str]:
+    """Read the dedicated ``define`` sheet as centralized macro metadata.
+
+    Supported headers are ``宏名/名称/name/macro/define/端口名`` plus
+    ``数值/value/default/默认值``.  This remains metadata: generated Verilog
+    emits the same commented ``// `define`` reference lines as module-local
+    macro rows and never creates active preprocessor definitions.
+    """
+    name_aliases = {
+        "宏名", "名称", "name", "macro", "define", "端口名", "port", "portname"
+    }
+    value_aliases = {"数值", "value", "default", "默认值", "匹配值"}
+    header: tuple[int, int, int] | None = None
+    for row in range(1, min(sheet.max_row, 20) + 1):
+        name_column: int | None = None
+        value_column: int | None = None
+        for column in range(1, sheet.max_column + 1):
+            value = clean(sheet.cell(row, column)).casefold().replace(" ", "")
+            if value in name_aliases and name_column is None:
+                name_column = column
+            if value in value_aliases and value_column is None:
+                value_column = column
+        if name_column is not None and value_column is not None:
+            header = (row, name_column, value_column)
+            break
+    if header is None:
+        reporter.error(
+            f"页签 {sheet.name}: define 页签缺少宏名和数值表头",
+            code="E_WIDTH",
+        )
+        return {}
+
+    header_row, name_column, value_column = header
+    macros: dict[str, str] = {}
+    source_rows: dict[str, int] = {}
+    for row in range(header_row + 1, sheet.max_row + 1):
+        raw_name = clean(sheet.cell(row, name_column))
+        if not raw_name or COMMENT_ROW_RE.search(raw_name):
+            continue
+        raw_name = re.sub(r"^`define\s+", "", raw_name, flags=re.IGNORECASE)
+        raw_name = raw_name.lstrip("`").strip()
+        if not IDENTIFIER_RE.fullmatch(raw_name):
+            reporter.error(
+                f"页签 {sheet.name} 第 {row} 行: 宏名 {raw_name!r} "
+                "不是合法 Verilog 标识符",
+                code="E_WIDTH",
+            )
+            continue
+        default = normalized_width_default(
+            sheet.cell(row, value_column),
+            f"页签 {sheet.name} 第 {row} 行: 宏 `{raw_name}",
+            reporter,
+            fallback_uncertain=False,
+        )
+        previous = macros.get(raw_name)
+        if previous is not None and previous != default:
+            reporter.error(
+                f"页签 {sheet.name}: 宏 `{raw_name} 默认值冲突；第 "
+                f"{source_rows[raw_name]} 行为 {previous}，第 {row} 行为 {default}",
+                code="E_WIDTH",
+            )
+            continue
+        macros.setdefault(raw_name, default)
+        source_rows.setdefault(raw_name, row)
+    return macros
+
+
 def parse_workbook(
     path: Path,
     reporter: Reporter,
     integration_sheet: str | None = None,
 ) -> tuple[Workbook, dict[str, Module], Integration | None]:
     workbook = XlsxReader().read(path)
+    define_sheets = [
+        sheet for sheet in workbook.sheets if sheet.name.casefold() == "define"
+    ]
+    if len(define_sheets) > 1:
+        reporter.error("工作簿中只能有一个 define 页签", code="E_WIDTH")
+    central_macros = (
+        parse_define_sheet(define_sheets[0], reporter) if define_sheets else {}
+    )
     integrations = discover_integrations(workbook)
     integration: Integration | None = None
     if integration_sheet:
@@ -2217,6 +2300,8 @@ def parse_workbook(
     for sheet in workbook.sheets:
         if sheet.name in integration_sheet_names:
             continue
+        if sheet.name.casefold() == "define":
+            continue
         if referenced is not None:
             header = find_module_header(sheet)
             if header is None:
@@ -2241,6 +2326,20 @@ def parse_workbook(
             )
         else:
             modules[module.name] = module
+
+    if central_macros:
+        for module in modules.values():
+            for name, value in central_macros.items():
+                previous = module.declared_macros.get(name)
+                if previous is not None and previous != value:
+                    reporter.error(
+                        f"页签 {module.sheet_name}: 宏 `{name}={previous} 与 "
+                        f"define 页签统一值 {value} 冲突",
+                        code="E_WIDTH",
+                    )
+                    continue
+                module.declared_macros.setdefault(name, value)
+            rebuild_module_symbols(module)
 
     if integration is None and not integrations:
         reporter.warning(
@@ -2550,11 +2649,11 @@ def port_uses_parameter_width(port: Port) -> bool:
 
 
 def resolved_width_value(width: Width, macros: dict[str, str]) -> int | None:
-    if width.kind == "parameter":
-        return None
     expression = width.expression
     if width.kind == "macro":
         expression = macros.get(expression.lstrip("`"), width.default)
+    elif width.kind == "parameter":
+        expression = width.default
     return evaluate_int_expression(expression)
 
 
@@ -2564,7 +2663,10 @@ def simple_packed_width(port: Port, macros: dict[str, str]) -> int | None:
         port.is_interface
         or port.arrays
         or port.packed_dimensions
-        or port_uses_parameter_width(port)
+        or (
+            port_uses_parameter_width(port)
+            and not AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH
+        )
     ):
         return None
     return resolved_width_value(port.width, macros)
@@ -2573,9 +2675,7 @@ def simple_packed_width(port: Port, macros: dict[str, str]) -> int | None:
 def comparable_port_shape(
     port: Port, macros: dict[str, str]
 ) -> tuple[object, ...] | None:
-    """Resolve literal/macro dimensions while exempting parameter dimensions."""
-    if port_uses_parameter_width(port):
-        return None
+    """Resolve literal, macro, and parameter dimensions from matching values."""
     if port.interface_type:
         base_type = port.interface_type.rsplit(".", 1)[0]
         values = tuple(resolved_width_value(item, macros) for item in port.arrays)
@@ -2583,6 +2683,31 @@ def comparable_port_shape(
     dimensions = (*port.arrays, *port.packed_dimensions, port.width)
     values = tuple(resolved_width_value(item, macros) for item in dimensions)
     return values if all(value is not None for value in values) else port.shape
+
+
+def packed_total_width(port: Port, macros: dict[str, str]) -> int | None:
+    """Resolve the complete packed size used by parameter-aware adapters."""
+    if port.is_interface:
+        return None
+    dimensions = (*port.arrays, *port.packed_dimensions, port.width)
+    values = [resolved_width_value(item, macros) for item in dimensions]
+    if any(value is None for value in values):
+        return None
+    total = 1
+    for value in values:
+        total *= value or 0
+    return total
+
+
+def connection_numeric_width(port: Port, macros: dict[str, str]) -> int | None:
+    """Width available to connection adapters under the configured policy."""
+    if port_uses_parameter_width(port):
+        return (
+            packed_total_width(port, macros)
+            if AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH
+            else None
+        )
+    return simple_packed_width(port, macros)
 
 
 def low_bits(expression: str, width: int) -> str:
@@ -2776,16 +2901,11 @@ def render_module_header(
         parameter_name_width = max(len(name) for name, _ in parameter_items)
         for index, (name, value) in enumerate(parameter_items):
             comma = "," if index < len(parameter_items) - 1 else ""
-            keyword = (
-                "parameter"
-                if name in module.externally_configurable_parameters
-                else "localparam"
-            )
             rendered_value = module.parameter_expressions.get(name, value)
             comment_value = module.parameter_comments.get(name)
             comment = f"  // {comment_value}" if comment_value else ""
             lines.append(
-                f"    {keyword:<10} {name:<{parameter_name_width}} = "
+                f"    {'parameter':<10} {name:<{parameter_name_width}} = "
                 f"{rendered_value}{comma}{comment}"
             )
         lines.append(") (")
@@ -2870,7 +2990,7 @@ def render_stub(module: Module, macros: dict[str, str] | None = None) -> str:
             append_conditioned_zero_assignment(
                 lines, port, target_width=target_width
             )
-    lines.extend(["endmodule", ""])
+    lines.extend(["", *user_code_block("after statement"), "endmodule", ""])
     return "\n".join(lines)
 
 
@@ -3077,7 +3197,6 @@ def render_integration(
     instance_names: dict[str, str] = {}
     used_instance_names: set[str] = set()
     generated_indices: dict[str, str] = {}
-    used_generated_indices: set[str] = set()
     for child in child_instances:
         configured = instance_spec_for_key(child.key)
         instance_name = (
@@ -3092,9 +3211,7 @@ def render_integration(
             )
         used_instance_names.add(instance_name)
         instance_names[child.key] = instance_name
-        generated_indices[child.key] = unique_name(
-            f"i_gen_{instance_name}", used_generated_indices
-        ).lower()
+        generated_indices[child.key] = "i"
 
     all_macros: dict[str, str] = {}
     all_macro_sources: dict[str, str] = {}
@@ -3678,6 +3795,7 @@ def render_integration(
     wires: list[Wire] = []
     adapter_assignments: list[Assignment] = []
     used_signals = set(top_ports)
+    named_na_wires: dict[str, Wire] = {}
     def configured_count_width(child_key: str) -> Width | None:
         child = child_for_key(child_key)
         configured = instance_spec_for_key(child_key)
@@ -3896,6 +4014,13 @@ def render_integration(
         left_shape = comparable_port_shape(left, all_macros)
         right_shape = comparable_port_shape(right, all_macros)
         return left_shape is None or right_shape is None or left_shape == right_shape
+
+    def width_mismatch_code(left: Port, right: Port) -> str:
+        return (
+            "W_PARAMETER_WIDTH_MISMATCH"
+            if port_uses_parameter_width(left) or port_uses_parameter_width(right)
+            else "W_WIDTH_MISMATCH"
+        )
 
     def get_port(module_name: str, port_name: str, row: int) -> Port | None:
         module = modules.get(module_name)
@@ -4121,7 +4246,7 @@ def render_integration(
                     code="E_NA_TARGET",
                 )
                 return
-            if target in used_signals:
+            if target in used_signals and target not in named_na_wires:
                 reporter.error(
                     f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
                     f"{target} 与已有信号重名",
@@ -4131,7 +4256,15 @@ def render_integration(
             signal_name = target
             used_signals.add(signal_name)
         else:
-            signal_name = unique_name(port.name, used_signals)
+            # Anonymous NA networks must remain readable.  If the plain port
+            # name is occupied, qualify it with the instance instead of
+            # producing the misleading generic ``xxx_2`` suffix.
+            base_name = (
+                port.name
+                if port.name not in used_signals
+                else f"na_{instance_names[child_key]}_{port.name}"
+            )
+            signal_name = unique_name(base_name, used_signals)
         placeholder_arrays = port.arrays
         expression = signal_name
         if index:
@@ -4145,8 +4278,7 @@ def render_integration(
                 *placeholder_arrays,
             )
             expression += f"[{generated_indices[child_key]}]"
-        wires.append(
-            Wire(
+        placeholder_wire = Wire(
                 name=signal_name,
                 width=port.width,
                 arrays=placeholder_arrays,
@@ -4160,7 +4292,33 @@ def render_integration(
                 ),
                 packed_dimensions=port.packed_dimensions,
             )
-        )
+        existing_placeholder = named_na_wires.get(signal_name) if target else None
+        if existing_placeholder is None:
+            wires.append(placeholder_wire)
+            if target:
+                named_na_wires[signal_name] = placeholder_wire
+        else:
+            existing_shape = (
+                existing_placeholder.interface_type,
+                tuple(item.effective for item in existing_placeholder.arrays),
+                tuple(
+                    item.effective
+                    for item in existing_placeholder.packed_dimensions
+                ),
+                existing_placeholder.width.effective,
+            )
+            requested_shape = (
+                placeholder_wire.interface_type,
+                tuple(item.effective for item in placeholder_wire.arrays),
+                tuple(item.effective for item in placeholder_wire.packed_dimensions),
+                placeholder_wire.width.effective,
+            )
+            if existing_shape != requested_shape:
+                reporter.warning(
+                    f"集成页签 {sheet.name} 第 {row} 行: NA->{signal_name} "
+                    "重复目标的位宽/维度与首次创建不同；复用首次声明，请人工确认",
+                    code="W_WIDTH_MISMATCH",
+                )
         bind(
             child_key,
             port,
@@ -4199,7 +4357,7 @@ def render_integration(
                 code="E_NA_TARGET",
             )
             return
-        if target in used_signals:
+        if target in used_signals and target not in named_na_wires:
             reporter.error(
                 f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
                 f"{target} 与已有信号重名",
@@ -4217,15 +4375,22 @@ def render_integration(
                 packed_dimensions=(),
             )
             observed_expression += bit_select
-        wires.append(
-            Wire(
+        observer_wire = Wire(
                 name=target,
                 width=observed_port.width,
                 arrays=observed_port.arrays,
                 parameter_map=parameter_maps.get(top.name, {}),
                 packed_dimensions=observed_port.packed_dimensions,
             )
-        )
+        if target not in named_na_wires:
+            wires.append(observer_wire)
+            named_na_wires[target] = observer_wire
+        else:
+            reporter.warning(
+                f"集成页签 {sheet.name} 第 {row} 行: NA->{target} 已存在；"
+                "复用同名观察 wire，请确认多个来源不会形成多驱动",
+                code="W_DRIVER_RISK",
+            )
         add_assignment(
             target,
             observed_expression,
@@ -4472,7 +4637,7 @@ def render_integration(
                 # below creates the TOP signal, ties it to zero, and the same
                 # signal then drives every connected child input.
                 mismatch = not shapes_match(top_port, child_port)
-                child_width = simple_packed_width(child_port, all_macros)
+                child_width = connection_numeric_width(child_port, all_macros)
                 if top_bit_select is not None:
                     # An explicit selection is an intentional user-authored
                     # connection expression.  Do not replace it with an
@@ -4483,7 +4648,7 @@ def render_integration(
                         f"{top.name}.{top_port.name}信号和"
                         f"{block.module_name}.{child_port.name}信号应该连接，"
                         "但是其位宽不匹配",
-                        code="W_WIDTH_MISMATCH",
+                        code=width_mismatch_code(top_port, child_port),
                     )
                 child_key = block_key(block)
                 child_index = row_markers.get(child_key)
@@ -4509,7 +4674,7 @@ def render_integration(
                 top_width = (
                     1
                     if top_bit_select is not None
-                    else simple_packed_width(top_port, all_macros)
+                    else connection_numeric_width(top_port, all_macros)
                 )
                 if (
                     mismatch
@@ -4709,12 +4874,13 @@ def render_integration(
                         f"{source_block.module_name}.{source_port_for_warning.name}"
                         f"信号和{item_block.module_name}.{port.name}信号应该连接，"
                         "但是其位宽不匹配",
-                        code="W_WIDTH_MISMATCH",
+                        code=width_mismatch_code(source_port_for_warning, port),
                     )
                 signal_base = source_port.name
                 signal_name = unique_name(f"w_{signal_base}", used_signals)
                 numeric_widths = [
-                    simple_packed_width(port, all_macros) for _, port in entries
+                    connection_numeric_width(port, all_macros)
+                    for _, port in entries
                 ]
                 can_resize = all(width is not None for width in numeric_widths)
                 maximum_width = (
@@ -4972,6 +5138,10 @@ def render_integration(
                 target_width=target_width,
             )
 
+    if generate_counts:
+        lines.extend(["", "genvar i;"])
+    lines.extend(["", *user_code_block("after statement")])
+
     for child in child_instances:
         module = child_modules[child.key]
         instance_name = instance_names[child.key]
@@ -4990,7 +5160,6 @@ def render_integration(
             )
         if generate_count is not None:
             index = generated_indices[child.key]
-            lines.append(f"genvar {index};")
             lines.append("generate")
             lines.append(
                 f"for ({index} = 0; {index} < {generate_count}; "
@@ -5169,6 +5338,11 @@ def generate(
     workbook, modules, integration = parse_workbook(
         workbook_path, reporter, integration_sheet=integration_sheet
     )
+    if ONLY_TOP and integration is None:
+        reporter.error(
+            "ONLY_TOP=True 但工作簿没有选中的有效集成页签",
+            code="E_INTEGRATION",
+        )
     if reporter.has_errors:
         return [], reporter
 
@@ -5188,9 +5362,10 @@ def generate(
             rendered_top = render_integration(
                 sheet, integration, modules, reporter
             )
-            for module in modules.values():
-                if module.name != top_name:
-                    rendered[module.name] = render_stub(module, {})
+            if not ONLY_TOP:
+                for module in modules.values():
+                    if module.name != top_name:
+                        rendered[module.name] = render_stub(module, {})
             # Keep the integration TOP first in the returned path order.
             rendered = {top_name or "TOP": rendered_top, **rendered}
     elif top_name is None:
@@ -5753,12 +5928,11 @@ def interactive_main() -> int:
         "查看识别结果",
         "校验工作簿",
         "严格校验",
-        "扩散变量值（修改 XLSX）",
         "退出",
     ]
     while True:
         selected = arrow_menu("XLSX → Verilog（↑/↓，Enter 确认）：", actions)
-        if selected is None or selected == 5:
+        if selected is None or selected == 4:
             print("已退出。")
             return 0
         try:
@@ -5769,16 +5943,15 @@ def interactive_main() -> int:
             print(f"错误: {exc}", file=sys.stderr)
             return 2
         integration_arguments: list[str] = []
-        if selected in {0, 1, 2, 3}:
-            try:
-                integration_sheet = choose_integration_sheet(workbook)
-            except MenuCancelled:
-                continue
-            except (ValueError, OSError, ET.ParseError, KeyError) as exc:
-                print(f"错误: {exc}", file=sys.stderr)
-                return 2
-            if integration_sheet:
-                integration_arguments = ["--integration", integration_sheet]
+        try:
+            integration_sheet = choose_integration_sheet(workbook)
+        except MenuCancelled:
+            continue
+        except (ValueError, OSError, ET.ParseError, KeyError) as exc:
+            print(f"错误: {exc}", file=sys.stderr)
+            return 2
+        if integration_sheet:
+            integration_arguments = ["--integration", integration_sheet]
         if selected == 0:
             response = input("输出目录 [generated]: ").strip()
             output = response or "generated"
@@ -5793,26 +5966,6 @@ def interactive_main() -> int:
             return main(
                 [str(workbook), "--check", "--strict", *integration_arguments]
             )
-        targets, discovery_reporter = list_diffusible_variables(workbook)
-        discovery_reporter.print()
-        if not targets:
-            print("错误: 工作簿中没有可扩散的宏或 parameter", file=sys.stderr)
-            return 2
-        target_index = arrow_menu(
-            "请选择一次要扩散的变量（↑/↓，Enter 确认，Esc 返回）：",
-            [target.label for target in targets],
-        )
-        if target_index is None:
-            continue
-        value = input("请输入非负整数或整体带括号、结果非负的整数表达式: ").strip()
-        return main(
-            [
-                str(workbook),
-                "--spread-value",
-                targets[target_index].expression,
-                value,
-            ]
-        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -5828,12 +5981,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--integration",
         metavar="SHEET",
         help="多集成工作簿中选择一个集成页签；单个候选时可省略",
-    )
-    parser.add_argument(
-        "--spread-value",
-        nargs=2,
-        metavar=("VARIABLE", "VALUE"),
-        help="备份后原地扩散一个宏/parameter 数值；执行前仍需输入 y/n",
     )
     return parser
 
@@ -5869,30 +6016,6 @@ def main(argv: Iterable[str] | None = None) -> int:
             raise ValueError(f"输入文件不存在: {workbook_path}")
         if workbook_path.suffix.lower() != ".xlsx":
             raise ValueError("输入文件必须是 .xlsx 格式")
-        if args.spread_value:
-            print("正在执行修改前完整检查……")
-            precheck = inspect_all_integrations(workbook_path)
-            precheck.print()
-            print(
-                f"预检查完成：{sum(item.level == '错误' for item in precheck.items)} 个 error，"
-                f"{sum(item.level == '警告' for item in precheck.items)} 个 warning。"
-            )
-            variable, value = args.spread_value
-            result = diffuse_variable_value(workbook_path, variable, value)
-            if result.cancelled:
-                print("已取消，XLSX 未修改，也未创建备份。")
-                return 0
-            result.after.print()
-            print(
-                f"扩散完成：修改 {result.edited_cells} 个单元格；"
-                f"备份位于 {result.backup_path}"
-            )
-            failed = result.after.has_errors
-            if failed:
-                print("扩散后仍存在 error，请继续处理其他冲突。", file=sys.stderr)
-                return 2
-            print("扩散后校验无 error。")
-            return 0
         if args.list:
             reporter = Reporter()
             workbook, modules, integration = parse_workbook(

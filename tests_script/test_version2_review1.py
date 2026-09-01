@@ -301,16 +301,16 @@ class Version2TechReview1Tests(unittest.TestCase):
             top = (root / "generated" / "riscv_top.v").read_text(encoding="utf-8")
             self.assertIn(".dft_test_en          (dft_test_en[0]", top)
             self.assertIn(
-                "genvar i_gen_u_mem_dat;\ngenerate\n"
-                "for (i_gen_u_mem_dat = 0; i_gen_u_mem_dat < 5;",
+                "genvar i;\n\n/*USER CODE BEGIN after statement*/",
                 top,
             )
+            self.assertIn("for (i = 0; i < 5;", top)
             self.assertIn(") U_MEM_DAT (", top)
             self.assertIn(
-                ".bus_in             (bus_in            [i_gen_u_mem_dat]", top
+                ".bus_in             (bus_in            [i]", top
             )
             self.assertIn(
-                ".dyadic_bus_out_rsp (dyadic_bus_out_rsp[i_gen_u_mem_dat]", top
+                ".dyadic_bus_out_rsp (dyadic_bus_out_rsp[i]", top
             )
 
 

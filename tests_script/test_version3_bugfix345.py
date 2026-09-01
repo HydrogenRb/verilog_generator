@@ -115,11 +115,11 @@ class Version345BugfixTests(unittest.TestCase):
                 any(item.code == "W_PARAMETER_NA_REPAIR" for item in reporter.items)
             )
             self.assertIn(
-                "for (i_gen_u_child = 0; i_gen_u_child < 4; ", top
+                "for (i = 0; i < 4; ", top
             )
             self.assertRegex(
                 top,
-                r"\.SELECT\s+\(LOC_PARAM_A\[i_gen_u_child\]\s*\)",
+                r"\.SELECT\s+\(LOC_PARAM_A\[i\]\s*\)",
             )
 
     def test_parameter_na_accepts_top_parameter_as_default_source(self) -> None:
@@ -162,7 +162,7 @@ class Version345BugfixTests(unittest.TestCase):
                 r"localparam \[4 -1:0\]\[32 -1:0\] LOC\s+"
                 r"= '\{default: BASE\};",
             )
-            self.assertRegex(top, r"\.SELECT\s+\(LOC\[i_gen_u_child\]\s*\)")
+            self.assertRegex(top, r"\.SELECT\s+\(LOC\[i\]\s*\)")
 
     def test_parameter_na_reports_only_genuinely_conflicting_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -252,7 +252,7 @@ class Version345BugfixTests(unittest.TestCase):
             self.assertEqual(len([path for path in paths if path.name == "child.v"]), 1)
 
     def test_version_is_345(self) -> None:
-        self.assertEqual(SCRIPT_VERSION, "Version V3.45")
+        self.assertEqual(SCRIPT_VERSION, "Version V3.5.00")
 
 
 if __name__ == "__main__":

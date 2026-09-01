@@ -54,7 +54,7 @@ class Version3TechReview1Tests(unittest.TestCase):
             core = (output / "riscv_core_test.v").read_text(encoding="utf-8")
             self.assertRegex(
                 top,
-                r"localparam\s+RST_LANE\s+= `GLB_RST_LANE,\s+// 1",
+                r"parameter\s+RST_LANE\s+= `GLB_RST_LANE,\s+// 1",
             )
             self.assertRegex(core, r"parameter\s+RST_LANE\s+= 1")
             self.assertNotIn("parameter integer", top + core)
@@ -84,9 +84,9 @@ class Version3TechReview1Tests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^wire\s+\[DW_SIG3\s+-1:0\]\s+ready_test_process;")
 
             self.assertIn(") PROJECT_PERSONAL_MEM_DAT (", top)
-            self.assertIn("genvar i_gen_u_riscv_crg;", top)
+            self.assertIn("genvar i;", top)
             self.assertIn(
-                "for (i_gen_u_riscv_crg = 0; i_gen_u_riscv_crg < 10;",
+                "for (i = 0; i < 10;",
                 top,
             )
             self.assertTrue(
@@ -139,7 +139,7 @@ class Version3TechReview1Tests(unittest.TestCase):
             child_b_text = (root / "generated" / "child_b.v").read_text(
                 encoding="utf-8"
             )
-            self.assertRegex(top, r"localparam\s+P_A\s+= 8")
+            self.assertRegex(top, r"parameter\s+P_A\s+= 8")
             self.assertRegex(top, r"\.P_A\s+\(P_A\)")
             self.assertRegex(top, r"\.P_B\s+\(P_A\)")
             self.assertRegex(child_a_text, r"parameter\s+P_A\s+= 8")
@@ -171,16 +171,16 @@ class Version3TechReview1Tests(unittest.TestCase):
             self.assertFalse(reporter.has_errors)
             self.assertEqual([path.name for path in paths], ["parameter_expressions.v"])
             text = paths[0].read_text(encoding="utf-8")
-            self.assertRegex(text, r"localparam\s+PARA_A\s+= `lane_num,\s+// 4")
-            self.assertRegex(text, r"localparam\s+PARA_B\s+= PARA_A\+1,\s+// 5")
+            self.assertRegex(text, r"parameter\s+PARA_A\s+= `lane_num,\s+// 4")
+            self.assertRegex(text, r"parameter\s+PARA_B\s+= PARA_A\+1,\s+// 5")
             self.assertRegex(
                 text,
-                r"localparam\s+DW\s+= `log2\(PARA_B\),?\s+// 3",
+                r"parameter\s+DW\s+= `log2\(PARA_B\),?\s+// 3",
             )
-            self.assertRegex(text, r"localparam\s+FEATURE_OFF\s+= 0")
+            self.assertRegex(text, r"parameter\s+FEATURE_OFF\s+= 0")
             self.assertRegex(
                 text,
-                r"localparam\s+MACRO_OFF\s+= `feature_enable\s+// 0",
+                r"parameter\s+MACRO_OFF\s+= `feature_enable\s+// 0",
             )
             self.assertRegex(text, r"(?m)^// `define feature_enable\s+0$")
             self.assertRegex(text, r"output wire\s+\[DW\s+-1:0\]\s+data")
@@ -378,8 +378,8 @@ class Version3TechReview1Tests(unittest.TestCase):
                 any("存在索引越界风险" in item.message for item in reporter.items)
             )
             text = (root / "generated" / "top.v").read_text(encoding="utf-8")
-            self.assertIn("genvar i_gen_myinst;", text)
-            self.assertIn("i_gen_myinst < 3", text)
+            self.assertIn("genvar i;", text)
+            self.assertIn("i < 3", text)
             self.assertIn("CHILD MyInst (", text)
             self.assertIn("begin : G_MyInst", text)
 

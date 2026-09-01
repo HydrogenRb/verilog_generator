@@ -4,7 +4,7 @@
 
 当前能力的完整索引见[功能特性表](doc/TechReport/功能特性表.md)，内部结构见[代码结构与维护指南](doc/TechReport/代码结构与维护指南.md)。
 
-已有 RTL 项目需要接收一版新的生成结果时，可使用 V3.45 独立附录工具[xlsx2verilog_merger](appendix/README.md)：它以新生成结构覆盖旧自动代码，同时按 USER CODE 标签保留人工代码，按稳定键保留用户选择的`wire/reg`和`localparam/parameter`关键字；旧工程中带`//USER:`或`//USER：`的活动/注释 assign、信号声明、parameter 声明和实例端口连接可整行保留。目标目录只为本轮新代码涉及的文件名递归定位，相关目标重名时才列出冲突路径并拒绝；文件顶部可配置默认生产目标。真正写入前逐文件要求 Y/N 确认，结束时分行显示已更新生产文件的文件名和绝对路径。
+已有 RTL 项目需要接收一版新的生成结果时，可使用 V3.5.00 独立附录工具[xlsx2verilog_merger](appendix/README.md)。除既有 USER CODE、关键字和单行人工代码保护外，它会区分 TOP 端口与模块正文中的同名声明；多候选改为带新旧行号的 warning，并支持保留注释的`genvar/generate/endgenerate`。
 
 ## 快速使用
 
@@ -27,13 +27,11 @@ python .\xlsx2verilog.py .\main_test.xlsx --integration 集成_RISCV_TOP --check
 # 将位宽不匹配等警告也视为失败
 python .\xlsx2verilog.py .\main_test.xlsx --integration 集成_RISCV_TOP --check --strict
 
-# 扩散一个变量值（仍会要求输入 y/n；确认后原地修改 XLSX）
-python .\xlsx2verilog.py .\design.xlsx --spread-value WIDTH "(3+5)"
 ```
 
-命令行参数仍全部保留。无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；使用 `↑`、`↓` 移动选项，按 `Enter` 确认，按 `Esc` 返回上级菜单或退出。主菜单包含“生成”“查看”“校验”“严格校验”“扩散变量值”和“退出”，可继续选择 XLSX 和输出目录。工作簿中有多个有效的集成页签时，菜单会再列出“页签名 → TOP 模块名”供选择；只有一个`集成`或`集成_xxx`页签时自动使用，不显示这一级菜单。显式传入 XLSX 或 `--list`、`--check`、`--strict` 等参数时直接按命令行模式执行，不显示菜单；多集成页签工作簿必须通过`--integration 页签名`消除歧义，管道、CI 等非交互环境不会等待输入。修改 XLSX 的 `--spread-value` 是唯一例外：无论从菜单还是 CLI 进入，都必须再次输入 `y` 才会修改。
+无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；主菜单包含“生成”“查看”“校验”“严格校验”和“退出”。工作簿有多个有效集成页签时继续选择具体 TOP；只有一个时自动使用。V3.5.00 已移除变量值扩散菜单和`--spread-value`参数。
 
-每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.45`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
+每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.5.00`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
 
 ## 文件顶部配置
 
@@ -47,6 +45,8 @@ VERILOG_FILE_HEADER = """//******************
 //******************"""
 OVERWRITE_FILE_HEADER = False
 ENABLE_CONDITIONAL_BLOCKS = False
+ONLY_TOP = False
+AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH = False
 SHOW_ERROR_MESSAGES = True
 SHOW_WARNING_MESSAGES = True
 SHOW_INFO_MESSAGES = True
@@ -62,7 +62,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 }
 ```
 
-`OVERWRITE_FILE_HEADER=False`时，生成头位于`file header` USER 段，后续重新生成保留现有内容；设为`True`时用`VERILOG_FILE_HEADER`覆盖。`ENABLE_CONDITIONAL_BLOCKS=False`时，`条件：MACRO`只整理分类名称，不生成条件块。
+`OVERWRITE_FILE_HEADER=False`时，生成头位于`file header` USER 段，后续重新生成保留现有内容；设为`True`时用`VERILOG_FILE_HEADER`覆盖。`ENABLE_CONDITIONAL_BLOCKS=False`时，`条件：MACRO`只整理分类名称，不生成条件块。`ONLY_TOP=True`时仍解析完整层次，但只写出所选集成 TOP。parameter 维度始终按数值列比较并输出`W_PARAMETER_WIDTH_MISMATCH`；`AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH=True`时还按完整 packed 总位宽低位连接并补零，默认只告警。
 
 三个`SHOW_*_MESSAGES`是错误、警告、信息的三级总开关。`DIAGNOSTIC_VISIBILITY_BY_CODE`是细粒度开关：把某个代码改为`False`，只隐藏该类型的终端输出。例如关闭`W_WIDTH_PLACEHOLDER`仍保留位宽不匹配`W_WIDTH_MISMATCH`；关闭`I_UNCONNECTED`不影响参数链接`I_PARAMETER_LINK`。总开关优先于细粒度开关。所有开关都只影响显示，诊断仍被记录，error 和`--strict`下的 warning 仍照常影响返回码与写入保护。
 
@@ -86,7 +86,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。生成时模块名和 parameter 规范为大写，宏、普通信号、端口名和自定义例化名严格保持 XLSX 中的大小写；默认实例名为`U_<MODULE>`，输出文件名统一为小写。Verilog 标识符和宏名都区分大小写，因此`Data`与`data`、`` `log2``与`` `LOG2``均视为不同名称。
 
 - 宏位宽只生成注释参考，例如 ``// `define DFT_BUS 64``，不会在真实项目中主动定义或重定义宏。
-- 非反引号符号位宽会生成模块参数；当前版本默认使用不可由上层覆盖的`localparam`。
+- 非反引号符号位宽会生成模块参数；凡位于`module #(...)`中的声明一律使用合法的`parameter`。TOP 正文中的生成器内部常量仍使用`localparam`。
 - 数字位宽 `N` 会生成 `[N -1:0]`；数字 `1` 生成标量；显式`0`仍会生成`[0 -1:0]`并输出`W_ZERO_WIDTH`，用于保留原始规格等待人工处理。
 - 重复名称可以出现在多行或不同模块中。单个 Verilog 模块只声明一次同名端口；同一模块后续同名行合并到第一次定义。
 - 普通模块页签中的所有 output 会在模块内部连续赋零，方便生成结果直接通过基础语法检查。
@@ -104,14 +104,14 @@ parameter | DW     | `log2(para_b) | 3
 会按行序生成：
 
 ```verilog
-localparam PARA_A = `LANE_NUM,      // 4
-localparam PARA_B = PARA_A+1,       // 5
-localparam DW     = `log2(PARA_B)   // 3
+parameter PARA_A = `LANE_NUM,      // 4
+parameter PARA_B = PARA_A+1,       // 5
+parameter DW     = `log2(PARA_B)   // 3
 ```
 
-参数只有在集成页签中显式链接后才会改为可由上层覆盖的`parameter`；否则仍为`localparam`。
+模块头中的参数全部为`parameter`；集成 TOP 正文为连线、NA 或宽度映射创建的内部常量仍为`localparam`。
 
-分类为`宏定义`（也接受`宏`、`macro`、`macros`）时，该行只登记一个可批量维护的宏及其`数值`匹配值，不生成端口、parameter 或活动`` `define``。`端口名`可写`dataWidth`或`` `dataWidth``，普通宏大小写严格保留；若名称本身含`{{i}}`模板，则展开后的宏按模板宏规则强制大写。端口位宽仍通过对应反引号宏引用它。该分类适合在模块页集中登记大量由工程编译环境提供的宏，并可通过`--spread-value dataWidth 32`统一修改匹配值。普通宏名区分大小写，扩散时必须使用相同拼写。
+分类为`宏定义`（也接受`宏`、`macro`、`macros`）时，该行只登记宏及其`数值`匹配值，不生成端口、parameter 或活动`` `define``。V3.5.00 还支持名为`define`的专用页签：表头使用`宏名/名称/name/macro/define/端口名`与`数值/value/default/默认值`，其中定义会统一提供给所有模块。普通宏大小写严格保留；模板宏展开后仍强制大写。
 
 任意模块行或集成连接行的备注单元格只要包含`*注释*`，整行就按结构化停用处理：不生成声明、参数、连接或实例绑定，并输出`I_ROW_COMMENTED`。这不是在 Verilog 中保留一行带`//`的旧代码，而是让该 XLSX 行完全不参与模型构建，因此不会留下悬空的半条连接。
 
@@ -133,22 +133,6 @@ localparam DW     = `log2(PARA_B)   // 3
 
 对于可明确恢复的单花括号拼写错误（例如 `{j}}` 或 `{{j}`），脚本会按 `{{j}}` 处理并告警，XLSX 仍应修正。`i/o` 空白是另一类待确认数据：声明会生成为 `inout`，并附加 `/* TODO: XLSX i/o 为空...需处理方向缺失问题 */` 备注，同时输出 warning；无法识别的非空方向仍然报错。
 
-### 变量值扩散（会修改 XLSX）
-
-终端菜单的“扩散变量值”或 CLI 的 `--spread-value VARIABLE VALUE` 一次只处理一个宏/parameter。脚本先执行完整解析并展示现有 error/warning，然后要求输入 `y` 或 `n`；只有 `y` 会继续。确认后，原文件先复制到同级 `backup/`，文件名带微秒级时间戳，再通过临时 ZIP 原子替换当前 XLSX。输入 `n` 不修改文件，也不创建备份。
-
-`parameter`分类中的显式声明也参与变量发现和扩散；扩散一个 parameter 时，会同时更新其显式声明行及使用该 parameter 的位宽行，避免声明值和引用值产生新的局部冲突。
-
-扩散值允许非负整数或整体带括号、可安全计算且结果非负的整数表达式，例如 `0`、`8`、`(3-3)`、`(3+5)`；不接受未加外层括号的 `3+5`，也不接受负数结果。普通单维直接覆盖`数值`；多维只覆盖变量所在因子，其他空因子使用可计算的数字位宽，否则填 `114`。模板变量会写成显式范围，例如把 `BUS_REQ` 扩散为 `(3+5)` 后可得到：
-
-```text
-位宽: BUS_{{z}}*DW
-数值: 范围是{114,(3+5),114}*8
-备注: z的范围是{dat,req,rsp}
-```
-
-`修改`/`修改列`在变量发现、范围解析和写回计划中同样完全忽略。`temp_test/variable_diffusion_before.xlsx` 与 `variable_diffusion_after.xlsx` 分别提供扩散前 error 和扩散后无 error 的可复验样例。
-
 ### 表达式和多维数组
 
 - 顶层 `*` 一律表示维度分隔，乘号前后空格没有语义差异。`A*B`、`A * B` 都生成 `[A -1:0][B -1:0]`。
@@ -167,7 +151,7 @@ localparam DW     = `log2(PARA_B)   // 3
 | `8` | 空白 | `input wire [8 -1:0] sig` | 固定 8 bit 向量；对齐补白位于 `8` 与 `-1:0]` 之间 |
 | `(2+3*4)` | 空白 | `input wire [14 -1:0] sig` | 括号内表达式先计算为 14 |
 | `` `DATA_W`` | `32` | ``// `define DATA_W 32``，端口为 ``[`DATA_W -1:0]`` | 单个宏；只输出注释参考，不主动定义 |
-| `DATA_WIDTH` | `32` | `localparam DATA_WIDTH = 32`，端口为 `[DATA_WIDTH -1:0]` | 默认本模块局部参数 |
+| `DATA_WIDTH` | `32` | `parameter DATA_WIDTH = 32`，端口为 `[DATA_WIDTH -1:0]` | 模块头参数 |
 | `` `LANE_NUM*DATA_WIDTH`` | `4*32` | ``[`LANE_NUM -1:0][DATA_WIDTH -1:0] sig`` | 无论乘号是否带空格，都按两个 packed 维度解释 |
 | `TOTAL_WIDTH` | `(4*32)` | `[TOTAL_WIDTH -1:0] sig` | 括号使默认值保持单维，计算为 128 |
 | `DATA_WIDTH`，`数组=DEPTH` | `32`，`数组数值=4` | `input wire [DEPTH -1:0][DATA_WIDTH -1:0] sig` | 数组维度在最左侧，元素位宽紧随其后 |
@@ -189,7 +173,7 @@ input wire [DEPTH -1:0][DATA_WIDTH -1:0] data
 
 ## 生成代码格式
 
-生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；普通信号的全部 packed 范围都在名称左侧并按维度建立独立列，每一维的左方括号固定，数字、参数名或宏名紧跟 `[` 并左对齐，所需空格放在表达式与减号之间，使该维的 `-1:0]` 仍然纵向对齐，第二维及后续维度使用相同规则；所有生成的 `-1:0` 前至少保留一个空格。同一组宏参考、参数名、wire 名和 assign 等号分别对齐；模块实例声明从第 1 列开始，参数连接和端口连接只缩进 4 个空格，左、右圆括号均纵向对齐。每个 generate 实例使用独立的`genvar i_gen_<实例名>`，避免同一作用域重复声明`i`。模块级 `assign` 和对应说明注释从第 1 列开始。模块主体结束后直接生成 `endmodule`，不在其前方保留空白行。
+生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；普通信号的全部 packed 范围都在名称左侧并按维度建立独立列。所有 generate 循环统一使用模块作用域内唯一声明的`genvar i`。模块级 `assign` 和对应说明注释从第 1 列开始。
 
 ```verilog
 input wire [`SHORT     -1:0][`LANE    -1:0] matrix_a,
@@ -203,7 +187,7 @@ CHILD U_CHILD (
 
 ### 可持久化用户代码段
 
-每个文件开头都有`file header`代码段，每个模块端口声明后都有`before statement`代码段；集成 TOP 还会在`module`关键字之前生成`before module`代码段，并在每个子模块实例块前后分别生成`before <MODULE>`和`after <MODULE>`代码段。普通子模块不会生成`before module`：
+每个文件开头都有`file header`代码段，每个模块端口声明后都有`before statement`代码段；生成 statement 后、实例或`endmodule`前还有`after statement`。集成 TOP 另有 module 前`before module`及每个实例前后的 USER 段：
 
 ```verilog
 /*USER CODE BEGIN before module*/
@@ -253,13 +237,13 @@ CHILD U_CHILD (...);
 3. 后续连接区一行只有一个真实模块端点且没有 NA 对端时，按未连接处理：子模块 input 接完整形状零复制式，output/inout 使用空连接`.port()`；若旁边存在`NA/NA->name/NA->常量`端点，则改用与多模块区完全相同的 NA 占位处理。
 4. 集成表中完全遗漏的子模块端口也会按未连接端口处理，并产生 `info`；该自动诊断不会令 `--strict` 失败。
 5. 未由子模块 output/inout 驱动的 TOP output 会在 TOP 内赋零；该 TOP output 可以同时连接一个或多个子模块 input，并以置零后的同一信号驱动它们。TOP input 始终只作为外部输入，不在模块内赋值。
-6. TOP 端口引用末尾的 `[i]` 是 generate 指示符。脚本去掉指示符查找真实端口，并在实例连接中使用该实例独有的`i_gen_<实例名>`，避免同一 TOP 重复声明裸`i`。能从首维默认值解析次数时输出 info；同一实例涉及多个范围时采用避免越界的最小值；完全无法解析时 warning 并使用 `< 1`。若实例元数据的`例化次数`填写 TOP parameter（如`LANE_NUM`）或宏（如`` `laneCount``），generate 上限原样使用该符号；`NA[i]`创建的占位 wire 也使用相同符号作为最左维度，不再退化成匹配数值。
+6. TOP 端口引用末尾的 `[i]` 是 generate 指示符。V3.5.00 在 TOP 语句区只声明一次`genvar i`，所有顺序 generate block 复用该索引；连接表达式统一使用`[i]`。循环上限仍优先采用显式例化次数、TOP parameter 或宏，否则从首维取安全范围。
 7. TOP 端口可以显式写常量 bit select，例如 5 bit 的`n_rst`写成`n_rst[0]`连接子模块端口。脚本校验索引未越界，并原样保留`.n_rst (n_rst[0])`；显式选择优先于自动位宽适配。
 8. 子模块互连区的一端可以写`NA`或`N/A`。无论另一端是 input、output 还是 inout，TOP 内的普通占位信号都统一创建为同形状`wire`。实例仍以占位信号连接并附加 TODO。`NA[i]`会生成实例循环和带额外最左维度的占位 wire。`NA`端允许省略模块名和重复表头。在第一个`TOP ↔ 子模块`连接区，TOP 端口的对端写`NA`表示保留顶层观察端口；模板端口仍正常展开。
 9. `NA->名称`为占位线指定精确名称，例如`NA->ready_test_process`生成同形状`wire ... ready_test_process`并连接真实模块端口；这项自动形状能力为原有功能，无需增加新的表格列。`NA->0`和`NA->1`按目标端口全部 packed 维度生成全 0/全 1 复制式，例如`[A][B]`信号生成`{A*B{1'b1}}`。V3.4 起，空 input、TOP output 兜底和桩 output 也调用同一个完整形状零值入口，不再混用`'0`、`8'b0`和复制式；仅当任一维静态为 0 时保留`'0`，避免零次复制兼容问题。`NA->8'hFF`等定宽常量会与可解析的目标总位宽比较：较窄时在高位显式补零，等宽时原样使用，较宽时输出`W_NA_CONSTANT_WIDTH`并保留原常量，由 Verilog 连接上下文截断。对于 TOP output，生成对应`assign`且同一行的子模块 output 开路，避免把常量接到输出端。未连接、单端和 NA 占位类诊断均为 info，不会使`--strict`失败。
 10. 集成页签可在任意空白区域增加`模块名 / 例化名 / 例化次数`三列表。未填写时沿用`U_<模块名>`和由`[i]`推导的次数；显式例化名保持用户大小写。模块标签中的`例化名:xxx`优先级更高，并可让同一模块类型形成多个实例；元数据表中的例化次数仍可同时应用。显式次数接受正整数、TOP parameter 或反引号宏，并直接控制 generate 上限；数字超过可解析索引范围时输出越界风险 warning。
 11. 任一连接区的分类列可写`parameter`并向下继承。该行引用的是各模块参数而非端口；显式链接的子模块参数生成可覆盖`parameter`并出现在`#(...)`连接中。若链接仅发生在两个子模块之间，脚本会在 TOP 自动创建同名或唯一化的`localparam`并输出 info。parameter 的`i/o`可直接填写自然数或反引号宏，例如`LANE_NUM | 3`与``LANE_NUM | `LANES``分别生成`#(.LANE_NUM(3))`和``#(.LANE_NUM(`LANES))``。另一条自动传参路径是后文所述的未链接宽度 parameter 正文局部化。
-12. parameter 行支持非 TOP 的 NA 端点。`NA->A`在 TOP 的`before statement`之后、wire/assign 之前生成正文`localparam A = 值;`；`NA->514`使用对端子模块 parameter 名创建如`localparam P = 514;`。V3.45 的`NA[i]->B`生成`localparam [COUNT -1:0][32 -1:0] B = 初始化值;`，实例参数连接为`.P(B[i_gen_<实例名>])`并同步生成 COUNT 次循环。存在 parameter NA 时，同一行任一 parameter 端点或 NA 端点的`i/o`都解释为 localparam 初始化数据，不再解释成竞争的直接覆盖；因此可以与 TOP parameter 端点共存。非空 i/o 优先，其次使用 TOP parameter 名，最后使用子模块`数值`列默认值；多个非空 i/o 内容不一致时才输出`E_PARAMETER`，避免静默选择来源。标量值生成`'{default: value}`，逗号列表、`{...}`或`'{...}`生成位置初始化；连续逗号的空项会以`W_PARAMETER_NA_REPAIR`提示并忽略，随后可确定 COUNT 时严格校验有效元素数。每行仍只允许一个 NA 来源，且最左侧 TOP 端点本身不能写 NA。
+12. parameter 行支持非 TOP 的 NA 端点。`NA->A`与`NA->514`在 TOP 正文生成局部参数；`NA[i]->B`生成`localparam [COUNT -1:0][32 -1:0] B = 初始化值;`，实例参数连接为`.P(B[i])`并同步生成 COUNT 次循环。存在 parameter NA 时，同一行 parameter/NA 端点的`i/o`都作为初始化来源；只有多个非空来源内容不一致时才输出`E_PARAMETER`。
 
 列位置可以扩展，不限于示例中的 B～Y；关键是每个区内的模块组相邻、不同区之间至少留一个空列。脚本同时检查集成页签的 `i/o` 与模块定义是否一致、多驱动、缺失端口及位宽差异。
 

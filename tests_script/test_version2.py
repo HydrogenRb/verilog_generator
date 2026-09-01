@@ -67,7 +67,9 @@ class Version2GenerationTests(unittest.TestCase):
             output = root / "generated"
             _, reporter = generate(workbook, output)
             self.assertFalse(reporter.has_errors)
-            self.assertFalse(any("位宽不匹配" in item.message for item in reporter.items))
+            self.assertTrue(
+                any(item.code == "W_PARAMETER_WIDTH_MISMATCH" for item in reporter.items)
+            )
             top = (output / "top.v").read_text(encoding="utf-8")
             self.assertRegex(top, r"(?m)^localparam\s+WIDTH\s+= 8;$")
             self.assertNotRegex(top, r"module TOP #\(")
@@ -83,7 +85,7 @@ class Version2GenerationTests(unittest.TestCase):
             source = (output / "source.v").read_text(encoding="utf-8")
             sink = (output / "sink.v").read_text(encoding="utf-8")
             self.assertRegex(source, r"parameter\s+WIDTH\s+= 8")
-            self.assertRegex(sink, r"localparam\s+WIDTH\s+= 4")
+            self.assertRegex(sink, r"parameter\s+WIDTH\s+= 4")
 
     def test_internal_literal_width_uses_maximum_low_bits_and_zero_fill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

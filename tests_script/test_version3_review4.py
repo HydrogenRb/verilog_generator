@@ -207,7 +207,7 @@ class Version3TechReview4Tests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^localparam P_C\s+= 514;$")
             self.assertRegex(top, r"(?m)^localparam DEFAULT_VALUE\s+= 114;$")
             self.assertRegex(top, r"\.P_A\s+\(A\s*\)")
-            self.assertRegex(top, r"\.P_B\s+\(B\[i_gen_u_child_array\]\s*\)")
+            self.assertRegex(top, r"\.P_B\s+\(B\[i\]\s*\)")
             self.assertRegex(top, r"\.P_C\s+\(P_C\s*\)")
             self.assertRegex(
                 top, r"\.P_DEFAULT\s+\(DEFAULT_VALUE\s*\)"
@@ -235,7 +235,7 @@ class Version3TechReview4Tests(unittest.TestCase):
             )
 
             paths, reporter = generate(workbook, root / "generated")
-            self.assertEqual(SCRIPT_VERSION, "Version V3.45")
+            self.assertEqual(SCRIPT_VERSION, "Version V3.5.00")
             self.assertFalse(reporter.has_errors)
             top = next(path for path in paths if path.name == "top.v").read_text(
                 encoding="utf-8"

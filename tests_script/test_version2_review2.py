@@ -104,11 +104,11 @@ class Version2TechReview2Tests(unittest.TestCase):
             top = (output / "riscv_top.v").read_text(encoding="utf-8")
             core = (output / "riscv_core_test.v").read_text(encoding="utf-8")
             for kind, name, value in (
-                ("localparam", "DW_SIG1", "11"),
-                ("localparam", "DW_SIG2", "12"),
+                ("parameter", "DW_SIG1", "11"),
+                ("parameter", "DW_SIG2", "12"),
                 ("parameter", "DW_SIG3", "13"),
-                ("localparam", "RST_LANE", "1"),
-                ("localparam", "CLK_LANE", "1"),
+                ("parameter", "RST_LANE", "1"),
+                ("parameter", "CLK_LANE", "1"),
             ):
                 self.assertRegex(
                     core,
@@ -130,19 +130,19 @@ class Version2TechReview2Tests(unittest.TestCase):
             self.assertRegex(top, r"(?m)^\s*\.n_rst\s+\(n_rst\[0\]\s*\),$")
             self.assertRegex(
                 top,
-                r"(?m)^genvar i_gen_u_mem_dat;\ngenerate\n"
-                r"for \(i_gen_u_mem_dat = 0;",
+                r"(?m)^genvar i;$",
             )
+            self.assertRegex(top, r"for \(i = 0;")
             self.assertNotIn("for (genvar", top)
 
             indexed_connections = [
                 line
                 for line in top.splitlines()
-                if re.search(r"\[i_gen_[a-z0-9_]+\]\),?$", line.strip())
+                if re.search(r"\[i\]\),?$", line.strip())
             ]
             self.assertGreaterEqual(len(indexed_connections), 4)
             self.assertEqual(
-                len({line.index("[i_gen_") for line in indexed_connections}),
+                len({line.index("[i]") for line in indexed_connections}),
                 1,
             )
 
