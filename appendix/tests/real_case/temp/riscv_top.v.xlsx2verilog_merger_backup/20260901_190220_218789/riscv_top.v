@@ -109,7 +109,7 @@ wire [`LANE_NUM -1:0][`Test_size -1:0] w_array;
 wire [PARAMTER  -1:0]                  parameter_test;
 wire                                   dat_in;
 wire                                   sig_out;
-wire                        test_bus2_sig3_ready, 
+//wire                        test_bus2_sig3_ready, //USER: we have top
 
 // TOP outputs without an active child driver are tied to zero.
 // 没有有效子模块驱动的 TOP 输出在当前配置下置零。
@@ -157,7 +157,7 @@ RISCV_CORE_TEST #(
     .test_bus2_sig3_dat   (test_bus2_sig3_dat  ),
     .test_bus2_sig1_ready (test_bus2_sig1_ready),
     .test_bus2_sig2_ready (test_bus2_sig2_ready),
-    .test_bus2_sig3_ready (test_bus2_sig3_ready),
+    .test_bus2_sig3_ready (1'b0), //USER:
     .test_bus2_sig1_valid (test_bus2_sig1_valid),
     .test_bus2_sig2_valid (test_bus2_sig2_valid),
     .test_bus2_sig3_valid (test_bus2_sig3_valid)

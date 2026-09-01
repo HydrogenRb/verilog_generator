@@ -12,6 +12,7 @@ import argparse
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ import re
 from typing import Callable, Iterable
 
 
-VERSION = "Version V3.45"
+VERSION = "Version V3.5.00"
 # 默认生产目标配置：
 # 1. 相对路径以“启动 Python 时 terminal 的当前目录”为基准，例如：
 #    DEFAULT_TARGET_PROJECT = Path("../../rtl")
@@ -30,6 +31,10 @@ VERSION = "Version V3.45"
 # 3. 保持 None 时，命令行仍必须显式传入 target_project；脚本不会猜路径。
 # 配置后可执行：python appendix/xlsx2verilog_merger.py ./generated
 DEFAULT_TARGET_PROJECT: str | Path | None = None
+# Linux 环境下设为 True：合并成功后分别打开 Beyond Compare。左侧是本轮
+# 备份的旧文件，右侧是已写入生产目录的新文件；启动失败只告警，不回滚。
+AUTO_OPEN_BCOMPARE = False
+BCOMPARE_COMMAND = "bcompare"
 DEFAULT_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
 USER_CODE_MARKER_RE = re.compile(
     r"(?m)^[ \t]*/\*USER CODE (BEGIN|END)[ \t]+(.+?)[ \t]*\*/[ \t]*\r?$"
@@ -40,7 +45,7 @@ MODULE_BEGIN_RE = re.compile(
 )
 MODULE_END_RE = re.compile(r"^[ \t]*endmodule\b")
 SIGNAL_DECLARATION_RE = re.compile(
-    r"^[ \t]*(?:(?:input|output|inout)[ \t]+)?"
+    r"^[ \t]*(?:(?P<direction>input|output|inout)[ \t]+)?"
     r"(?P<kind>wire|reg)\b(?P<body>[^\r\n]*)"
 )
 SIGNAL_DECLARATOR_TAIL_RE = re.compile(
@@ -92,6 +97,8 @@ class SignalDeclaration:
     kind_end: int
     statement_start: int
     statement_end: int
+    line_number: int
+    scope: str
 
 
 @dataclass(frozen=True)
@@ -103,6 +110,7 @@ class ParameterDeclaration:
     kind_end: int
     statement_start: int
     statement_end: int
+    line_number: int
 
 
 @dataclass(frozen=True)
@@ -114,6 +122,7 @@ class AssignmentStatement:
     statement_start: int
     statement_end: int
     user_owned: bool
+    line_number: int
 
 
 @dataclass(frozen=True)
@@ -122,6 +131,17 @@ class PortConnection:
     port_name: str
     statement_start: int
     statement_end: int
+    line_number: int
+
+
+@dataclass(frozen=True)
+class StructuralStatement:
+    kind: str
+    module_name: str
+    occurrence: int
+    statement_start: int
+    statement_end: int
+    line_number: int
 
 
 @dataclass(frozen=True)
@@ -131,6 +151,9 @@ class UserOwnedLine:
     key: str
     root_signal: str | None
     statement: str
+    line_number: int
+    scope: str | None = None
+    occurrence: int | None = None
 
 
 @dataclass(frozen=True)
@@ -173,7 +196,14 @@ def parse_user_code_regions(text: str, context: str) -> list[UserCodeRegion]:
     matched_begins = sum(match.group(1) == "BEGIN" for match in markers)
     matched_ends = sum(match.group(1) == "END" for match in markers)
     if begin_tokens != matched_begins or end_tokens != matched_ends:
-        raise MergeError(f"{context}: USER CODE 标记格式损坏")
+        damaged_positions = [
+            position
+            for token in ("/*USER CODE BEGIN", "/*USER CODE END")
+            for position in [text.find(token)]
+            if position >= 0
+        ]
+        line = _line_number_at(text, min(damaged_positions, default=0))
+        raise MergeError(f"{context} 第 {line} 行: USER CODE 标记格式损坏")
 
     regions: list[UserCodeRegion] = []
     occurrences: dict[str, int] = {}
@@ -183,15 +213,22 @@ def parse_user_code_regions(text: str, context: str) -> list[UserCodeRegion]:
         label = marker.group(2).strip()
         if kind == "BEGIN":
             if active is not None:
-                raise MergeError(f"{context}: USER CODE 段不允许嵌套")
+                raise MergeError(
+                    f"{context} 第 {_line_number_at(text, marker.start())} 行: "
+                    "USER CODE 段不允许嵌套"
+                )
             active = (label, marker.end())
             continue
         if active is None:
-            raise MergeError(f"{context}: USER CODE END 缺少对应 BEGIN")
+            raise MergeError(
+                f"{context} 第 {_line_number_at(text, marker.start())} 行: "
+                "USER CODE END 缺少对应 BEGIN"
+            )
         begin_label, content_start = active
         if begin_label != label:
             raise MergeError(
-                f"{context}: USER CODE BEGIN {begin_label!r} 与 END {label!r} 不匹配"
+                f"{context} 第 {_line_number_at(text, marker.start())} 行: "
+                f"USER CODE BEGIN {begin_label!r} 与 END {label!r} 不匹配"
             )
         occurrence = occurrences.get(label, 0)
         occurrences[label] = occurrence + 1
@@ -207,7 +244,8 @@ def parse_user_code_regions(text: str, context: str) -> list[UserCodeRegion]:
         active = None
     if active is not None:
         raise MergeError(
-            f"{context}: USER CODE BEGIN {active[0]!r} 缺少对应 END"
+            f"{context} 第 {_line_number_at(text, active[1])} 行: "
+            f"USER CODE BEGIN {active[0]!r} 缺少对应 END"
         )
     return regions
 
@@ -224,16 +262,53 @@ def _mask_verilog_comments(text: str) -> str:
     return VERILOG_COMMENT_RE.sub(replacement, text)
 
 
+def _line_number_at(text: str, position: int) -> int:
+    """Return the one-based source line for an absolute character offset."""
+    return text.count("\n", 0, position) + 1
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    """Split a declaration list without splitting inside dimensions/expressions."""
+    result: list[str] = []
+    start = 0
+    depth = 0
+    pairs = {"[": "]", "(": ")", "{": "}"}
+    closing = set(pairs.values())
+    for index, character in enumerate(text):
+        if character in pairs:
+            depth += 1
+        elif character in closing:
+            depth = max(0, depth - 1)
+        elif character == "," and depth == 0:
+            result.append(text[start:index])
+            start = index + 1
+    result.append(text[start:])
+    return result
+
+
+def _signal_declarator_names(body: str) -> list[str]:
+    """Extract every declarator name from a conservative one-line declaration."""
+    names: list[str] = []
+    for declarator in _split_top_level_commas(body.rstrip().rstrip(";")):
+        # Initializers can contain arbitrary identifiers.  Only the declaration
+        # portion on the left of a top-level '=' participates in the key.
+        declarator = declarator.split("=", 1)[0].rstrip()
+        match = SIGNAL_DECLARATOR_TAIL_RE.search(declarator)
+        if match is not None:
+            names.append(match.group("name"))
+    return names
+
+
 def parse_signal_declarations(
     text: str,
     regions: list[UserCodeRegion],
     context: str,
-) -> dict[tuple[str, str], SignalDeclaration]:
+) -> dict[tuple[str, str], list[SignalDeclaration]]:
     """Find generated ``wire/reg`` declarations keyed by module and signal.
 
     This is intentionally a conservative line-oriented Verilog recognizer, not
-    a compiler.  It covers the ANSI port and one-signal-per-line declarations
-    emitted by xlsx2verilog while ignoring protected USER CODE contents.
+    a compiler.  It covers ANSI ports, module-body declarations, and multiple
+    declarators on one line while ignoring protected USER CODE contents.
     """
     masked = _mask_verilog_comments(text)
     protected_ranges = [
@@ -243,17 +318,19 @@ def parse_signal_declarations(
     def is_protected(position: int) -> bool:
         return any(start <= position < end for start, end in protected_ranges)
 
-    declarations: dict[tuple[str, str], SignalDeclaration] = {}
+    declarations: dict[tuple[str, str], list[SignalDeclaration]] = {}
     current_module: str | None = None
     offset = 0
-    for line in masked.splitlines(keepends=True):
+    for line_number, line in enumerate(masked.splitlines(keepends=True), start=1):
         if is_protected(offset):
             offset += len(line)
             continue
         module_match = MODULE_BEGIN_RE.match(line)
         if module_match is not None:
             if current_module is not None:
-                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+                raise MergeError(
+                    f"{context} 第 {line_number} 行: 检测到嵌套 module 声明"
+                )
             current_module = module_match.group("name")
             offset += len(line)
             continue
@@ -268,30 +345,27 @@ def parse_signal_declarations(
         if declaration_match is None:
             offset += len(line)
             continue
-        body = declaration_match.group("body")
-        name_match = SIGNAL_DECLARATOR_TAIL_RE.search(body)
-        if name_match is None:
+        signal_names = _signal_declarator_names(declaration_match.group("body"))
+        if not signal_names:
             offset += len(line)
             continue
         kind = declaration_match.group("kind")
-        signal_name = name_match.group("name")
-        key = (current_module, signal_name)
-        declaration = SignalDeclaration(
-            current_module,
-            signal_name,
-            kind,
-            offset + declaration_match.start("kind"),
-            offset + declaration_match.end("kind"),
-            offset,
-            offset + len(line.rstrip("\r\n")),
-        )
-        previous = declarations.get(key)
-        if previous is not None and previous.kind != declaration.kind:
-            raise MergeError(
-                f"{context}: {current_module}.{signal_name} 同时声明为 "
-                f"{previous.kind} 和 {declaration.kind}，无法安全匹配"
+        scope = "port" if declaration_match.group("direction") else "body"
+        for signal_name in signal_names:
+            declaration = SignalDeclaration(
+                current_module,
+                signal_name,
+                kind,
+                offset + declaration_match.start("kind"),
+                offset + declaration_match.end("kind"),
+                offset,
+                offset + len(line.rstrip("\r\n")),
+                line_number,
+                scope,
             )
-        declarations.setdefault(key, declaration)
+            declarations.setdefault((current_module, signal_name), []).append(
+                declaration
+            )
         offset += len(line)
     return declarations
 
@@ -314,28 +388,52 @@ def preserve_signal_declaration_kinds(
         new_regions,
         f"新文件 {context}",
     )
-    replacements: list[tuple[int, int, str]] = []
+    replacements: dict[tuple[int, int], str] = {}
     diagnostics: list[Diagnostic] = []
-    for key, new_declaration in new_declarations.items():
-        old_declaration = old_declarations.get(key)
-        if old_declaration is None or old_declaration.kind == new_declaration.kind:
+    for key, new_items in new_declarations.items():
+        old_items = old_declarations.get(key, [])
+        if not old_items:
             continue
-        replacements.append(
-            (
-                new_declaration.kind_start,
-                new_declaration.kind_end,
-                old_declaration.kind,
+        if len(old_items) > 1 or len(new_items) > 1:
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    f"{context}: {key[0]}.{key[1]} 存在多处声明；旧文件行 "
+                    f"{','.join(str(item.line_number) for item in old_items)}，"
+                    f"新文件行 {','.join(str(item.line_number) for item in new_items)}。"
+                    "按端口/正文上下文分别保留 wire/reg。",
+                )
             )
-        )
-        diagnostics.append(
-            Diagnostic(
-                "info",
-                f"{context}: 保留 {key[0]}.{key[1]} 的 {old_declaration.kind} "
-                f"声明类型（新生成版本为 {new_declaration.kind}）",
+        for new_declaration in new_items:
+            scoped_old = [
+                item for item in old_items if item.scope == new_declaration.scope
+            ]
+            old_declaration = (scoped_old or old_items)[0]
+            if old_declaration.kind == new_declaration.kind:
+                continue
+            span = (new_declaration.kind_start, new_declaration.kind_end)
+            previous_kind = replacements.get(span)
+            if previous_kind is not None and previous_kind != old_declaration.kind:
+                diagnostics.append(
+                    Diagnostic(
+                        "warning",
+                        f"{context}: 新文件第 {new_declaration.line_number} 行的"
+                        f"多信号声明收到冲突类型请求；保留先匹配的 {previous_kind}。",
+                    )
+                )
+                continue
+            replacements[span] = old_declaration.kind
+            diagnostics.append(
+                Diagnostic(
+                    "info",
+                    f"{context}: 保留 {key[0]}.{key[1]} 的 "
+                    f"{old_declaration.kind} 声明类型（旧文件第 "
+                    f"{old_declaration.line_number} 行，新文件第 "
+                    f"{new_declaration.line_number} 行）",
+                )
             )
-        )
     preserved = new_text
-    for start, end, kind in reversed(replacements):
+    for (start, end), kind in sorted(replacements.items(), reverse=True):
         preserved = preserved[:start] + kind + preserved[end:]
     return preserved, diagnostics
 
@@ -357,14 +455,16 @@ def parse_parameter_declarations(
     declarations: dict[tuple[str, str], ParameterDeclaration] = {}
     current_module: str | None = None
     offset = 0
-    for line in masked.splitlines(keepends=True):
+    for line_number, line in enumerate(masked.splitlines(keepends=True), start=1):
         if is_protected(offset):
             offset += len(line)
             continue
         module_match = MODULE_BEGIN_RE.match(line)
         if module_match is not None:
             if current_module is not None:
-                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+                raise MergeError(
+                    f"{context} 第 {line_number} 行: 检测到嵌套 module 声明"
+                )
             current_module = module_match.group("name")
             offset += len(line)
             continue
@@ -394,11 +494,13 @@ def parse_parameter_declarations(
             offset + declaration_match.end("kind"),
             offset,
             offset + len(line.rstrip("\r\n")),
+            line_number,
         )
         previous = declarations.get(key)
         if previous is not None and previous.kind != declaration.kind:
             raise MergeError(
-                f"{context}: {current_module}.{parameter_name} 同时声明为 "
+                f"{context}: {current_module}.{parameter_name} 在第 "
+                f"{previous.line_number}、{line_number} 行分别声明为 "
                 f"{previous.kind} 和 {declaration.kind}，无法安全匹配"
             )
         declarations.setdefault(key, declaration)
@@ -474,7 +576,9 @@ def parse_assignments(
     masked_lines = masked.splitlines(keepends=True)
     if len(original_lines) != len(masked_lines):
         raise MergeError(f"{context}: 注释屏蔽后行结构异常")
-    for original_line, masked_line in zip(original_lines, masked_lines):
+    for line_number, (original_line, masked_line) in enumerate(
+        zip(original_lines, masked_lines), start=1
+    ):
         user_owned = USER_ASSIGN_COMMENT_RE.search(original_line) is not None
         if is_protected(offset):
             offset += len(original_line)
@@ -483,17 +587,21 @@ def parse_assignments(
         if module_match is not None:
             if validate_user_markers and user_owned:
                 raise MergeError(
-                    f"{context}: //USER: 只支持模块内完整的单行 assign"
+                    f"{context} 第 {line_number} 行: //USER: "
+                    "只支持模块内完整的单行 assign"
                 )
             if current_module is not None:
-                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+                raise MergeError(
+                    f"{context} 第 {line_number} 行: 检测到嵌套 module 声明"
+                )
             current_module = module_match.group("name")
             offset += len(original_line)
             continue
         if MODULE_END_RE.match(masked_line) is not None:
             if validate_user_markers and user_owned:
                 raise MergeError(
-                    f"{context}: //USER: 只支持模块内完整的单行 assign"
+                    f"{context} 第 {line_number} 行: //USER: "
+                    "只支持模块内完整的单行 assign"
                 )
             current_module = None
             offset += len(original_line)
@@ -501,7 +609,8 @@ def parse_assignments(
         if current_module is None:
             if validate_user_markers and user_owned:
                 raise MergeError(
-                    f"{context}: //USER: 必须标在模块内的单行 assign 末尾"
+                    f"{context} 第 {line_number} 行: //USER: "
+                    "必须标在模块内的单行 assign 末尾"
                 )
             offset += len(original_line)
             continue
@@ -509,7 +618,8 @@ def parse_assignments(
         if assignment_match is None:
             if validate_user_markers and user_owned:
                 raise MergeError(
-                    f"{context}: //USER: 只支持模块内完整的单行 assign"
+                    f"{context} 第 {line_number} 行: //USER: "
+                    "只支持模块内完整的单行 assign"
                 )
             offset += len(original_line)
             continue
@@ -525,6 +635,7 @@ def parse_assignments(
                 offset,
                 offset + len(statement),
                 user_owned,
+                line_number,
             )
         )
         offset += len(original_line)
@@ -548,14 +659,16 @@ def parse_port_connections(
     connections: list[PortConnection] = []
     current_module: str | None = None
     offset = 0
-    for line in masked.splitlines(keepends=True):
+    for line_number, line in enumerate(masked.splitlines(keepends=True), start=1):
         if is_protected(offset):
             offset += len(line)
             continue
         module_match = MODULE_BEGIN_RE.match(line)
         if module_match is not None:
             if current_module is not None:
-                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+                raise MergeError(
+                    f"{context} 第 {line_number} 行: 检测到嵌套 module 声明"
+                )
             current_module = module_match.group("name")
             offset += len(line)
             continue
@@ -574,10 +687,76 @@ def parse_port_connections(
                     connection_match.group("name"),
                     offset,
                     offset + len(line.rstrip("\r\n")),
+                    line_number,
                 )
             )
         offset += len(line)
     return connections
+
+
+def parse_structural_statements(
+    text: str,
+    regions: list[UserCodeRegion],
+    context: str,
+) -> dict[tuple[str, str, int], StructuralStatement]:
+    """Find active genvar/generate/endgenerate lines by module occurrence."""
+    masked = _mask_verilog_comments(text)
+    protected_ranges = [
+        (region.content_start, region.content_end) for region in regions
+    ]
+
+    def is_protected(position: int) -> bool:
+        return any(start <= position < end for start, end in protected_ranges)
+
+    result: dict[tuple[str, str, int], StructuralStatement] = {}
+    occurrences: dict[tuple[str, str], int] = {}
+    current_module: str | None = None
+    offset = 0
+    for line_number, line in enumerate(masked.splitlines(keepends=True), start=1):
+        if is_protected(offset):
+            offset += len(line)
+            continue
+        module_match = MODULE_BEGIN_RE.match(line)
+        if module_match is not None:
+            if current_module is not None:
+                raise MergeError(
+                    f"{context} 第 {line_number} 行: 检测到嵌套 module 声明"
+                )
+            current_module = module_match.group("name")
+            offset += len(line)
+            continue
+        if MODULE_END_RE.match(line) is not None:
+            current_module = None
+            offset += len(line)
+            continue
+        if current_module is None:
+            offset += len(line)
+            continue
+        stripped = line.strip().rstrip(";").strip()
+        if re.fullmatch(r"genvar\s+[A-Za-z_][A-Za-z0-9_$]*", stripped):
+            kind = "genvar"
+        elif stripped == "generate":
+            kind = "generate"
+        elif stripped == "endgenerate":
+            kind = "endgenerate"
+        else:
+            offset += len(line)
+            continue
+        occurrence_key = (current_module, kind)
+        occurrence = occurrences.get(occurrence_key, 0)
+        occurrences[occurrence_key] = occurrence + 1
+        statement = line.rstrip("\r\n")
+        item = StructuralStatement(
+            kind,
+            current_module,
+            occurrence,
+            offset,
+            offset + len(statement),
+            line_number,
+        )
+        result[(current_module, kind, occurrence)] = item
+        offset += len(line)
+    return result
 
 
 def parse_user_owned_lines(
@@ -606,16 +785,21 @@ def parse_user_owned_lines(
         raise MergeError(f"{context}: 注释屏蔽后行结构异常")
 
     result: list[UserOwnedLine] = []
+    structural_occurrences: dict[tuple[str, str], int] = {}
     current_module: str | None = None
     offset = 0
-    for original_line, masked_line in zip(original_lines, masked_lines):
+    for line_number, (original_line, masked_line) in enumerate(
+        zip(original_lines, masked_lines), start=1
+    ):
         if is_protected(offset):
             offset += len(original_line)
             continue
         module_match = MODULE_BEGIN_RE.match(masked_line)
         if module_match is not None:
             if current_module is not None:
-                raise MergeError(f"{context}: 检测到嵌套 module 声明")
+                raise MergeError(
+                    f"{context} 第 {line_number} 行: 检测到嵌套 module 声明"
+                )
             current_module = module_match.group("name")
             offset += len(original_line)
             continue
@@ -630,7 +814,8 @@ def parse_user_owned_lines(
             continue
         if current_module is None:
             raise MergeError(
-                f"{context}: //USER: 必须位于模块内受支持的单行代码末尾"
+                f"{context} 第 {line_number} 行: //USER: "
+                "必须位于模块内受支持的单行代码末尾"
             )
 
         before_marker = original_line[: marker.start()].rstrip()
@@ -639,6 +824,34 @@ def parse_user_owned_lines(
         if commented:
             code = code[2:].lstrip()
         statement = original_line.rstrip("\r\n")
+
+        structural_kind: str | None = None
+        normalized_code = code.strip().rstrip(";").strip()
+        if re.fullmatch(
+            r"genvar\s+[A-Za-z_][A-Za-z0-9_$]*", normalized_code
+        ):
+            structural_kind = "genvar"
+        elif normalized_code == "generate":
+            structural_kind = "generate"
+        elif normalized_code == "endgenerate":
+            structural_kind = "endgenerate"
+        if structural_kind is not None:
+            occurrence_key = (current_module, structural_kind)
+            occurrence = structural_occurrences.get(occurrence_key, 0)
+            structural_occurrences[occurrence_key] = occurrence + 1
+            result.append(
+                UserOwnedLine(
+                    "structural",
+                    current_module,
+                    structural_kind,
+                    None,
+                    statement,
+                    line_number,
+                    occurrence=occurrence,
+                )
+            )
+            offset += len(original_line)
+            continue
 
         if re.match(r"^assign\b", code):
             if commented:
@@ -655,7 +868,8 @@ def parse_user_owned_lines(
             root_match = SIMPLE_ASSIGN_TARGET_RE.fullmatch(lhs)
             if root_match is None:
                 raise MergeError(
-                    f"{context}: //USER: assign 必须提供可识别的单一左值"
+                    f"{context} 第 {line_number} 行: //USER: "
+                    "assign 必须提供可识别的单一左值"
                 )
             result.append(
                 UserOwnedLine(
@@ -664,6 +878,7 @@ def parse_user_owned_lines(
                     lhs,
                     root_match.group("name"),
                     statement,
+                    line_number,
                 )
             )
             offset += len(original_line)
@@ -671,17 +886,21 @@ def parse_user_owned_lines(
 
         declaration_match = SIGNAL_DECLARATION_RE.match(code)
         if declaration_match is not None:
-            name_match = SIGNAL_DECLARATOR_TAIL_RE.search(
-                declaration_match.group("body")
-            )
-            if name_match is not None:
+            names = _signal_declarator_names(declaration_match.group("body"))
+            if names:
                 result.append(
                     UserOwnedLine(
                         "signal",
                         current_module,
-                        name_match.group("name"),
+                        names[-1],
                         None,
                         statement,
+                        line_number,
+                        (
+                            "port"
+                            if declaration_match.group("direction")
+                            else "body"
+                        ),
                     )
                 )
                 offset += len(original_line)
@@ -698,6 +917,7 @@ def parse_user_owned_lines(
                         name_match.group("name"),
                         None,
                         statement,
+                        line_number,
                     )
                 )
                 offset += len(original_line)
@@ -712,14 +932,16 @@ def parse_user_owned_lines(
                     connection_match.group("name"),
                     None,
                     statement,
+                    line_number,
                 )
             )
             offset += len(original_line)
             continue
 
         raise MergeError(
-            f"{context}: //USER: 仅支持完整的单行 assign、"
-            "单行 wire/reg 声明、单行 localparam/parameter 或单行实例端口连接"
+            f"{context} 第 {line_number} 行: //USER: 仅支持完整的单行 assign、"
+            "单行 wire/reg 声明、单行 localparam/parameter、单行实例端口连接，"
+            "以及 genvar/generate/endgenerate"
         )
     return result
 
@@ -733,9 +955,9 @@ def preserve_user_owned_lines(
 ) -> tuple[str, list[Diagnostic]]:
     """Keep supported old lines explicitly marked with ``//USER:``.
 
-    Assigns prefer exact LHS and then a unique root signal. Declarations use
-    ``module.signal``. Named associations use ``module.port`` and therefore
-    deliberately reject a module containing multiple matching associations.
+    Assigns prefer exact LHS and then a root signal. Declarations use
+    ``module.signal`` plus port/body scope. Ambiguous matches produce a warning
+    with source lines and choose the first context-compatible candidate.
     """
     old_lines = parse_user_owned_lines(
         existing_text,
@@ -764,6 +986,11 @@ def preserve_user_owned_lines(
         new_regions,
         f"新文件 {context}",
     )
+    new_structural = parse_structural_statements(
+        new_text,
+        new_regions,
+        f"新文件 {context}",
+    )
     by_exact: dict[tuple[str, str], list[AssignmentStatement]] = {}
     by_root: dict[tuple[str, str], list[AssignmentStatement]] = {}
     for item in new_assignments:
@@ -776,9 +1003,33 @@ def preserve_user_owned_lines(
             (item.module_name, item.port_name), []
         ).append(item)
 
-    replacements: list[tuple[int, int, str]] = []
+    replacements: dict[tuple[int, int], tuple[str, UserOwnedLine]] = {}
     diagnostics: list[Diagnostic] = []
-    claimed_positions: set[int] = set()
+
+    def select_candidate(
+        candidates: list[object], old_line: UserOwnedLine, description: str
+    ) -> object:
+        if not candidates:
+            label = f"{old_line.module_name}.{old_line.key}"
+            raise MergeError(
+                f"{context}: 旧文件第 {old_line.line_number} 行的 //USER: "
+                f"{description} {label} 在新结构中没有匹配项"
+            )
+        if len(candidates) > 1:
+            candidate_lines = ",".join(
+                str(getattr(item, "line_number")) for item in candidates
+            )
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    f"{context}: 旧文件第 {old_line.line_number} 行的 //USER: "
+                    f"{description} {old_line.module_name}.{old_line.key} 在新文件"
+                    f"第 {candidate_lines} 行有 {len(candidates)} 个匹配；"
+                    "按结构上下文选择第一项。",
+                )
+            )
+        return candidates[0]
+
     for old_line in old_lines:
         label = f"{old_line.module_name}.{old_line.key}"
         fallback_note = ""
@@ -791,74 +1042,92 @@ def preserve_user_owned_lines(
                 fallback_note = (
                     "（按唯一根信号匹配）" if assign_candidates else ""
                 )
-            if not assign_candidates:
-                raise MergeError(
-                    f"{context}: 新结构缺少 //USER: 手工 assign {label}"
-                )
-            if len(assign_candidates) != 1:
-                raise MergeError(
-                    f"{context}: //USER: 手工 assign {label} 在新结构中匹配到 "
-                    f"{len(assign_candidates)} 条，无法安全迁移"
-                )
-            candidate_start = assign_candidates[0].statement_start
-            candidate_end = assign_candidates[0].statement_end
+            candidate = select_candidate(
+                assign_candidates, old_line, "手工 assign"
+            )
+            candidate_start = candidate.statement_start
+            candidate_end = candidate.statement_end
+            candidate_line = candidate.line_number
             description = "手工 assign"
         elif old_line.kind == "signal":
-            declaration = new_declarations.get(
-                (old_line.module_name, old_line.key)
+            declarations = new_declarations.get(
+                (old_line.module_name, old_line.key), []
             )
-            if declaration is None:
-                raise MergeError(
-                    f"{context}: 新结构缺少 //USER: signal 声明 {label}"
-                )
+            scoped = [
+                item for item in declarations if item.scope == old_line.scope
+            ]
+            declaration = select_candidate(
+                scoped or declarations, old_line, "signal 声明"
+            )
             candidate_start = declaration.statement_start
             candidate_end = declaration.statement_end
+            candidate_line = declaration.line_number
             description = "signal 声明"
         elif old_line.kind == "parameter":
             parameter = new_parameters.get(
                 (old_line.module_name, old_line.key)
             )
-            if parameter is None:
-                raise MergeError(
-                    f"{context}: 新结构缺少 //USER: parameter 声明 {label}"
-                )
+            parameter = select_candidate(
+                [] if parameter is None else [parameter],
+                old_line,
+                "parameter 声明",
+            )
             candidate_start = parameter.statement_start
             candidate_end = parameter.statement_end
+            candidate_line = parameter.line_number
             description = "parameter 声明"
-        else:
+        elif old_line.kind == "port":
             connection_candidates = connections_by_key.get(
                 (old_line.module_name, old_line.key), []
             )
-            if not connection_candidates:
-                raise MergeError(
-                    f"{context}: 新结构缺少 //USER: 实例端口连接 {label}"
-                )
-            if len(connection_candidates) != 1:
-                raise MergeError(
-                    f"{context}: //USER: 实例端口连接 {label} 在新结构中匹配到 "
-                    f"{len(connection_candidates)} 条，无法安全迁移"
-                )
-            candidate_start = connection_candidates[0].statement_start
-            candidate_end = connection_candidates[0].statement_end
-            description = "实例端口连接"
-
-        if candidate_start in claimed_positions:
-            raise MergeError(
-                f"{context}: 多条 //USER: 记录同时匹配 {label}"
+            connection = select_candidate(
+                connection_candidates, old_line, "实例端口连接"
             )
-        claimed_positions.add(candidate_start)
-        replacements.append(
-            (candidate_start, candidate_end, old_line.statement)
-        )
+            candidate_start = connection.statement_start
+            candidate_end = connection.statement_end
+            candidate_line = connection.line_number
+            description = "实例端口连接"
+        else:
+            structural = new_structural.get(
+                (
+                    old_line.module_name,
+                    old_line.key,
+                    old_line.occurrence or 0,
+                )
+            )
+            structural = select_candidate(
+                [] if structural is None else [structural],
+                old_line,
+                old_line.key,
+            )
+            candidate_start = structural.statement_start
+            candidate_end = structural.statement_end
+            candidate_line = structural.line_number
+            description = old_line.key
+
+        span = (candidate_start, candidate_end)
+        previous = replacements.get(span)
+        if previous is not None:
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    f"{context}: 旧文件第 {previous[1].line_number}、"
+                    f"{old_line.line_number} 行的 //USER: 同时匹配新文件第 "
+                    f"{candidate_line} 行；不再阻塞，按后一条覆盖。",
+                )
+            )
+        replacements[span] = (old_line.statement, old_line)
         diagnostics.append(
             Diagnostic(
                 "info",
-                f"{context}: 保留 {label} 的 //USER: {description}{fallback_note}",
+                f"{context}: 保留旧文件第 {old_line.line_number} 行 {label} 的 "
+                f"//USER: {description}{fallback_note} 到新文件第 "
+                f"{candidate_line} 行",
             )
         )
 
     preserved = new_text
-    for start, end, statement in reversed(replacements):
+    for (start, end), (statement, _) in sorted(replacements.items(), reverse=True):
         preserved = preserved[:start] + statement + preserved[end:]
     return preserved, diagnostics
 
@@ -893,7 +1162,9 @@ def merge_verilog_text(
     ]
     if orphaned:
         labels = "、".join(
-            f"{region.label}#{region.occurrence + 1}" for region in orphaned
+            f"{region.label}#{region.occurrence + 1}"
+            f"(旧文件第 {_line_number_at(existing_text, region.content_start)} 行)"
+            for region in orphaned
         )
         raise MergeError(
             f"{context}: 新结构缺少含用户内容的旧 USER CODE 段 ({labels})"
@@ -1333,6 +1604,65 @@ def merge_paths(
     )
 
 
+def launch_bcompare(result: MergeResult) -> list[Diagnostic]:
+    """Open one asynchronous Beyond Compare window per replaced file on Linux."""
+    if not AUTO_OPEN_BCOMPARE or result.check_only or not result.changed:
+        return []
+    diagnostics: list[Diagnostic] = []
+    if not sys.platform.startswith("linux"):
+        return [
+            Diagnostic(
+                "warning",
+                "AUTO_OPEN_BCOMPARE 已启用，但当前不是 Linux；已跳过自动对比。",
+            )
+        ]
+    if result.backup_directory is None:
+        return [
+            Diagnostic(
+                "warning",
+                "AUTO_OPEN_BCOMPARE 已启用，但本轮没有旧文件备份；已跳过自动对比。",
+            )
+        ]
+    for production_path in result.changed:
+        if production_path in result.created:
+            continue
+        # execute_merge_plan keeps the same relative path below the backup
+        # root.  Prefer a direct relative lookup and fall back to file name for
+        # single-file targets.
+        candidates = list(result.backup_directory.rglob(production_path.name))
+        if len(candidates) != 1:
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    f"{production_path}: 无法唯一定位本轮备份，未打开 bcompare。",
+                )
+            )
+            continue
+        backup_path = candidates[0]
+        try:
+            subprocess.Popen(
+                [BCOMPARE_COMMAND, str(backup_path), str(production_path)],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    f"无法启动 {BCOMPARE_COMMAND} 对比 {production_path}: {exc}",
+                )
+            )
+        else:
+            diagnostics.append(
+                Diagnostic(
+                    "info",
+                    f"已打开 bcompare：左侧 {backup_path}，右侧 {production_path}",
+                )
+            )
+    return diagnostics
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -1418,6 +1748,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     except OSError as exc:
         print(f"error[文件系统操作失败: {exc}]", file=sys.stderr)
         return 3
+    result.diagnostics.extend(launch_bcompare(result))
     _print_result(result)
     return 0
 
