@@ -80,10 +80,11 @@ module RISCV_TOP #(
     input  wire [114       -1:0] test_bus2_sig3_dat,
     input  wire                  test_bus2_sig1_ready,
     input  wire                  test_bus2_sig2_ready,
-//wire                        test_bus2_sig3_ready, //USER: we have top
+    input  wire [514       -1:0] test_bus2_sig3_ready,
     output wire                  test_bus2_sig1_valid,
     output wire                  test_bus2_sig2_valid,
-    output wire                  test_bus2_sig3_valid
+    output wire                  test_bus2_sig3_valid,
+    input  wire [4 -1:0][4 -1:0] test_rx
 );
 
 /*USER CODE BEGIN before statement*/
@@ -109,7 +110,7 @@ wire [`LANE_NUM -1:0][`Test_size -1:0] w_array;
 wire [PARAMTER  -1:0]                  parameter_test;
 wire                                   dat_in;
 wire                                   sig_out;
-wire                        test_bus2_sig3_ready, 
+//wire                        test_bus2_sig3_ready, //USER: we have top
 
 // TOP outputs without an active child driver are tied to zero.
 // 没有有效子模块驱动的 TOP 输出在当前配置下置零。
@@ -160,7 +161,8 @@ RISCV_CORE_TEST #(
     .test_bus2_sig3_ready (test_bus2_sig3_ready),
     .test_bus2_sig1_valid (test_bus2_sig1_valid),
     .test_bus2_sig2_valid (test_bus2_sig2_valid),
-    .test_bus2_sig3_valid (test_bus2_sig3_valid)
+    .test_bus2_sig3_valid (test_bus2_sig3_valid),
+    .test_rx (test_rx[0][0]), //USER: not change
 );
 
 /*USER CODE BEGIN after RISCV_CORE_TEST*/
@@ -219,7 +221,9 @@ GEN_PHY #(
     .GEN_VAR_2 (LOCAL_GEN_VAR_2[i_gen_gen_phy_u])
 ) GEN_PHY_U (
     .dat_in  (dat_in ), //TODO:本信号期望有逻辑功能，请完成
-    .sig_out (sig_out) //TODO:本信号期望有逻辑功能，请完成
+    .sig_out (sig_out), //TODO:本信号期望有逻辑功能，请完成
+    .test_rx (test_rx[0][0]),
+    .test_tx (test_rx[0][i])
 );
 end
 endgenerate

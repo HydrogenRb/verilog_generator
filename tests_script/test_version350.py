@@ -104,7 +104,93 @@ class Version350Tests(unittest.TestCase):
             top = next(path for path in paths if path.name == "top.v").read_text(
                 encoding="utf-8"
             )
-            self.assertRegex(top, r"\.bus\s+\(\{\{4\{1'b0\}\}, bus\}\s*\)")
+            self.assertRegex(top, r"\.bus\s+\(\{4'b0, bus\}\s*\)")
+            self.assertNotRegex(top, r"(?m)^assign .* = '0;$")
+
+    def test_parameter_internal_wire_zero_extends_in_destination_port(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "parameter-internal-width.xlsx"
+            integration = integration_sheet(
+                [
+                    (
+                        ["TOP", "SOURCE", "SINK"],
+                        [[("clk", "i"), ("clk", "i"), ("clk", "i")]],
+                    ),
+                    (
+                        ["SOURCE", "SINK"],
+                        [[("data_out", "o"), ("data_in", "i")]],
+                    ),
+                ]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    ("TOP", module_sheet("TOP", [("clk", 1, None, "i")])),
+                    (
+                        "SOURCE",
+                        module_sheet(
+                            "SOURCE",
+                            [("clk", 1, None, "i"), ("data_out", "SRC_W", 4, "o")],
+                        ),
+                    ),
+                    (
+                        "SINK",
+                        module_sheet(
+                            "SINK",
+                            [("clk", 1, None, "i"), ("data_in", "DST_W", 8, "i")],
+                        ),
+                    ),
+                ],
+            )
+
+            with patch(
+                "xlsx2verilog.AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH", True
+            ):
+                paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(
+                reporter.has_errors, [item.message for item in reporter.items]
+            )
+            top = next(path for path in paths if path.name == "top.v").read_text(
+                encoding="utf-8"
+            )
+            self.assertRegex(top, r"wire\s+\[SRC_W\s+-1:0\]\s+w_data_out;")
+            self.assertRegex(top, r"\.data_out\s+\(w_data_out\s*\)")
+            self.assertRegex(top, r"\.data_in\s+\(\{4'b0, w_data_out\}\s*\)")
+            self.assertNotIn("assign w_data_out", top)
+
+    def test_parameter_output_adapter_uses_sized_zero_literal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "parameter-output-width.xlsx"
+            integration = integration_sheet(
+                [(["TOP", "CHILD"], [[("data", "o"), ("data", "o")]])]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    ("TOP", module_sheet("TOP", [("data", "TOP_W", 8, "o")])),
+                    (
+                        "CHILD",
+                        module_sheet("CHILD", [("data", "CHILD_W", 4, "o")]),
+                    ),
+                ],
+            )
+
+            with patch(
+                "xlsx2verilog.AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH", True
+            ):
+                paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(
+                reporter.has_errors, [item.message for item in reporter.items]
+            )
+            top = next(path for path in paths if path.name == "top.v").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("assign data[8-1:4] = 4'b0;", top)
+            self.assertNotIn("assign data[8-1:4] = '0;", top)
 
     def test_duplicate_named_na_reuses_one_wire_without_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

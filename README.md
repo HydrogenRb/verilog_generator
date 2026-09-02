@@ -62,7 +62,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 }
 ```
 
-`OVERWRITE_FILE_HEADER=False`时，生成头位于`file header` USER 段，后续重新生成保留现有内容；设为`True`时用`VERILOG_FILE_HEADER`覆盖。`ENABLE_CONDITIONAL_BLOCKS=False`时，`条件：MACRO`只整理分类名称，不生成条件块。`ONLY_TOP=True`时仍解析完整层次，但只写出所选集成 TOP。parameter 维度始终按数值列比较并输出`W_PARAMETER_WIDTH_MISMATCH`；`AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH=True`时还按完整 packed 总位宽低位连接并补零，默认只告警。
+`OVERWRITE_FILE_HEADER=False`时，生成头位于`file header` USER 段，后续重新生成保留现有内容；设为`True`时用`VERILOG_FILE_HEADER`覆盖。`ENABLE_CONDITIONAL_BLOCKS=False`时，`条件：MACRO`只整理分类名称，不生成条件块。`ONLY_TOP=True`时仍解析完整层次，但只写出所选集成 TOP。parameter 维度始终按数值列比较并输出`W_PARAMETER_WIDTH_MISMATCH`；`AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH=True`时还按完整 packed 总位宽低位连接并补零，默认只告警。开启后使用定宽零拼接，例如`.data_in({4'b0, w_data_out})`，不会为 parameter 内部网络生成`assign w_data_out[...] = '0`。
 
 三个`SHOW_*_MESSAGES`是错误、警告、信息的三级总开关。`DIAGNOSTIC_VISIBILITY_BY_CODE`是细粒度开关：把某个代码改为`False`，只隐藏该类型的终端输出。例如关闭`W_WIDTH_PLACEHOLDER`仍保留位宽不匹配`W_WIDTH_MISMATCH`；关闭`I_UNCONNECTED`不影响参数链接`I_PARAMETER_LINK`。总开关优先于细粒度开关。所有开关都只影响显示，诊断仍被记录，error 和`--strict`下的 warning 仍照常影响返回码与写入保护。
 
@@ -271,12 +271,13 @@ NA 必须写在真实端口的“对端”单元格中，不能用它替代需�
 
 TOP 连接区的`NA->0/NA->1`属于常量驱动功能；`NA->signame`属于命名观察功能。后者不会改写 TOP 端口名，也不会增加 TOP 驱动，只创建一根观察 wire，因此可以与同一行已有的正常子模块连接并存。interface TOP 端口不支持连续赋值观察 wire，会输出`E_INTERFACE_CONNECTION`。
 
-### V3.45 参数、宏和位宽裁决
+### V3.5.00 参数、宏和位宽裁决
 
 - 同一模块内，同名宏/parameter 的非空数值必须一致；部分行留空时自动继承该模块的已知值。上层已有值而下层留空时也会向下传播。
-- 参数默认局部：生成`localparam`且实例不传参。集成页签`parameter`分类显式链接时生成可覆盖`parameter`；此外，子模块 parameter 一旦直接出现在 TOP 内部 wire/NA/generate 的维度中，也会按 V3.45 在 TOP 正文创建带数值默认值的 localparam 并回传。若 TOP 已有同名同值参数声明则直接复用，不再生成遮蔽它的正文 localparam。没有 TOP 端点的显式子模块参数互连也会自动创建 TOP localparam，并输出 info。
-- parameter 参与的位宽不做“位宽不匹配”判断或固定切片，统一参数连接交给 SystemVerilog elaboration 解析。
+- 模块头参数统一：只要一个条目进入`module #(...)`，就统一生成可覆盖的`parameter`，不再在模块参数列表中混用`localparam`。子模块 parameter 一旦直接出现在 TOP 内部 wire/NA/generate 的维度中，仍可按 V3.45 规则在 TOP 正文创建带数值默认值的`localparam`并回传；这类正文局部常量不属于 module parameter list。若 TOP 已有同名同值参数声明则直接复用。没有 TOP 端点的显式子模块参数互连也会自动创建 TOP localparam，并输出 info。
+- parameter 参与的维度会使用 XLSX`数值`列进行完整 packed 形状比较，并输出`W_PARAMETER_WIDTH_MISMATCH`。默认`AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH=False`时只告警、保持原连接；设为`True`后按全部 packed 维度的总位数执行低位连接和高位补零。内部互连以唯一 output 驱动端的宽度创建 wire，较宽 input 在实例端口内使用定宽零拼接，例如`.data_in({4'b0, w_data_out})`；不再用最大宽度 wire 加`assign 高位 = '0`。若较窄子模块 output 驱动较宽 TOP output，由于 output 连接必须保持可赋值左值，高位改用等宽的`assign top[7:4] = 4'b0`。总位宽无法可靠计算时仍只告警，不猜测。
 - 宏参考只在集成 TOP 文件集中列为注释。上下层或兄弟模块的同名宏若给出不同匹配值会报 error，不再猜测优先级；错误会逐项列出页签与数值。子模块桩文件不重复列出这些宏。
+- 工作簿可增加唯一的`define`页签，以`宏名/名称/name/macro/define`及`数值/value`作为表头集中维护宏匹配值。该页签不会生成模块或活动`` `define``，其内容会合并到本次层次中的所有模块并参与冲突检查。
 - TOP 内部`w_`网络、NA 占位网络和位宽适配网络优先保留来源端口的宏/parameter 表达式，不再仅凭`数值`列固化成数字。V3.45 起，子模块端口使用未显式链接的宽度 parameter 时，脚本在 TOP 语句区 localparam 块创建同名（冲突时唯一化）的局部常量，默认值取子模块`数值`列，并生成`.PARAM(PARAM)`传参，避免 TOP 出现未定义符号且不扩大 TOP 的外部配置接口；该自动处理使用`W_PARAMETER_AUTO_LOCAL`提示。`W_PARAMETER_NOT_EXPORTED`只保留给例化次数等确实要求 TOP parameter、但 TOP 中不存在该符号的场景。
 - V3.4 的 parameter 来源追踪统一用于内部 wire、NA wire 和空连接零值：宏来源保留宏；子模块 parameter 链到 TOP parameter 时使用 TOP parameter 名；TOP parameter 的生成表达式是单一宏时直接使用该宏；直接数字覆盖或 TOP 数字 parameter 来源不把 wire 固化成数字，而为子模块 parameter 名创建 TOP 正文 localparam 后使用该符号。实例参数仍分别保持直接数字或原 TOP parameter 表达式。
 - 可确定的固定/宏位宽不一致仍输出 warning，但 V2 会生成可读的适配：接收端较窄时只接低位（单 bit 为 `[0]`），接收端较宽时高位补零；内部网络按最大位宽建线，窄驱动未覆盖的高位 assign 为零。数组、多维 packed 和 interface 只在能够安全确定语义时适配，否则保留形状诊断供人工处理。
@@ -316,7 +317,7 @@ warning[W_WIDTH_MISMATCH][RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应�
 
 修正 Excel 后可使用 `--strict` 作为自动化流水线的质量门禁。
 
-`review_test_cases/10_special_case/review2case.xlsx` 是本轮边界样例：其中 `APB_1`、`LANE_NUM` 的跨模块宏值冲突应报 error；在副本上分别扩散为统一值后可生成 4 个模块。TOP 的 5 bit `dft_test_en` 连接标量子模块输入时使用 `[0]`，`bus_in[i]` 和 `dyadic_bus_out_{{z}}[i]` 则驱动一个 5 次 `MEM_DAT` generate。原样例保留不修改，便于复验拒绝路径。
+`review_test_cases/10_special_case/review2case.xlsx` 是本轮边界样例：其中 `APB_1`、`LANE_NUM` 的跨模块宏值冲突应报 error；在临时副本中人工统一宏值后可生成 4 个模块。TOP 的 5 bit `dft_test_en` 连接标量子模块输入时使用 `[0]`，`bus_in[i]` 和 `dyadic_bus_out_{{z}}[i]` 则驱动一个 5 次 `MEM_DAT` generate。原样例保留不修改，便于复验拒绝路径。
 
 `review_test_cases/12_test_for_techreview2/techreview2version2.xlsx`覆盖本轮新增规格：显式 parameter 分类、子模块端口连接 NA、常量 bit select、generate 排版和带页签来源的宏冲突诊断。原件刻意保留四组宏冲突，预期直接校验失败；自动测试在临时副本上统一冲突值后检查 4 个小写 Verilog 文件，不修改原始 XLSX。
 
@@ -328,14 +329,14 @@ warning[W_WIDTH_MISMATCH][RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应�
 
 ## 文档归档
 
-需求按版本归档在`doc/PRD/`；当前维护资料与功能索引位于`doc/TechReport/`；历史检视报告位于`doc/TechReport/design_review/`；已移除附录工具的历史需求仅保存在`doc/appendix需求/`，不代表当前仓库仍包含对应可执行代码。
+需求按版本归档在`doc/PRD/`；当前维护资料与功能索引位于`doc/TechReport/`；PRD 14 的跨集成同步与层级信号传播构想见[`V3.5 跨集成同步与层级信号传播方案`](doc/TechReport/V3.5跨集成同步与层级信号传播方案.md)；历史检视报告位于`doc/TechReport/design_review/`；附录需求归档在`doc/appendix需求/`。
 
 ## 测试
 
 ```powershell
 python -m unittest discover -s tests_script -v
-python -m unittest discover -s appendix\tests -v
-python -m py_compile .\xlsx2verilog.py
+python -m unittest tests_script.test_version350 tests_script.test_merger_v350 -v
+python -m py_compile .\xlsx2verilog.py .\appendix\xlsx2verilog_merger.py
 python .\tests_script\run_review_matrix.py
 python .\tests_script\run_tech_review2_review.py
 python .\xlsx2verilog.py .\review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --check --strict
@@ -351,4 +352,4 @@ python .\xlsx2verilog.py .\review_test_cases\14_edge_case_test_problem\eage_case
 python .\xlsx2verilog.py .\review_test_cases\17_v3_techreview2_width_boundary\width_boundary.xlsx --check
 ```
 
-测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.1～V3.4 规则分别由`tests_script/test_version3_review1.py`至`tests_script/test_version3_review4.py`覆盖，V3.45 bugfix 位于`tests_script/test_version3_bugfix345.py`；独立 merger 的单行保护、相关文件递归目标、逐文件确认、完成路径输出、默认目标、备份事务和第 14 号真实覆盖回归位于`appendix/tests/`。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)，V3.2 裁决矩阵见[《V3.2 位宽不匹配分析》](doc/TechReport/V3.2位宽不匹配分析.md)。
+测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.1～V3.4 规则分别由`tests_script/test_version3_review1.py`至`tests_script/test_version3_review4.py`覆盖，V3.45 bugfix 位于`tests_script/test_version3_bugfix345.py`；V3.5 主生成器与 merger 的新增规则分别位于`tests_script/test_version350.py`和`tests_script/test_merger_v350.py`，后者包含本次真实`riscv_top`双`test_rx`回归。历史 merger 的路径、确认和事务测试保留在原测试记录中。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)，V3.2 裁决矩阵见[《V3.2 位宽不匹配分析》](doc/TechReport/V3.2位宽不匹配分析.md)。

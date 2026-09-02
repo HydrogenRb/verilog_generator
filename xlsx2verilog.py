@@ -2714,13 +2714,30 @@ def low_bits(expression: str, width: int) -> str:
     return f"{expression}[0]" if width == 1 else f"{expression}[{width} -1:0]"
 
 
-def fit_source_width(expression: str, source_width: int, target_width: int) -> str:
-    """Resize an rvalue using low-bit truncation or zero extension."""
+def fit_source_width(
+    expression: str,
+    source_width: int,
+    target_width: int,
+    *,
+    sized_zero_fill: bool = False,
+) -> str:
+    """Resize an rvalue using low-bit truncation or zero extension.
+
+    Parameter-aware adaptation uses a sized zero literal such as ``4'b0``.
+    This keeps the complete extension inside the destination port expression
+    and avoids a separate unsized ``'0`` assignment on an intermediate net.
+    """
     if source_width == target_width:
         return expression
     if source_width > target_width:
         return low_bits(expression, target_width)
-    return f"{{{{{target_width - source_width}{{1'b0}}}}, {expression}}}"
+    fill_width = target_width - source_width
+    zero_fill = (
+        f"{fill_width}'b0"
+        if sized_zero_fill
+        else f"{{{fill_width}{{1'b0}}}}"
+    )
+    return f"{{{zero_fill}, {expression}}}"
 
 
 def append_zero_assignment(
@@ -4638,6 +4655,13 @@ def render_integration(
                 # signal then drives every connected child input.
                 mismatch = not shapes_match(top_port, child_port)
                 child_width = connection_numeric_width(child_port, all_macros)
+                parameter_width_adapter = (
+                    AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH
+                    and (
+                        port_uses_parameter_width(top_port)
+                        or port_uses_parameter_width(child_port)
+                    )
+                )
                 if top_bit_select is not None:
                     # An explicit selection is an intentional user-authored
                     # connection expression.  Do not replace it with an
@@ -4679,16 +4703,23 @@ def render_integration(
                 if (
                     mismatch
                     and top_width is not None
+                    and top_width > 0
                     and child_width is not None
+                    and child_width > 0
                     and child_port.direction == "input"
                 ):
                     expression = fit_source_width(
-                        expression, top_width, child_width
+                        expression,
+                        top_width,
+                        child_width,
+                        sized_zero_fill=parameter_width_adapter,
                     )
                 elif (
                     mismatch
                     and top_width is not None
+                    and top_width > 0
                     and child_width is not None
+                    and child_width > 0
                     and child_port.direction == "output"
                     and top_port.direction in {"output", "inout"}
                 ):
@@ -4696,7 +4727,11 @@ def render_integration(
                         expression = low_bits(top_port.name, child_width)
                         add_assignment(
                             f"{top_port.name}[{top_width}-1:{child_width}]",
-                            "'0",
+                            (
+                                f"{top_width - child_width}'b0"
+                                if parameter_width_adapter
+                                else "'0"
+                            ),
                             top_port.condition,
                             child_port.condition,
                         )
@@ -4888,8 +4923,40 @@ def render_integration(
                     if can_resize
                     else None
                 )
+                parameter_width_network = (
+                    AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH
+                    and any(port_uses_parameter_width(port) for _, port in entries)
+                )
+                driver_width: int | None = None
+                parameter_inline_adapter = False
+                if len(drivers) == 1 and can_resize:
+                    driver_index = entries.index(drivers[0])
+                    driver_width = numeric_widths[driver_index]
+                    parameter_inline_adapter = (
+                        parameter_width_network
+                        and driver_width is not None
+                        and driver_width > 0
+                        and all(
+                            item_width is not None and item_width > 0
+                            for item_width in numeric_widths
+                        )
+                        and all(
+                            item_block.module_name != top.name
+                            and (
+                                (item_block, port) == drivers[0]
+                                or port.direction == "input"
+                                or (
+                                    item_width is not None
+                                    and item_width <= driver_width
+                                )
+                            )
+                            for (item_block, port), item_width in zip(
+                                entries, numeric_widths
+                            )
+                        )
+                    )
                 wire_block, wire_shape_port = width_source
-                if maximum_width is not None:
+                if maximum_width is not None and not parameter_inline_adapter:
                     source_index = entries.index(width_source)
                     if numeric_widths[source_index] != maximum_width:
                         maximum_index = numeric_widths.index(maximum_width)
@@ -4924,6 +4991,17 @@ def render_integration(
                     expression = signal_name
                     item_width = numeric_widths[entry_index]
                     if (
+                        parameter_inline_adapter
+                        and driver_width is not None
+                        and item_width is not None
+                    ):
+                        expression = fit_source_width(
+                            signal_name,
+                            driver_width,
+                            item_width,
+                            sized_zero_fill=True,
+                        )
+                    elif (
                         maximum_width is not None
                         and item_width is not None
                         and item_width < maximum_width
@@ -4939,14 +5017,22 @@ def render_integration(
                                 wire_shape_port, wire_shape_parameter_map
                             ),
                         )
-                    elif maximum_width is not None and len(drivers) == 1:
+                    elif (
+                        maximum_width is not None
+                        and len(drivers) == 1
+                        and not parameter_inline_adapter
+                    ):
                         driver_block, driver_port = drivers[0]
                         driver_index = entries.index((driver_block, driver_port))
                         driver_width = numeric_widths[driver_index]
                         if driver_width is not None and driver_width < maximum_width:
                             add_assignment(
                                 f"{signal_name}[{maximum_width}-1:{driver_width}]",
-                                "'0",
+                                (
+                                    f"{maximum_width - driver_width}'b0"
+                                    if parameter_width_network
+                                    else "'0"
+                                ),
                                 driver_port.condition,
                             )
 

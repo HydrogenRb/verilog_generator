@@ -30,7 +30,7 @@
 
 ## 第二轮：历史功能和 real_test 回归
 
-- PASS：unittest 83/83 通过
+- PASS：unittest 102/102 通过
 - PASS：Tech Review 1 matrix 6/6 通过
 - PASS：review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --strict 通过
 - PASS：review_test_cases\08_real_test_2\01_core_layer.xlsx --strict 通过
@@ -84,6 +84,6 @@
 
 - 脚本问题：0。
 - XLSX 待确认数据：12 条模板位宽无法确定，已告警并使用 114。
-- 项目定义差异：样例保留 0 条 APB 位宽不匹配告警。
+- 项目定义差异：样例保留 5 条 APB 位宽不匹配告警。
 - 项目定义待确认：3 个 test_bus valid TOP output 同时连接 CORE/MEM output，已生成但明确告警多驱动。
 - 工具边界：当前环境未安装 iverilog/verilator，第三轮使用独立静态结构检视；interface 的最终编译仍需项目提供对应 interface 定义。

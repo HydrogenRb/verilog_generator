@@ -24,6 +24,10 @@ module TOP_DUP (
 
 /*USER CODE END   before statement*/
 
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
+
 /*USER CODE BEGIN before DUP_CHILD*/
 
 /*USER CODE END   before DUP_CHILD*/

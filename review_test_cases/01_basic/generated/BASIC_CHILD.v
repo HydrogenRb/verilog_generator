@@ -25,4 +25,8 @@ module BASIC_CHILD (
 // 模块占位逻辑：所有输出均置零。
 assign done  = {1{1'b0}};
 assign debug = {1{1'b0}};
+
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
 endmodule

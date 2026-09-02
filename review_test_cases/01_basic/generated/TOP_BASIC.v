@@ -23,6 +23,10 @@ module TOP_BASIC (
 
 /*USER CODE END   before statement*/
 
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
+
 /*USER CODE BEGIN before BASIC_CHILD*/
 
 /*USER CODE END   before BASIC_CHILD*/

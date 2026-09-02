@@ -18,4 +18,8 @@ module WIDTH_DST (
 /*USER CODE BEGIN before statement*/
 
 /*USER CODE END   before statement*/
+
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
 endmodule

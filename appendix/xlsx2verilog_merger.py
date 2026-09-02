@@ -73,6 +73,14 @@ PORT_CONNECTION_RE = re.compile(
     r"^[ \t]*\.(?P<name>[A-Za-z_][A-Za-z0-9_$]*)"
     r"[ \t]*\(.*\)[ \t]*,?[ \t]*$"
 )
+INSTANCE_DIRECT_BEGIN_RE = re.compile(
+    r"^[ \t]*[A-Za-z_][A-Za-z0-9_$]*(?:::[A-Za-z_][A-Za-z0-9_$]*)*"
+    r"[ \t]+(?P<instance>[A-Za-z_][A-Za-z0-9_$]*)[ \t]*\([ \t]*$"
+)
+INSTANCE_PARAMETER_END_RE = re.compile(
+    r"^[ \t]*\)[ \t]*(?P<instance>[A-Za-z_][A-Za-z0-9_$]*)[ \t]*\([ \t]*$"
+)
+INSTANCE_END_RE = re.compile(r"^[ \t]*\)[ \t]*;[ \t]*$")
 
 
 class MergeError(ValueError):
@@ -128,7 +136,9 @@ class AssignmentStatement:
 @dataclass(frozen=True)
 class PortConnection:
     module_name: str
+    instance_name: str | None
     port_name: str
+    occurrence: int
     statement_start: int
     statement_end: int
     line_number: int
@@ -154,6 +164,7 @@ class UserOwnedLine:
     line_number: int
     scope: str | None = None
     occurrence: int | None = None
+    instance_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -657,7 +668,9 @@ def parse_port_connections(
         return any(start <= position < end for start, end in protected_ranges)
 
     connections: list[PortConnection] = []
+    occurrences: dict[tuple[str, str], int] = {}
     current_module: str | None = None
+    current_instance: str | None = None
     offset = 0
     for line_number, line in enumerate(masked.splitlines(keepends=True), start=1):
         if is_protected(offset):
@@ -674,22 +687,40 @@ def parse_port_connections(
             continue
         if MODULE_END_RE.match(line) is not None:
             current_module = None
+            current_instance = None
             offset += len(line)
             continue
         if current_module is None:
             offset += len(line)
             continue
-        connection_match = PORT_CONNECTION_RE.match(line.rstrip("\r\n"))
+        statement_line = line.rstrip("\r\n")
+        instance_match = (
+            INSTANCE_PARAMETER_END_RE.match(statement_line)
+            or INSTANCE_DIRECT_BEGIN_RE.match(statement_line)
+        )
+        if instance_match is not None:
+            current_instance = instance_match.group("instance")
+            offset += len(line)
+            continue
+        connection_match = PORT_CONNECTION_RE.match(statement_line)
         if connection_match is not None:
+            port_name = connection_match.group("name")
+            occurrence_key = (current_module, port_name)
+            occurrence = occurrences.get(occurrence_key, 0)
+            occurrences[occurrence_key] = occurrence + 1
             connections.append(
                 PortConnection(
                     current_module,
-                    connection_match.group("name"),
+                    current_instance,
+                    port_name,
+                    occurrence,
                     offset,
-                    offset + len(line.rstrip("\r\n")),
+                    offset + len(statement_line),
                     line_number,
                 )
             )
+        if INSTANCE_END_RE.match(statement_line) is not None:
+            current_instance = None
         offset += len(line)
     return connections
 
@@ -786,7 +817,9 @@ def parse_user_owned_lines(
 
     result: list[UserOwnedLine] = []
     structural_occurrences: dict[tuple[str, str], int] = {}
+    port_occurrences: dict[tuple[str, str], int] = {}
     current_module: str | None = None
+    current_instance: str | None = None
     offset = 0
     for line_number, (original_line, masked_line) in enumerate(
         zip(original_lines, masked_lines), start=1
@@ -805,11 +838,49 @@ def parse_user_owned_lines(
             continue
         if MODULE_END_RE.match(masked_line) is not None:
             current_module = None
+            current_instance = None
             offset += len(original_line)
             continue
 
+        statement_line = masked_line.rstrip("\r\n")
+        instance_match = (
+            INSTANCE_PARAMETER_END_RE.match(statement_line)
+            or INSTANCE_DIRECT_BEGIN_RE.match(statement_line)
+        )
+        if instance_match is not None:
+            current_instance = instance_match.group("instance")
+        active_connection = PORT_CONNECTION_RE.match(statement_line)
+        active_port_occurrence: int | None = None
+        if active_connection is not None and current_module is not None:
+            active_port_name = active_connection.group("name")
+            active_key = (current_module, active_port_name)
+            active_port_occurrence = port_occurrences.get(active_key, 0)
+            port_occurrences[active_key] = active_port_occurrence + 1
+
+        active_structural_kind: str | None = None
+        active_structural_occurrence: int | None = None
+        normalized_statement = statement_line.strip().rstrip(";").strip()
+        if re.fullmatch(
+            r"genvar\s+[A-Za-z_][A-Za-z0-9_$]*", normalized_statement
+        ):
+            active_structural_kind = "genvar"
+        elif normalized_statement == "generate":
+            active_structural_kind = "generate"
+        elif normalized_statement == "endgenerate":
+            active_structural_kind = "endgenerate"
+        if active_structural_kind is not None and current_module is not None:
+            active_structural_key = (current_module, active_structural_kind)
+            active_structural_occurrence = structural_occurrences.get(
+                active_structural_key, 0
+            )
+            structural_occurrences[active_structural_key] = (
+                active_structural_occurrence + 1
+            )
+
         marker = USER_LINE_COMMENT_RE.search(original_line)
         if marker is None:
+            if INSTANCE_END_RE.match(statement_line) is not None:
+                current_instance = None
             offset += len(original_line)
             continue
         if current_module is None:
@@ -836,9 +907,13 @@ def parse_user_owned_lines(
         elif normalized_code == "endgenerate":
             structural_kind = "endgenerate"
         if structural_kind is not None:
-            occurrence_key = (current_module, structural_kind)
-            occurrence = structural_occurrences.get(occurrence_key, 0)
-            structural_occurrences[occurrence_key] = occurrence + 1
+            if active_structural_kind == structural_kind:
+                occurrence = active_structural_occurrence
+            else:
+                occurrence_key = (current_module, structural_kind)
+                occurrence = structural_occurrences.get(occurrence_key, 0)
+                structural_occurrences[occurrence_key] = occurrence + 1
+            assert occurrence is not None
             result.append(
                 UserOwnedLine(
                     "structural",
@@ -925,14 +1000,23 @@ def parse_user_owned_lines(
 
         connection_match = PORT_CONNECTION_RE.match(code)
         if connection_match is not None:
+            port_name = connection_match.group("name")
+            if active_port_occurrence is None:
+                occurrence_key = (current_module, port_name)
+                occurrence = port_occurrences.get(occurrence_key, 0)
+                port_occurrences[occurrence_key] = occurrence + 1
+            else:
+                occurrence = active_port_occurrence
             result.append(
                 UserOwnedLine(
                     "port",
                     current_module,
-                    connection_match.group("name"),
+                    port_name,
                     None,
                     statement,
                     line_number,
+                    occurrence=occurrence,
+                    instance_name=current_instance,
                 )
             )
             offset += len(original_line)
@@ -997,10 +1081,19 @@ def preserve_user_owned_lines(
         by_exact.setdefault((item.module_name, item.lhs), []).append(item)
         if item.root_signal is not None:
             by_root.setdefault((item.module_name, item.root_signal), []).append(item)
-    connections_by_key: dict[tuple[str, str], list[PortConnection]] = {}
+    connections_by_instance: dict[
+        tuple[str, str, str], list[PortConnection]
+    ] = {}
+    connections_by_occurrence: dict[
+        tuple[str, str, int], list[PortConnection]
+    ] = {}
     for item in new_connections:
-        connections_by_key.setdefault(
-            (item.module_name, item.port_name), []
+        if item.instance_name is not None:
+            connections_by_instance.setdefault(
+                (item.module_name, item.instance_name, item.port_name), []
+            ).append(item)
+        connections_by_occurrence.setdefault(
+            (item.module_name, item.port_name, item.occurrence), []
         ).append(item)
 
     replacements: dict[tuple[int, int], tuple[str, UserOwnedLine]] = {}
@@ -1077,16 +1170,56 @@ def preserve_user_owned_lines(
             candidate_line = parameter.line_number
             description = "parameter 声明"
         elif old_line.kind == "port":
-            connection_candidates = connections_by_key.get(
-                (old_line.module_name, old_line.key), []
-            )
-            connection = select_candidate(
-                connection_candidates, old_line, "实例端口连接"
-            )
+            connection_candidates: list[PortConnection] = []
+            identity_note = ""
+            if old_line.instance_name is not None:
+                connection_candidates = connections_by_instance.get(
+                    (
+                        old_line.module_name,
+                        old_line.instance_name,
+                        old_line.key,
+                    ),
+                    [],
+                )
+                identity_note = (
+                    f"实例 {old_line.instance_name} 的端口 {old_line.key}"
+                )
+            if (
+                old_line.instance_name is None
+                and old_line.occurrence is not None
+            ):
+                connection_candidates = connections_by_occurrence.get(
+                    (
+                        old_line.module_name,
+                        old_line.key,
+                        old_line.occurrence,
+                    ),
+                    [],
+                )
+                identity_note = (
+                    f"端口 {old_line.key} 第 {old_line.occurrence + 1} 次出现"
+                )
+                fallback_note = "（按 occurrence 回退匹配）"
+            if not connection_candidates:
+                raise MergeError(
+                    f"{context}: 旧文件第 {old_line.line_number} 行的 //USER: "
+                    f"{old_line.module_name}.{identity_note or old_line.key} "
+                    "在新结构中没有匹配项"
+                )
+            if len(connection_candidates) != 1:
+                lines = ",".join(
+                    str(item.line_number) for item in connection_candidates
+                )
+                raise MergeError(
+                    f"{context}: 旧文件第 {old_line.line_number} 行的 //USER: "
+                    f"{old_line.module_name}.{identity_note or old_line.key} "
+                    f"在新文件第 {lines} 行仍有多个候选，拒绝猜测"
+                )
+            connection = connection_candidates[0]
             candidate_start = connection.statement_start
             candidate_end = connection.statement_end
             candidate_line = connection.line_number
-            description = "实例端口连接"
+            description = f"实例端口连接（{identity_note}）"
         else:
             structural = new_structural.get(
                 (

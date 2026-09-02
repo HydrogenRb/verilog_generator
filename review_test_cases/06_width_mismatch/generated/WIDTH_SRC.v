@@ -22,4 +22,8 @@ module WIDTH_SRC (
 // Module placeholder: drive every output to zero.
 // 模块占位逻辑：所有输出均置零。
 assign payload = {8{1'b0}};
+
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
 endmodule

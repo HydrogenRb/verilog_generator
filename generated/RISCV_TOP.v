@@ -22,7 +22,7 @@
 /*USER CODE END   before module*/
 
 module RISCV_TOP #(
-    localparam UID_SIZE = 5
+    parameter  UID_SIZE = 5
 ) (
     // ----- ----- ----- ----- ----- -----
     // clk & rst
@@ -118,6 +118,12 @@ assign ahb_test_4 = {4{1'b0}};
 assign ahb_test_5 = {5{1'b0}};
 assign ahb_test_6 = {6{1'b0}};
 
+genvar i;
+
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
+
 /*USER CODE BEGIN before RISCV_CORE_TEST*/
 
 /*USER CODE END   before RISCV_CORE_TEST*/
@@ -210,12 +216,11 @@ MEM_PHY #(
 /*USER CODE BEGIN before GEN_PHY*/
 
 /*USER CODE END   before GEN_PHY*/
-genvar i_gen_gen_phy_u;
 generate
-for (i_gen_gen_phy_u = 0; i_gen_gen_phy_u < 8; i_gen_gen_phy_u = i_gen_gen_phy_u + 1) begin : G_GEN_PHY_U
+for (i = 0; i < 8; i = i + 1) begin : G_GEN_PHY_U
 GEN_PHY #(
-    .GEN_VAR_1 (LOCAL_GEN_VAR_1[i_gen_gen_phy_u]),
-    .GEN_VAR_2 (LOCAL_GEN_VAR_2[i_gen_gen_phy_u])
+    .GEN_VAR_1 (LOCAL_GEN_VAR_1[i]),
+    .GEN_VAR_2 (LOCAL_GEN_VAR_2[i])
 ) GEN_PHY_U (
     .dat_in  (dat_in ), //TODO:本信号期望有逻辑功能，请完成
     .sig_out (sig_out) //TODO:本信号期望有逻辑功能，请完成

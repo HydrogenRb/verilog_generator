@@ -14,7 +14,7 @@
 /*USER CODE END   before module*/
 
 module TOP_PARAM #(
-    localparam WIDTH = 8
+    parameter  WIDTH = 8
 ) (
     // ----- ----- ----- ----- ----- -----
     // test
@@ -30,6 +30,10 @@ module TOP_PARAM #(
 // Internal connections and NA placeholder signals.
 // 子模块内部连线及 NA 占位信号。
 wire [WIDTH -1:0] w_bus;
+
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
 
 /*USER CODE BEGIN before PRODUCER*/
 

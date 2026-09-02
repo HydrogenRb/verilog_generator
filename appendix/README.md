@@ -1,6 +1,6 @@
-# xlsx2verilog_merger V3.45
+# xlsx2verilog_merger V3.5.00
 
-`xlsx2verilog_merger.py`是独立、零第三方依赖的 Verilog 合并工具，与主生成器共用`Version V3.45`。它不读取 XLSX，也不导入`xlsx2verilog.py`：主生成器负责产生“新版本生成目录”，merger 负责把该目录安全更新到已有生产工程。
+`xlsx2verilog_merger.py`是独立、零第三方依赖的 Verilog 合并工具，与主生成器共用`Version V3.5.00`。它不读取 XLSX，也不导入`xlsx2verilog.py`：主生成器负责产生“新版本生成目录”，merger 负责把该目录安全更新到已有生产工程。
 
 ## 合并契约
 
@@ -29,14 +29,19 @@ localparam MODE = 1;              //USER: 保留参数和值
 
 .sigA (temp_w_sig_a),             //USER: 改用临时信号
 //.sigB (temp_w_sig_b)             //USER：不使用
+
+//genvar i;                         //USER: 使用外部 genvar
+//generate                          //USER: 使用外部 generate
+//endgenerate                       //USER: 使用外部 endgenerate
 ```
 
 匹配规则如下：
 
 - assign 的键是“模块名 + 去空白的完整左值”。如果 bit/part select 已改变，仅当新模块内该根信号只有一条 assign 时才回退到根信号；注释 assign 可以只写左值。
-- 声明的键是`模块名.信号名`。匹配后用旧行整体替换新声明，因此活动/注释状态、方向、类型、位宽、缩进及注释都保留。
-- 实例端口连接的键是“当前父模块名 + 端口名”，不是实例名。如果同一父模块中同名端口连接出现多次，键不唯一，merger 会拒绝猜测。
-- 目标不存在、同键重复、多个旧记录争用一个新目标，或标记所在行不是上述格式时，整批合并失败。
+- 声明的稳定键是`模块名.信号名`，并优先保持 ANSI 端口区与模块正文区的作用域一致。新文件有多个候选时记录带新旧行号的 warning，并按结构上下文继续迁移；匹配后用旧行整体替换新声明，因此活动/注释状态、方向、类型、位宽、缩进及注释都保留。
+- 实例端口连接优先使用“当前父模块名 + 实例名 + 端口名”精确匹配；旧结构无法提取实例名时，才回退到“父模块名 + 端口名 + 在完整模块中的出现序号”。序号统计包括没有`//USER:`的端口。普通实例、带参数实例和 generate 内实例使用同一规则。
+- `genvar`、`generate`和`endgenerate`可作为活动行或注释行用`//USER:`整行保护，匹配键包含父模块和结构出现序号。
+- 目标不存在、实例端口的精确身份仍对应多个候选，或标记所在行不是上述格式时，整批合并失败。普通声明等多个旧记录落到同一替换区间时不再用`claimed_positions`阻塞，而是给出带行号 warning 并按旧文件中的后一条处理；实例端口绝不会静默选择第一项。
 - 未标记的 assign、声明和端口连接采用新生成版本。复杂、多行或条件逻辑应放进 USER CODE 块。
 
 被整行保留的注释代码必须自行维持合法的 Verilog 上下文。例如注释掉 ANSI 端口或实例端口后，用户需要确认前后逗号仍然合法。
@@ -51,7 +56,7 @@ localparam MODE = 1;              //USER: 保留参数和值
 - 目标为目录时递归扫描支持的 Verilog 文件，并以不区分大小写的文件名作为唯一键；只检查本轮新代码实际包含的文件名。比如只用`a.v`更新时，生产树中多个`same_b.v`不会阻塞；只有多个目标`a.v`才会列出全部路径并拒绝。
 - 新代码中也不允许出现同名 Verilog 文件。唯一目标可以位于生产树任意子目录；没有同名目标的新文件按新代码相对路径创建，生产侧其余旧文件不会删除。
 - 只处理`.v`、`.sv`、`.vh`和`.svh`；拒绝覆盖符号链接。
-- 每条保留或替换都会输出简短`info[...]`日志，包括关键字迁移、`//USER:`整行迁移、USER 段保留、目标文件覆盖/新建/不变、旧文件备份和结果写入。非`--check`模式在备份和写入前对每个变化文件分别询问`Y/N`；`N`只跳过该文件。结束时按“文件名、绝对路径、空行”列出实际更新的生产文件，便于直接复制打开。
+- 每条保留或替换都会输出简短`info[...]`日志，包括关键字迁移、`//USER:`整行迁移、USER 段保留、目标文件覆盖/新建/不变、旧文件备份和结果写入；warning/error 至少包含旧文件相关行号，能定位的新候选也会列出行号。非`--check`模式在备份和写入前对每个变化文件分别询问`Y/N`；`N`只跳过该文件。结束时按“文件名、绝对路径、空行”列出实际更新的生产文件，便于直接复制打开。
 
 ## 使用方法
 
@@ -59,7 +64,7 @@ localparam MODE = 1;              //USER: 保留参数和值
 # 先生成新代码；输出目录必须与生产工程分开
 py.exe .\xlsx2verilog.py .\design.xlsx --integration 集成_TOP -o .\new_generated
 
-# 查看 V3.45 版本
+# 查看 V3.5.00 版本
 py.exe .\appendix\xlsx2verilog_merger.py --version
 
 # 只检查合并计划，不写文件
@@ -88,9 +93,16 @@ DEFAULT_TARGET_PROJECT = Path("../../rtl")
 
 # Windows 绝对地址使用 raw string，避免 \t、\r 等反斜杠转义
 DEFAULT_TARGET_PROJECT = Path(r"D:\project\chip\rtl")
+
+# Linux 可选：每个实际更新文件异步打开一组 Beyond Compare。
+# 左侧为本轮备份的旧文件，右侧为生产工程中的合并结果。
+AUTO_OPEN_BCOMPARE = False
+BCOMPARE_COMMAND = "bcompare"
 ```
 
 普通合并会针对每个变化文件显示`更新 ...？[Y/N]`或`新建 ...？[Y/N]`。只有回答`Y/yes`的文件会备份和写入；回答`N/no`跳过当前文件并继续询问下一项。`--check`只检查计划，不询问也不写入。
+
+`AUTO_OPEN_BCOMPARE=True`只在 Linux、非`--check`、存在持久备份且文件实际写入时生效。每个文件独立异步启动，不阻塞后续文件；命令不存在或启动失败只产生 warning，不回滚已经成功的合并。
 
 ## 架构与结构变化
 
@@ -108,15 +120,17 @@ merger 不是完整 Verilog parser，而是面向生成器固定格式的保守�
 | 新代码减少例化 | 被删实例的 USER 段为空时成功；其中有内容或受保护行失去目标时拒绝合并 |
 | 旧代码把`localparam`改成`parameter` | 保留旧关键字，采用新默认值和其余声明结构 |
 | 旧代码手改 assign 并标记`//USER:` | 按左值整行保留；目标缺失或多义时拒绝合并 |
-| 旧代码注释声明或`.port(...)`并标记`//USER:` | 按信号名或端口名整行保留；同父模块端口键重复时拒绝猜测 |
+| 旧代码注释声明或`.port(...)`并标记`//USER:` | 声明按模块、作用域和信号名处理；端口优先按实例身份匹配，必要时按完整结构 occurrence 回退 |
 | 旧代码注释`localparam/parameter`并标记`//USER:` | 按`父模块名.参数名`整行保留，包括注释状态、关键字、值和用户备注 |
+| 同一父模块内多个实例都有`.test_rx(...)` | 分别按实例名回填，绝不把两条 USER 行覆盖到第一个候选；实例身份仍多义时拒绝写入 |
+| 注释`genvar/generate/endgenerate`并标记`//USER:` | 按父模块与结构 occurrence 整行保留 |
 
-复杂的宏生成声明、多信号同行声明、多行 assign 或语法重写应放入 USER CODE 段，或交给专业 RTL 解析工具处理。
+同行多个简单`wire/reg`声明会共同保留用户选择的声明关键字。复杂的宏生成声明、多行 assign 或语法重写仍应放入 USER CODE 段，或交给专业 RTL 解析工具处理。
 
 ## 回归测试
 
 ```powershell
-py.exe -m unittest discover -s appendix\tests -v
+py.exe -m unittest tests_script.test_merger_v350 -v
 ```
 
-测试覆盖 USER 段、`wire/reg`、`localparam/parameter`关键字及注释参数整行保护、活动/注释 assign、活动/注释声明、活动/注释实例端口连接、缺失/歧义保护、只检查相关文件名的递归唯一目标、目标重名拒绝、文件顶部默认目标、逐文件 Y/N、完成路径输出、check-only、新代码侧备份、事务回滚，以及第 14 号真实样例的结构覆盖。
+V3.5 回归覆盖 USER 段、`wire/reg`、同行多信号声明、`localparam/parameter`关键字、活动/注释 assign、活动/注释声明、结构控制行、普通及 generate 实例端口、同名端口中只有第二条带 USER、残余歧义拒绝，以及本次真实`riscv_top`的两个`test_rx`定位。历史事务、路径和备份测试仍由仓库原有 merger 测试覆盖。

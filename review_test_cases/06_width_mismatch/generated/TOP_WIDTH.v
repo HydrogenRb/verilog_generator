@@ -26,6 +26,10 @@ module TOP_WIDTH (
 // 子模块内部连线及 NA 占位信号。
 wire [8 -1:0] w_payload;
 
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
+
 /*USER CODE BEGIN before WIDTH_SRC*/
 
 /*USER CODE END   before WIDTH_SRC*/

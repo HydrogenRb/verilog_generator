@@ -22,6 +22,10 @@ module TOP_IO (
 
 /*USER CODE END   before statement*/
 
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
+
 /*USER CODE BEGIN before IO_CHILD*/
 
 /*USER CODE END   before IO_CHILD*/

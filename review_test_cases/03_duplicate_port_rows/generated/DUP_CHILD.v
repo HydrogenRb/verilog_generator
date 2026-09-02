@@ -23,4 +23,8 @@ module DUP_CHILD (
 // Module placeholder: drive every output to zero.
 // 模块占位逻辑：所有输出均置零。
 assign status = {1{1'b0}};
+
+/*USER CODE BEGIN after statement*/
+
+/*USER CODE END   after statement*/
 endmodule
