@@ -2700,6 +2700,35 @@ def packed_total_width(port: Port, macros: dict[str, str]) -> int | None:
     return total
 
 
+def packed_total_width_expression(
+    port: Port, parameter_map: dict[str, str] | None = None
+) -> str:
+    """Return one flat-vector width expression for every packed dimension."""
+    return "*".join(
+        width_expression(dimension, parameter_map)
+        for dimension in (*port.arrays, *port.packed_dimensions, port.width)
+    )
+
+
+def flattened_port_width(
+    port: Port,
+    parameter_map: dict[str, str] | None,
+    resolved_total: int,
+) -> Width:
+    """Describe a packed port as one vector safe for flat part-selects."""
+    dimensions = (*port.arrays, *port.packed_dimensions, port.width)
+    kind = (
+        "literal"
+        if all(dimension.kind == "literal" for dimension in dimensions)
+        else "parameter"
+    )
+    return Width(
+        kind,
+        packed_total_width_expression(port, parameter_map),
+        str(resolved_total),
+    )
+
+
 def connection_numeric_width(port: Port, macros: dict[str, str]) -> int | None:
     """Width available to connection adapters under the configured policy."""
     if port_uses_parameter_width(port):
@@ -4723,8 +4752,23 @@ def render_integration(
                     if top_bit_select is not None
                     else connection_numeric_width(top_port, all_macros)
                 )
+                top_packed_total = packed_total_width(top_port, all_macros)
+                child_packed_total = packed_total_width(child_port, all_macros)
+                same_resolved_packed_total = (
+                    top_index is None
+                    and top_packed_total is not None
+                    and child_packed_total is not None
+                    and top_packed_total == child_packed_total
+                )
+                # A packed assignment may legally connect different dimension
+                # layouts when their total bit counts match.  Shape mismatch
+                # remains visible as a warning, but it must not create an
+                # adapter or a flat part-select against one component range.
+                requires_width_resize = (
+                    mismatch and not same_resolved_packed_total
+                )
                 if (
-                    mismatch
+                    requires_width_resize
                     and top_width is not None
                     and top_width > 0
                     and child_width is not None
@@ -4738,7 +4782,7 @@ def render_integration(
                         sized_zero_fill=parameter_width_adapter,
                     )
                 elif (
-                    mismatch
+                    requires_width_resize
                     and top_width is not None
                     and top_width > 0
                     and child_width is not None
@@ -4746,7 +4790,53 @@ def render_integration(
                     and child_port.direction == "output"
                     and top_port.direction in {"output", "inout"}
                 ):
-                    if child_width < top_width:
+                    multidimensional_output = bool(
+                        top_port.arrays
+                        or top_port.packed_dimensions
+                        or child_port.arrays
+                        or child_port.packed_dimensions
+                    )
+                    if multidimensional_output:
+                        adapter_name = unique_name(
+                            f"w_{child_port.name}_adapter",
+                            used_signals,
+                        )
+                        adapter_parameter_map = wire_parameter_map(
+                            child_key,
+                            modules[block.module_name],
+                            child_port,
+                            row,
+                        )
+                        adapter_width = child_port.width
+                        if child_port.arrays or child_port.packed_dimensions:
+                            # The adapter is the flat boundary between a
+                            # multi-dimensional output and total-width resize.
+                            adapter_width = flattened_port_width(
+                                child_port,
+                                adapter_parameter_map,
+                                child_width,
+                            )
+                        wires.append(
+                            Wire(
+                                adapter_name,
+                                adapter_width,
+                                (),
+                                adapter_parameter_map,
+                            )
+                        )
+                        expression = adapter_name
+                        add_assignment(
+                            top_port.name,
+                            fit_source_width(
+                                adapter_name,
+                                child_width,
+                                top_width,
+                                sized_zero_fill=parameter_width_adapter,
+                            ),
+                            top_port.condition,
+                            child_port.condition,
+                        )
+                    elif child_width < top_width:
                         expression = low_bits(top_port.name, child_width)
                         add_assignment(
                             f"{top_port.name}[{top_width}-1:{child_width}]",
@@ -4763,17 +4853,18 @@ def render_integration(
                             f"w_{child_port.name}_adapter",
                             used_signals,
                         )
+                        adapter_parameter_map = wire_parameter_map(
+                            child_key,
+                            modules[block.module_name],
+                            child_port,
+                            row,
+                        )
                         wires.append(
                             Wire(
                                 adapter_name,
                                 child_port.width,
                                 (),
-                                wire_parameter_map(
-                                    child_key,
-                                    modules[block.module_name],
-                                    child_port,
-                                    row,
-                                ),
+                                adapter_parameter_map,
                             )
                         )
                         expression = adapter_name

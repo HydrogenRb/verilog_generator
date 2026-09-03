@@ -192,6 +192,250 @@ class Version350Tests(unittest.TestCase):
             self.assertIn("assign data[8-1:4] = 4'b0;", top)
             self.assertNotIn("assign data[8-1:4] = '0;", top)
 
+    def test_equal_total_packed_width_with_reordered_dimensions_connects_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "reordered-packed-dimensions.xlsx"
+            integration = integration_sheet(
+                [
+                    (
+                        ["TOP", "CHILD"],
+                        [
+                            [
+                                ("output_data_from_reg", "o"),
+                                ("output_data_from_reg", "o"),
+                            ]
+                        ],
+                    )
+                ]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    (
+                        "TOP",
+                        module_sheet(
+                            "TOP",
+                            [
+                                (
+                                    "output_data_from_reg",
+                                    "TOP_INNER",
+                                    2,
+                                    "o",
+                                    "TOP_OUTER",
+                                    6,
+                                )
+                            ],
+                        ),
+                    ),
+                    (
+                        "CHILD",
+                        module_sheet(
+                            "CHILD",
+                            [
+                                (
+                                    "output_data_from_reg",
+                                    "CHILD_INNER",
+                                    6,
+                                    "o",
+                                    "CHILD_OUTER",
+                                    2,
+                                )
+                            ],
+                        ),
+                    ),
+                ],
+            )
+
+            with patch(
+                "xlsx2verilog.AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH", True
+            ):
+                paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(
+                reporter.has_errors, [item.message for item in reporter.items]
+            )
+            shape_warnings = [
+                item
+                for item in reporter.items
+                if item.code == "W_PARAMETER_WIDTH_MISMATCH"
+                and "output_data_from_reg" in item.message
+            ]
+            self.assertEqual(1, len(shape_warnings))
+            top = next(path for path in paths if path.name == "top.v").read_text(
+                encoding="utf-8"
+            )
+            self.assertRegex(
+                top,
+                r"\.output_data_from_reg\s+\(output_data_from_reg\s*\)",
+            )
+            self.assertNotIn("w_output_data_from_reg_adapter", top)
+            self.assertNotRegex(top, r"output_data_from_reg_adapter\[12\s*-1:0\]")
+
+    def test_multidimensional_output_adapter_is_flattened_before_part_select(
+        self,
+    ) -> None:
+        # Regression: the old path declared this adapter as CHILD_INNER (6)
+        # bits, then read [12-1:0] from it while adapting the full packed size.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "multidimensional-output-adapter.xlsx"
+            integration = integration_sheet(
+                [
+                    (
+                        ["TOP", "CHILD"],
+                        [
+                            [
+                                ("output_data_from_reg", "o"),
+                                ("output_data_from_reg", "o"),
+                            ]
+                        ],
+                    )
+                ]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    (
+                        "TOP",
+                        module_sheet(
+                            "TOP",
+                            [
+                                (
+                                    "output_data_from_reg",
+                                    "TOP_INNER",
+                                    2,
+                                    "o",
+                                    "TOP_OUTER",
+                                    6,
+                                )
+                            ],
+                        ),
+                    ),
+                    (
+                        "CHILD",
+                        module_sheet(
+                            "CHILD",
+                            [
+                                (
+                                    "output_data_from_reg",
+                                    "CHILD_INNER",
+                                    6,
+                                    "o",
+                                    "CHILD_OUTER",
+                                    4,
+                                )
+                            ],
+                        ),
+                    ),
+                ],
+            )
+
+            with patch(
+                "xlsx2verilog.AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH", True
+            ):
+                paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(
+                reporter.has_errors, [item.message for item in reporter.items]
+            )
+            top = next(path for path in paths if path.name == "top.v").read_text(
+                encoding="utf-8"
+            )
+            self.assertRegex(
+                top,
+                r"wire\s+\[CHILD_OUTER\*CHILD_INNER\s+-1:0\]\s+"
+                r"w_output_data_from_reg_adapter;",
+            )
+            self.assertRegex(
+                top,
+                r"assign output_data_from_reg\s+=\s+"
+                r"w_output_data_from_reg_adapter\[12\s+-1:0\];",
+            )
+
+    def test_narrow_output_uses_adapter_before_multidimensional_top(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "narrow-output-to-multidimensional-top.xlsx"
+            integration = integration_sheet(
+                [
+                    (
+                        ["TOP", "CHILD"],
+                        [
+                            [
+                                ("output_data_from_reg", "o"),
+                                ("output_data_from_reg", "o"),
+                            ]
+                        ],
+                    )
+                ]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    (
+                        "TOP",
+                        module_sheet(
+                            "TOP",
+                            [
+                                (
+                                    "output_data_from_reg",
+                                    "TOP_INNER",
+                                    2,
+                                    "o",
+                                    "TOP_OUTER",
+                                    6,
+                                )
+                            ],
+                        ),
+                    ),
+                    (
+                        "CHILD",
+                        module_sheet(
+                            "CHILD",
+                            [
+                                (
+                                    "output_data_from_reg",
+                                    "CHILD_WIDTH",
+                                    6,
+                                    "o",
+                                )
+                            ],
+                        ),
+                    ),
+                ],
+            )
+
+            with patch(
+                "xlsx2verilog.AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH", True
+            ):
+                paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(
+                reporter.has_errors, [item.message for item in reporter.items]
+            )
+            top = next(path for path in paths if path.name == "top.v").read_text(
+                encoding="utf-8"
+            )
+            self.assertRegex(
+                top,
+                r"wire\s+\[CHILD_WIDTH\s+-1:0\]\s+"
+                r"w_output_data_from_reg_adapter;",
+            )
+            self.assertRegex(
+                top,
+                r"assign output_data_from_reg\s+=\s+"
+                r"\{6'b0, w_output_data_from_reg_adapter\};",
+            )
+            self.assertRegex(
+                top,
+                r"\.output_data_from_reg\s+"
+                r"\(w_output_data_from_reg_adapter\s*\)",
+            )
+            self.assertNotRegex(top, r"output_data_from_reg\[12-1:6\]")
+
     def test_duplicate_named_na_reuses_one_wire_without_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
