@@ -252,7 +252,7 @@ class Version345BugfixTests(unittest.TestCase):
             self.assertEqual(len([path for path in paths if path.name == "child.v"]), 1)
 
     def test_version_is_345(self) -> None:
-        self.assertEqual(SCRIPT_VERSION, "Version V3.5.00")
+        self.assertEqual(SCRIPT_VERSION, "Version V3.5.03")
 
 
 if __name__ == "__main__":

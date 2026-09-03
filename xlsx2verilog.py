@@ -73,7 +73,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "E_DIRECTION": True,  # 方向错误：显示 input/output 连接冲突。
     "E_PORT_REFERENCE": True,  # 端口引用错误：显示缺失或重复连接的端口。
     "E_GENERATE_INDEX": True,  # 循环索引错误：显示 generate 标记冲突。
-    "E_NA_TARGET": True,  # NA 目标错误：显示非法、重名或不适用的目标。
+    "E_NA_TARGET": True,  # NA 目标错误：显示非法、不适用或同一行多目标的情况。
     "E_BIT_SELECT": True,  # 位选择错误：显示不支持或越界的 bit select。
     "E_INTERFACE_CONNECTION": True,  # 接口错误：显示 interface 连接限制。
     "E_DRIVER_CONFLICT": True,  # 驱动冲突：显示同一网络的多个 output。
@@ -86,6 +86,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "W_PARAMETER_WIDTH_MISMATCH": True,  # 参数位宽不匹配：按数值列发现参数或多维 packed 形状不一致。
     "W_ZERO_WIDTH": True,  # 零位宽：显示已生成 [0 -1:0] 但需确认工具链行为。
     "W_NA_CONSTANT_WIDTH": True,  # NA 常量：显示定宽常量大于目标或无法安全匹配。
+    "W_NA_TARGET_CONFLICT": True,  # NA 名称冲突：复用已有信号，提示检查方向和多驱动风险。
     "W_PARAMETER_NOT_EXPORTED": True,  # 参数未上拉：例化次数等位置引用了 TOP 中不存在的 parameter。
     "W_PARAMETER_AUTO_LOCAL": True,  # 参数自动局部化：子模块位宽 parameter 未显式链接，TOP 正文已创建 localparam。
     "W_PARAMETER_NA_REPAIR": True,  # parameter NA 初始化修复：逗号列表含空项，已忽略空项并继续校验元素数。
@@ -110,8 +111,8 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.5.00"
-SCRIPT_RELEASE_DATE = "2026.9.1"
+SCRIPT_VERSION = "Version V3.5.03"
+SCRIPT_RELEASE_DATE = "2026.9.3"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
 
@@ -4263,24 +4264,31 @@ def render_integration(
                     code="E_NA_TARGET",
                 )
                 return
-            if target in used_signals and target not in named_na_wires:
-                reporter.error(
+            target_conflicts_existing = (
+                target in used_signals and target not in named_na_wires
+            )
+            if target_conflicts_existing:
+                reporter.warning(
                     f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
-                    f"{target} 与已有信号重名",
-                    code="E_NA_TARGET",
+                    f"{target} 与已有信号重名；已直接复用，不重复声明，"
+                    "请检查方向、位宽和多驱动风险",
+                    code="W_NA_TARGET_CONFLICT",
                 )
-                return
             signal_name = target
             used_signals.add(signal_name)
         else:
-            # Anonymous NA networks must remain readable.  If the plain port
-            # name is occupied, qualify it with the instance instead of
-            # producing the misleading generic ``xxx_2`` suffix.
-            base_name = (
-                port.name
-                if port.name not in used_signals
-                else f"na_{instance_names[child_key]}_{port.name}"
-            )
+            target_conflicts_existing = False
+            # Keep anonymous NA names independent of module/instance names.
+            # Prefer the port name, then an explicit NA prefix.  A worksheet
+            # coordinate is only needed for a second real collision; unlike a
+            # module-qualified name it remains stable when an instance is
+            # renamed and does not imply an RTL hierarchy relationship.
+            if port.name not in used_signals:
+                base_name = port.name
+            elif f"na_{port.name}" not in used_signals:
+                base_name = f"na_{port.name}"
+            else:
+                base_name = f"na_{port.name}_r{row}_c{block.port_column}"
             signal_name = unique_name(base_name, used_signals)
         placeholder_arrays = port.arrays
         expression = signal_name
@@ -4296,24 +4304,25 @@ def render_integration(
             )
             expression += f"[{generated_indices[child_key]}]"
         placeholder_wire = Wire(
-                name=signal_name,
-                width=port.width,
-                arrays=placeholder_arrays,
-                parameter_map=wire_parameter_map(
-                    child_key, modules[block.module_name], port, row
-                ),
-                interface_type=(
-                    port.interface_type.rsplit(".", 1)[0]
-                    if port.interface_type
-                    else None
-                ),
-                packed_dimensions=port.packed_dimensions,
-            )
+            name=signal_name,
+            width=port.width,
+            arrays=placeholder_arrays,
+            parameter_map=wire_parameter_map(
+                child_key, modules[block.module_name], port, row
+            ),
+            interface_type=(
+                port.interface_type.rsplit(".", 1)[0]
+                if port.interface_type
+                else None
+            ),
+            packed_dimensions=port.packed_dimensions,
+        )
         existing_placeholder = named_na_wires.get(signal_name) if target else None
         if existing_placeholder is None:
-            wires.append(placeholder_wire)
-            if target:
-                named_na_wires[signal_name] = placeholder_wire
+            if not target_conflicts_existing:
+                wires.append(placeholder_wire)
+                if target:
+                    named_na_wires[signal_name] = placeholder_wire
         else:
             existing_shape = (
                 existing_placeholder.interface_type,
@@ -4346,10 +4355,16 @@ def render_integration(
         na_label = f"NA[{index}]" if index else "NA"
         if target:
             na_label += f"->{target}"
+        if target_conflicts_existing:
+            na_action = f"已复用已有信号 {signal_name} 并加入 TODO"
+        elif existing_placeholder is not None:
+            na_action = f"已复用命名占位信号 {signal_name} 并加入 TODO"
+        else:
+            na_action = f"已创建 {signal_name} 占位信号并加入 TODO"
         reporter.info(
             f"集成页签 {sheet.name} 第 {row} 行: "
             f"{block.module_name}.{port.name} 连接到 {na_label}，"
-            f"已创建 {signal_name} 占位信号并加入 TODO",
+            f"{na_action}",
             code="I_NA_CONNECTION",
         )
 
@@ -4374,13 +4389,16 @@ def render_integration(
                 code="E_NA_TARGET",
             )
             return
-        if target in used_signals and target not in named_na_wires:
-            reporter.error(
+        target_conflicts_existing = (
+            target in used_signals and target not in named_na_wires
+        )
+        if target_conflicts_existing:
+            reporter.warning(
                 f"集成页签 {sheet.name} 第 {row} 行: NA 自定义名称 "
-                f"{target} 与已有信号重名",
-                code="E_NA_TARGET",
+                f"{target} 与已有信号重名；已直接复用，不重复声明，"
+                "请检查方向、位宽和多驱动风险",
+                code="W_NA_TARGET_CONFLICT",
             )
-            return
         used_signals.add(target)
         observed_port = port
         observed_expression = port.name
@@ -4393,16 +4411,16 @@ def render_integration(
             )
             observed_expression += bit_select
         observer_wire = Wire(
-                name=target,
-                width=observed_port.width,
-                arrays=observed_port.arrays,
-                parameter_map=parameter_maps.get(top.name, {}),
-                packed_dimensions=observed_port.packed_dimensions,
-            )
-        if target not in named_na_wires:
+            name=target,
+            width=observed_port.width,
+            arrays=observed_port.arrays,
+            parameter_map=parameter_maps.get(top.name, {}),
+            packed_dimensions=observed_port.packed_dimensions,
+        )
+        if target not in named_na_wires and not target_conflicts_existing:
             wires.append(observer_wire)
             named_na_wires[target] = observer_wire
-        else:
+        elif target in named_na_wires:
             reporter.warning(
                 f"集成页签 {sheet.name} 第 {row} 行: NA->{target} 已存在；"
                 "复用同名观察 wire，请确认多个来源不会形成多驱动",
@@ -4416,7 +4434,12 @@ def render_integration(
         )
         reporter.info(
             f"集成页签 {sheet.name} 第 {row} 行: TOP 端口 "
-            f"{top.name}.{port.name} 通过 NA->{target} 创建命名观察 wire",
+            f"{top.name}.{port.name} 通过 NA->{target} "
+            + (
+                "复用已有信号"
+                if target_conflicts_existing
+                else "创建命名观察 wire"
+            ),
             code="I_NA_CONNECTION",
         )
 
@@ -4737,7 +4760,7 @@ def render_integration(
                         )
                     elif child_width > top_width:
                         adapter_name = unique_name(
-                            f"w_{block.module_name}_{child_port.name}_adapter",
+                            f"w_{child_port.name}_adapter",
                             used_signals,
                         )
                         wires.append(

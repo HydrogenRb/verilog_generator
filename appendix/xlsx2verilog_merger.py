@@ -22,7 +22,7 @@ import re
 from typing import Callable, Iterable
 
 
-VERSION = "Version V3.5.00"
+VERSION = "Version V3.5.03"
 # 默认生产目标配置：
 # 1. 相对路径以“启动 Python 时 terminal 的当前目录”为基准，例如：
 #    DEFAULT_TARGET_PROJECT = Path("../../rtl")

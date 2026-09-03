@@ -34,7 +34,7 @@ class Version350Tests(unittest.TestCase):
 
             paths, reporter = generate(workbook, root / "generated")
             self.assertFalse(reporter.has_errors, [item.message for item in reporter.items])
-            self.assertEqual("Version V3.5.00", SCRIPT_VERSION)
+            self.assertEqual("Version V3.5.03", SCRIPT_VERSION)
             text = paths[0].read_text(encoding="utf-8")
             self.assertIn("// `define CentralWidth 16", text)
             self.assertRegex(text, r"parameter\s+COUNT\s+= 3")
@@ -231,6 +231,113 @@ class Version350Tests(unittest.TestCase):
             self.assertNotIn("shared_2", top)
             self.assertRegex(top, r"\.a\s+\(shared\s*\)")
             self.assertRegex(top, r"\.b\s+\(shared\s*\)")
+
+    def test_anonymous_na_collision_does_not_use_module_or_instance_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "anonymous-na-name.xlsx"
+            integration = integration_sheet(
+                [
+                    (["TOP", "CHILD"], [[("clk", "i"), ("clk", "i")]]),
+                    (["CHILD", ""], [[("data", "i"), ("NA", "")]]),
+                ]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    (
+                        "集成",
+                        integration,
+                    ),
+                    (
+                        "TOP",
+                        module_sheet(
+                            "TOP",
+                            [("clk", 1, None, "i"), ("data", 4, None, "o")],
+                        ),
+                    ),
+                    (
+                        "CHILD",
+                        module_sheet(
+                            "CHILD",
+                            [("clk", 1, None, "i"), ("data", 4, None, "i")],
+                        ),
+                    ),
+                ],
+            )
+
+            paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(
+                reporter.has_errors, [item.message for item in reporter.items]
+            )
+            top = next(path for path in paths if path.name == "top.v").read_text(
+                encoding="utf-8"
+            )
+            self.assertRegex(top, r"wire\s+\[4\s+-1:0\]\s+na_data;")
+            self.assertRegex(top, r"\.data\s+\(na_data\s*\)")
+            self.assertNotIn("U_CHILD", next(
+                line for line in top.splitlines() if "wire" in line and "na_data" in line
+            ))
+
+    def test_named_na_conflicts_warn_and_reuse_existing_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workbook = root / "named-na-conflict.xlsx"
+            integration = integration_sheet(
+                [
+                    (
+                        ["TOP", "CHILD"],
+                        [
+                            [("clk", "i"), ("clk", "i")],
+                            [("status", "o"), ("NA->clk", "")],
+                        ],
+                    ),
+                    (
+                        ["CHILD", ""],
+                        [[("data_in", "i"), ("NA->status", "")]],
+                    ),
+                ]
+            )
+            write_xlsx(
+                workbook,
+                [
+                    ("集成", integration),
+                    (
+                        "TOP",
+                        module_sheet(
+                            "TOP",
+                            [("clk", 1, None, "i"), ("status", 4, None, "o")],
+                        ),
+                    ),
+                    (
+                        "CHILD",
+                        module_sheet(
+                            "CHILD",
+                            [("clk", 1, None, "i"), ("data_in", 4, None, "i")],
+                        ),
+                    ),
+                ],
+            )
+
+            paths, reporter = generate(workbook, root / "generated")
+            self.assertFalse(
+                reporter.has_errors, [item.message for item in reporter.items]
+            )
+            conflicts = [
+                item
+                for item in reporter.items
+                if item.code == "W_NA_TARGET_CONFLICT"
+            ]
+            self.assertEqual(2, len(conflicts))
+            self.assertFalse(
+                [item for item in reporter.items if item.code == "W_DRIVER_RISK"]
+            )
+            top = next(path for path in paths if path.name == "top.v").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotRegex(top, r"(?m)^wire\b.*\b(?:clk|status)\s*;")
+            self.assertRegex(top, r"\.data_in\s+\(status\s*\)")
+            self.assertRegex(top, r"(?m)^assign clk\s+= status;")
 
     def test_spread_value_cli_was_removed(self) -> None:
         self.assertFalse(any(action.dest == "spread_value" for action in build_parser()._actions))

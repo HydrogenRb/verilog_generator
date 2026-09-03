@@ -150,7 +150,7 @@ class Version3TechReview2Tests(unittest.TestCase):
             self.assertIn("assign from_narrow[8-1:4] = '0;", text)
             self.assertIn(
                 "assign from_wide          = "
-                "w_WIDTH_CHILD_out8_adapter[4 -1:0];",
+                "w_out8_adapter[4 -1:0];",
                 text,
             )
             self.assertIn("assign w_src3[5-1:3]      = '0;", text)
