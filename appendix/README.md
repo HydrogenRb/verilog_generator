@@ -1,6 +1,6 @@
-# xlsx2verilog_merger V3.5.03
+# xlsx2verilog_merger V3.5.05
 
-`xlsx2verilog_merger.py`是独立、零第三方依赖的 Verilog 合并工具，与主生成器共用`Version V3.5.03`。它不读取 XLSX，也不导入`xlsx2verilog.py`：主生成器负责产生“新版本生成目录”，merger 负责把该目录安全更新到已有生产工程。
+`xlsx2verilog_merger.py`是独立、零第三方依赖的 Verilog 合并工具，与主生成器共用`Version V3.5.05`。它不读取 XLSX，也不导入`xlsx2verilog.py`：主生成器负责产生“新版本生成目录”，merger 负责把该目录安全更新到已有生产工程。
 
 ## 合并契约
 
@@ -64,7 +64,7 @@ localparam MODE = 1;              //USER: 保留参数和值
 # 先生成新代码；输出目录必须与生产工程分开
 py.exe .\xlsx2verilog.py .\design.xlsx --integration 集成_TOP -o .\new_generated
 
-# 查看 V3.5.03 版本
+# 查看 V3.5.05 版本
 py.exe .\appendix\xlsx2verilog_merger.py --version
 
 # 只检查合并计划，不写文件

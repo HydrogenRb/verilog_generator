@@ -1,99 +1,116 @@
 # XLSX → Verilog 生成器
 
-`xlsx2verilog.py` 读取 Excel 中的模块定义和集成关系，为每个模块生成一个 `.v` 文件。脚本只依赖 Python 3.10+ 标准库，目标机器不需要联网，也不需要安装 `openpyxl`。
+`xlsx2verilog.py`把 XLSX 中的模块定义和集成关系生成 Verilog/SystemVerilog 模块桩与 TOP。当前版本为 **V3.5.05**，仅依赖 Python 3.10+ 标准库，不需要 `openpyxl`，适合离线环境。
 
-当前能力的完整索引见[功能特性表](doc/TechReport/功能特性表.md)，内部结构见[代码结构与维护指南](doc/TechReport/代码结构与维护指南.md)。
+已有 RTL 工程接收新生成结果时，使用独立工具 [`appendix/xlsx2verilog_merger.py`](appendix/README.md)。主生成器和 merger 是两个入口：前者以 XLSX 生成新结构，后者把受保护的人工内容迁移到新结构。
 
-已有 RTL 项目需要接收一版新的生成结果时，可使用 V3.5.03 独立附录工具[xlsx2verilog_merger](appendix/README.md)。除既有 USER CODE、关键字和单行人工代码保护外，它会区分 TOP 端口与模块正文中的同名声明；多候选改为带新旧行号的 warning，并支持保留注释的`genvar/generate/endgenerate`。
+## 文档入口
 
-## 快速使用
+| 需要了解的内容 | 文档 |
+|---|---|
+| 当前全部功能 | [功能特性表](doc/TechReport/功能特性表.md) |
+| 位宽、维度、方向、宏和 parameter 的实际裁决 | [V3.5.03 位宽行为矩阵](doc/TechReport/V3.5.03位宽行为矩阵.md) |
+| TOP 正文 localparam 的所有来源 | [V3.5.03 parameter / localparam 生成规则](doc/TechReport/V3.5.03局部参数生成规则.md) |
+| 已知 bug 风险、触发条件和建议测试 | [V3.5.03 代码风险检视](doc/TechReport/V3.5.03代码风险检视.md) |
+| 已下线需求与后续瘦身顺序 | [V3.5.03 代码瘦身规划](doc/TechReport/V3.5.03代码瘦身规划.md) |
+| 内部结构和修改入口 | [代码结构与维护指南](doc/TechReport/代码结构与维护指南.md) |
+| merger 的用法与保护范围 | [appendix README](appendix/README.md) |
+
+历史 PRD 和历史 TechReport 用于追溯版本，不自动代表当前行为；遇到冲突时，以当前代码、测试和当前 README 为准。表中的 V3.5.03 审计文档仍是本版继承的基线分析。
+
+## 快速开始
 
 ```powershell
-# 指定输入和输出目录
+# 生成指定集成 TOP 及其子模块
 python .\xlsx2verilog.py .\main_test.xlsx --integration 集成_RISCV_TOP -o .\generated
 
-# 无参数且在交互式终端中运行时，进入终端菜单
-python .\xlsx2verilog.py
-
-# 只查看识别结果
-python .\xlsx2verilog.py .\main_test.xlsx --integration 集成_RISCV_TOP --list
-
-# 一个工作簿有多个集成页签时，CLI 明确选择其中一个 TOP
-python .\xlsx2verilog.py .\multi_top.xlsx --integration 集成_riscv_top -o .\generated
-
 # 只校验，不写文件
-python .\xlsx2verilog.py .\main_test.xlsx --integration 集成_RISCV_TOP --check
+python .\xlsx2verilog.py .\test.xlsx --check
 
-# 将位宽不匹配等警告也视为失败
-python .\xlsx2verilog.py .\main_test.xlsx --integration 集成_RISCV_TOP --check --strict
+# warning 也视为失败
+python .\xlsx2verilog.py .\test.xlsx --check --strict
 
+# 查看识别出的模块、集成页签和输出目标
+python .\xlsx2verilog.py .\test.xlsx --list
+
+# 交互式 terminal 菜单
+python .\xlsx2verilog.py
 ```
 
-无参数并且标准输入、输出均为交互式终端时，脚本会启动终端 GUI 菜单；主菜单包含“生成”“查看”“校验”“严格校验”和“退出”。工作簿有多个有效集成页签时继续选择具体 TOP；只有一个时自动使用。V3.5.03 已移除变量值扩散菜单和`--spread-value`参数。
+无参数且 stdin/stdout 均为交互式终端时，菜单提供“生成、查看、校验、严格校验、退出”。工作簿只有一个有效集成页签时自动选择；有多个时菜单要求选择，CLI 使用 `--integration SHEET`明确指定。
 
-每次直接运行脚本会先输出居中对齐的脚本名、`Version V3.5.03`、发布日期和联系方式。正常生成的返回码为 `0`，校验失败为 `2`。生成文件名统一为小写，例如模块`MEM_PHY`写入`mem_phy.v`，文件内的模块名仍保持大写。文件以 UTF-8 和 LF 换行写入；已有同名 `.v` 会在保留用户代码段后原子替换，输出目录内其他文件不会被删除。终端诊断按 ERROR、WARNING、INFO 分组，分别使用红、黄、青色；每条消息带稳定诊断代码，例如`warning[W_WIDTH_MISMATCH][...]`。重定向到文件或 CI 时自动关闭 ANSI 颜色。
+返回码：成功为 `0`，校验或生成失败为 `2`。`--check`不写 `.v`，但仍执行用户代码段完整性检查。
 
-## 文件顶部配置
+## 工作簿结构
 
-所有脚本级开关都集中在`xlsx2verilog.py`开头的`User configuration`。可直接编辑生成文件头、是否覆盖旧文件头、条件块和三级诊断显示：
+一个工作簿可以包含：
 
-```python
-VERILOG_FILE_HEADER = """//******************
-// Design by: aaa
-// Project name: bbb
-//
-//******************"""
-OVERWRITE_FILE_HEADER = False
-ENABLE_CONDITIONAL_BLOCKS = False
-ONLY_TOP = False
-AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH = False
-SHOW_ERROR_MESSAGES = True
-SHOW_WARNING_MESSAGES = True
-SHOW_INFO_MESSAGES = True
+- 模块定义页签：每页一个模块；
+- 一个或多个集成页签：推荐命名为 `集成`或 `集成_xxx`；
+- 可选 `define`页签：集中提供宏的匹配值，不生成活动 `` `define``。
 
-DIAGNOSTIC_VISIBILITY_BY_CODE = {
-    "E_DIRECTION": True,
-    "W_WIDTH_PLACEHOLDER": True,
-    "W_WIDTH_MISMATCH": True,
-    "W_ZERO_WIDTH": True,
-    "W_NA_CONSTANT_WIDTH": True,
-    "I_UNCONNECTED": True,
-    # 其余代码见脚本开头的完整配置表
-}
-```
-
-`OVERWRITE_FILE_HEADER=False`时，生成头位于`file header` USER 段，后续重新生成保留现有内容；设为`True`时用`VERILOG_FILE_HEADER`覆盖。`ENABLE_CONDITIONAL_BLOCKS=False`时，`条件：MACRO`只整理分类名称，不生成条件块。`ONLY_TOP=True`时仍解析完整层次，但只写出所选集成 TOP。parameter 维度始终按数值列比较并输出`W_PARAMETER_WIDTH_MISMATCH`；`AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH=True`时还按完整 packed 总位宽低位连接并补零，默认只告警。开启后使用定宽零拼接，例如`.data_in({4'b0, w_data_out})`，不会为 parameter 内部网络生成`assign w_data_out[...] = '0`。
-
-三个`SHOW_*_MESSAGES`是错误、警告、信息的三级总开关。`DIAGNOSTIC_VISIBILITY_BY_CODE`是细粒度开关：把某个代码改为`False`，只隐藏该类型的终端输出。例如关闭`W_WIDTH_PLACEHOLDER`仍保留位宽不匹配`W_WIDTH_MISMATCH`；关闭`I_UNCONNECTED`不影响参数链接`I_PARAMETER_LINK`。总开关优先于细粒度开关。所有开关都只影响显示，诊断仍被记录，error 和`--strict`下的 warning 仍照常影响返回码与写入保护。
-
-## XLSX 规则
-
-脚本按表头识别内容，不要求模块端口从固定行开始。空行和合并的“分类”单元格不影响解析。
+任意页签表头中的 `修改`或 `修改列`会在所有业务解析前整列忽略。
 
 ### 模块定义页签
 
-每个模块占一个页签，必须包含 `端口名`、`位宽`、`数值` 和 `i/o` 表头；数组相关表头可选：
+模块页按表头定位，不要求固定行号。必需表头为 `端口名`、`位宽`、`数值`、`i/o`；数组列可选。
 
-| 表头 | 规则 |
+| 表头 | 用途 |
 |---|---|
-| `端口名` | 合法的 Verilog 标识符；同一模块中的重复名称合并为同一个物理端口 |
-| `位宽` | packed 位宽；支持非负整数、整体带括号的安全整数表达式、宏（如 `` `DFT_BUS``）、parameter（如 `DATA_WIDTH`）、由任意顶层 `*` 分隔的多维 packed array，或 interface modport（如 `sky_cs_if.mst`） |
-| `数值` | 位宽宏或 parameter 的匹配默认值；支持结果非负的整数表达式（包括 `0`）；普通端口位宽为空时仍按标量 `1` 处理 |
-| `i/o` | 支持 `i/o/io`、`input/output/inout`、`输入/输出/双向`；`inout`声明不附加`wire`；interface 行使用 `NA`/`N/A`/`interface`；单元格为空时暂按 `inout` 生成，并在代码中加入 TODO 备注 |
-| `数组`（可选） | 信号的外层 packed 数组维度；生成时统一放在端口名左侧、位宽之前；任意顶层 `*` 表示多维；别名为 `数组维度`、`数组深度`、`array`、`depth` |
-| `数组数值`（可选） | 数组深度宏或 parameter 的默认值；别名为 `数组默认值`、`arrayvalue`、`array_default`、`depthdefault`、`depth_default` |
+| `端口名` | Verilog 端口名、parameter 名或宏名 |
+| `位宽` | literal、宏、parameter、多维 packed 因子或 interface modport |
+| `数值` | 宏/parameter 的静态匹配默认值 |
+| `i/o` | `i/input/输入`、`o/output/输出`、`io/i/o/inout/双向`；interface 使用 `NA` |
+| `数组` | 外层维度；别名包括 `数组维度`、`数组深度`、`array`、`depth` |
+| `数组数值` | 数组维度匹配值；支持相应中英文别名 |
 
-模块名取自 `端口名` 表头上方同一列最近的非空单元格；找不到时使用页签名。生成时模块名和 parameter 规范为大写，宏、普通信号、端口名和自定义例化名严格保持 XLSX 中的大小写；默认实例名为`U_<MODULE>`，输出文件名统一为小写。Verilog 标识符和宏名都区分大小写，因此`Data`与`data`、`` `log2``与`` `LOG2``均视为不同名称。
+模块名取 `端口名`表头上方同列最近的非空单元格，找不到时使用页签名。模块名与 parameter 名转为大写；普通信号、端口、自定义实例名和非模板宏保持 XLSX 大小写。模板展开产生的宏名强制大写。
 
-- 宏位宽只生成注释参考，例如 ``// `define DFT_BUS 64``，不会在真实项目中主动定义或重定义宏。
-- 非反引号符号位宽会生成模块参数；凡位于`module #(...)`中的声明一律使用合法的`parameter`。TOP 正文中的生成器内部常量仍使用`localparam`。
-- 数字位宽 `N` 会生成 `[N -1:0]`；数字 `1` 生成标量；显式`0`仍会生成`[0 -1:0]`并输出`W_ZERO_WIDTH`，用于保留原始规格等待人工处理。
-- 重复名称可以出现在多行或不同模块中。单个 Verilog 模块只声明一次同名端口；同一模块后续同名行合并到第一次定义。
-- 普通模块页签中的所有 output 会在模块内部连续赋零，方便生成结果直接通过基础语法检查。
+模块页 `i/o`空白时暂按 `inout`声明，同时生成 TODO 和 `W_IO_DEFAULTED`。无法识别的非空方向是 error。
 
-分类为`parameter`（也接受`parameters`、`参数`、`参数定义`）时，该分类内的行不是端口，而是当前模块的显式参数声明：`端口名`列填写参数名，`数值`列填写用于位宽匹配的非负整数默认值（允许 `0`），`i/o`留空。分类会向后续空分类行继承；parameter 名统一转成大写，也支持`DW_{{i}}`逐项展开。`位宽`列留空时，生成值直接取`数值`；非空时则作为要生成的单行 Verilog 常量表达式，支持完整宏、宏调用、其他 parameter、系统函数、数值字面量及常用运算符。parameter 引用转成大写，宏名和系统函数严格保持原样；例如`` `log2(LANE_NUM)``不会被改成`` `LOG2``。`数值`列仍独立完成静态位宽匹配并生成行尾注释，不会尝试求值该表达式。旧式把完整宏直接写在`数值`列仍兼容。表达式不能包含换行、分号或注释，避免生成非预期语句。所有参数均不再生成`integer`。显式位宽、数组维度及宏/parameter 的匹配值允许为`0`，脚本会保留表达式并输出`W_ZERO_WIDTH`；空白位宽配`数值=0`仍按普通标量处理。例化次数的数值匹配仍必须大于`0`。Verilog/SystemVerilog没有可移植的“零位宽 net”语义，因此`[0 -1:0]`只保证生成器不拒绝输入，不代表所有编译器都会接受，量产前必须处理该 warning。
+分类列有三种特殊用途：
 
-例如以下三行（`数值`分别填写`4/5/3`）：
+| 分类 | 行的含义 |
+|---|---|
+| 普通文本 | 端口分组注释 |
+| `parameter` / `parameters` / `参数` / `参数定义` | 模块参数声明，不是端口 |
+| `宏定义` / `宏` / `macro` / `macros` | 只登记宏匹配值，不生成活动定义 |
+
+分类会向后续空分类单元格继承。备注包含 `*注释*`时，该 XLSX 行完全不参与模型和生成，并输出 `I_ROW_COMMENTED`。
+
+### 位宽与多维
+
+顶层 `*`表示维度分隔，空格无语义差异：
+
+| 位宽 | 数值 | 结果 |
+|---|---|---|
+| 空白或 `1` | 空白 | 标量 |
+| `8` | 空白 | `[8 -1:0]` |
+| `0` | 空白 | `[0 -1:0]`并报 `W_ZERO_WIDTH` |
+| `(2+3*4)` | 空白 | 计算为 `[14 -1:0]` |
+| `` `DATA_W`` | `32` | ``[`DATA_W -1:0]`` |
+| `DATA_W` | `32` | `[DATA_W -1:0]`并声明 parameter |
+| `LANE*DW` | `4*8` | `[LANE -1:0][DW -1:0]` |
+| `TOTAL` | `(4*8)` | 单维 `[TOTAL -1:0]`，匹配值 32 |
+
+所有普通信号维度都生成在名称左侧，顺序为“数组列各维 → 位宽列各维”。interface 实例数组受 SystemVerilog 语法限制，是名称右侧维度的唯一例外。
+
+位宽和数值的顶层维度数必须一致。无法确定的模板匹配值可能用 `114`占位并 warning；生产 CI 应使用 `--strict`或单独阻断 `W_WIDTH_PLACEHOLDER`。
+
+完整的连接适配规则见[位宽行为矩阵](doc/TechReport/V3.5.03位宽行为矩阵.md)。其中最重要的边界是：parameter 自动适配默认关闭；打开后多维 TOP rvalue、indexed 连接和多维内部网络仍有待补测风险。
+
+### parameter 表达式
+
+parameter 分类中：
+
+- `位宽`留空：生成值取 `数值`；
+- `位宽`非空：作为实际 Verilog parameter 表达式；
+- `数值`继续用于生成期静态匹配和行尾注释；
+- 允许数值 `0`；
+- 支持完整宏、宏调用、其他 parameter、系统函数、数值字面量及常用运算符；
+- parameter 标识符转大写，宏名和系统函数保持用户输入。
+
+例如：
 
 ```text
 parameter | para_a | `LANE_NUM     | 4
@@ -101,255 +118,245 @@ parameter | para_b | para_a+1      | 5
 parameter | DW     | `log2(para_b) | 3
 ```
 
-会按行序生成：
-
-```verilog
-parameter PARA_A = `LANE_NUM,      // 4
-parameter PARA_B = PARA_A+1,       // 5
-parameter DW     = `log2(PARA_B)   // 3
-```
-
-模块头中的参数全部为`parameter`；集成 TOP 正文为连线、NA 或宽度映射创建的内部常量仍为`localparam`。
-
-分类为`宏定义`（也接受`宏`、`macro`、`macros`）时，该行只登记宏及其`数值`匹配值，不生成端口、parameter 或活动`` `define``。V3.5.03 还支持名为`define`的专用页签：表头使用`宏名/名称/name/macro/define/端口名`与`数值/value/default/默认值`，其中定义会统一提供给所有模块。普通宏大小写严格保留；模板宏展开后仍强制大写。
-
-任意模块行或集成连接行的备注单元格只要包含`*注释*`，整行就按结构化停用处理：不生成声明、参数、连接或实例绑定，并输出`I_ROW_COMMENTED`。这不是在 Verilog 中保留一行带`//`的旧代码，而是让该 XLSX 行完全不参与模型构建，因此不会留下悬空的半条连接。
-
-### 命名模板端口（`{{i}}`、`{{j}}`、`{{z}}` 等）
-
-`端口名`、`位宽`和数组维度中可使用任意合法变量名的 `{{变量名}}`，不再限定为 `i`。同一行的任意备注单元格中用单层花括号给出对应取值，如 `j的范围是{sig1,sig2,sig3}` 或 `i是{a,b}`；也支持 `i为{...}`、`i={...}`、`i:{...}` 和 `i in {...}`。连续整数可简写为闭区间，例如`z=0:31`等价于列出`0`到`31`共 32 项，`z=31:0`则按降序展开；单个范围最多 4096 项。变量列表会向同一“分类”的后续空分类行继承。例如：
-
-```text
-端口名: test_bus_{{i}}_dat
-位宽:   `DW_{{i}}
-备注:    i的列表是{sig1,sig2,sig3}
-```
-
-会展开为 `test_bus_sig1_dat`、`test_bus_sig2_dat`和 `test_bus_sig3_dat`，对应宏为 `` `DW_SIG1``～`` `DW_SIG3``。模板生成的信号名和取值大小写原样保留；只有包含模板 token 的宏名在展开后强制大写，普通宏（包括`` `log2``这类宏函数）仍严格保持用户输入。模板取值同时用于跨模块逐项、区分大小写地对齐。若模板宏/parameter 的`数值`无法可靠计算，脚本输出 warning 并使用 `114` 作为明确的待确认占位值。集成页签中保留原始 `{{i}}` 写法即可，脚本会按模块已展开端口逐项连接。
-
-变量按名称绑定：`{{j}}` 只使用 `j的范围是{...}`，不会自动套用 `i` 的列表。同一端口名包含多个变量时采用笛卡尔积，例如 `bus_{{j}}_{{z}}` 配合 `j={a,b}`、`z={x,y}` 会生成 `bus_a_x`、`bus_a_y`、`bus_b_x`、`bus_b_y`。如果位宽或数组维度引用了未被端口名绑定的其他变量，脚本不会猜测变量之间的关系，而是 warning 后使用 `114`；如果端口名本身的变量没有取值列表，则报错且不生成该行。
-
-集成页签中的模板引用按“来源模板 + 展开取值”匹配，不按最终端口名做前缀通配。例如 `data_{{i}}` 只匹配由该模板生成的端口，不会误匹配普通端口 `data_debug`。不同模块的取值顺序可以不同，脚本按值连接。V2 允许各模块展开集合不同：共有取值正常互连，仅存在于 TOP 或某个子模块的展开项按单端/未连接语义处理，并输出 `info` 说明，不再因数量或取值集合不同而中止生成。
-
-对于可明确恢复的单花括号拼写错误（例如 `{j}}` 或 `{{j}`），脚本会按 `{{j}}` 处理并告警，XLSX 仍应修正。`i/o` 空白是另一类待确认数据：声明会生成为 `inout`，并附加 `/* TODO: XLSX i/o 为空...需处理方向缺失问题 */` 备注，同时输出 warning；无法识别的非空方向仍然报错。
-
-### 表达式和多维数组
-
-- 顶层 `*` 一律表示维度分隔，乘号前后空格没有语义差异。`A*B`、`A * B` 都生成 `[A -1:0][B -1:0]`。
-- 若 `*` 是算术表达式的一部分，必须把整个表达式放进括号，例如 `(3*5)` 计算为单维 15。安全计算支持括号、`+ - * / // % << >> & | ^`，不会执行名称、函数或 Python 代码。
-- `位宽`和`数值`的顶层 `*` 数量必须一致：`LANE_NUM*LANE_W` 可配 `3*5` 或 `(1+2)*5`，但不能配单值 `15`；单维 `LANE_NUM` 不能配 `3*5`，可以配 `(3*5)`。
-- 模板维度的具体默认值用 `范围是{1,2,3}` 声明，例如 `BUS_OUT_{{z}}*DW` 可配 `范围是{32,32,64}*8`。
-
-#### 位宽写法 specification
-
-空格不再影响 `*` 的含义；只有括号能把乘法保留为单维算术：
-
-| XLSX `位宽` | XLSX `数值` | 生成结果 | 说明 |
-|---|---:|---|---|
-| 空白或 `1` | 空白或 `1` | `input wire sig` | 标量 |
-| `0` | 空白 | `input wire [0 -1:0] sig` + `W_ZERO_WIDTH` | 原样保留零位宽规格；需人工确认下游工具支持方式 |
-| `8` | 空白 | `input wire [8 -1:0] sig` | 固定 8 bit 向量；对齐补白位于 `8` 与 `-1:0]` 之间 |
-| `(2+3*4)` | 空白 | `input wire [14 -1:0] sig` | 括号内表达式先计算为 14 |
-| `` `DATA_W`` | `32` | ``// `define DATA_W 32``，端口为 ``[`DATA_W -1:0]`` | 单个宏；只输出注释参考，不主动定义 |
-| `DATA_WIDTH` | `32` | `parameter DATA_WIDTH = 32`，端口为 `[DATA_WIDTH -1:0]` | 模块头参数 |
-| `` `LANE_NUM*DATA_WIDTH`` | `4*32` | ``[`LANE_NUM -1:0][DATA_WIDTH -1:0] sig`` | 无论乘号是否带空格，都按两个 packed 维度解释 |
-| `TOTAL_WIDTH` | `(4*32)` | `[TOTAL_WIDTH -1:0] sig` | 括号使默认值保持单维，计算为 128 |
-| `DATA_WIDTH`，`数组=DEPTH` | `32`，`数组数值=4` | `input wire [DEPTH -1:0][DATA_WIDTH -1:0] sig` | 数组维度在最左侧，元素位宽紧随其后 |
-| `sky_bus_if.mst` | 空白 | `sky_bus_if.mst sig` | interface modport，不生成 `wire` |
-
-复杂项目示例：若需要 4 lane、每 lane 32 bit 的二维 packed 端口，应写 `` `LANE_NUM*DATA_WIDTH`` 和数值 `4*32`。若需要单根 128 bit 扁平总线，应使用单独的 `TOTAL_WIDTH`，数值写 `128` 或 `(4*32)`。不确定的模板位宽会 warning 并使用 `[114 -1:0]` 作为待确认占位值。
-
-`位宽`描述每个元素的 packed width，`数组`描述位于其外侧的 packed dimensions。所有普通信号维度统一位于名称左侧，顺序是“数组维度 → 位宽中的多维因子 → 最终元素位宽”。例如 `DATA_WIDTH` 的数值为 `32`、`DEPTH` 的数组数值为 `4` 时生成：
+生成：
 
 ```systemverilog
-input wire [DEPTH -1:0][DATA_WIDTH -1:0] data
+parameter PARA_A = `LANE_NUM,    // 4
+parameter PARA_B = PARA_A+1,     // 5
+parameter DW     = `log2(PARA_B) // 3
 ```
 
-未连接的多维 input 使用`'0`接零；普通模块及未驱动 output 也直接使用整信号`assign signal = '0`，不再为置零生成逐元素循环。多维 packed 端口和 interface 属于 SystemVerilog 语法：生成文件仍使用 `.v` 扩展名，仿真、综合和 lint 工具必须显式启用 SystemVerilog 模式。interface 实例数组受 SystemVerilog 语法限制，若使用则仍只能写在 interface 实例名右侧；普通 input/output/inout/wire 不存在这一例外。
+模块头中一律为可覆盖的 `parameter`。只有 TOP 正文中为 NA、未链接子模块宽度或数字映射创建的内部常量使用 `localparam`。详细触发矩阵见[局部参数生成规则](doc/TechReport/V3.5.03局部参数生成规则.md)。
 
-### Interface
+### 模板端口
 
-当`位宽`是 `interface_type.modport`（如 `sky_cs_if.mst`）且 `i/o` 为 `NA`时，生成 `sky_cs_if.mst chi_if_risc`形式的 SystemVerilog interface 端口。interface 端口名与同一模块的普通 input/output/inout 端口名使用相同起始列。集成页签同样使用 `NA`，实例按名连接。生成器不生成 interface 本身的定义，编译时需由项目提供。
+端口名、位宽和数组维度可使用任意合法变量 `{{i}}`、`{{j}}`、`{{z}}`等。备注中提供值域：
 
-## 生成代码格式
+```text
+i是{a,b,c}
+z=0:31
+j in {left,right}
+```
 
-生成器会按当前代码块中最长的字段统一排版：普通端口与 interface 的端口名按列对齐；普通信号的全部 packed 范围都在名称左侧并按维度建立独立列。所有 generate 循环统一使用模块作用域内唯一声明的`genvar i`。模块级 `assign` 和对应说明注释从第 1 列开始。
+同一端口含多个变量时做笛卡尔积。变量按名称绑定，不会把 `j`的值域自动给 `i`。模板信号名和值保持大小写；只有模板宏展开结果强制大写。集成页可继续写模板原式，脚本按模板来源和值逐项对齐，而不是对最终端口名做前缀通配。
 
-```verilog
-input wire [`SHORT     -1:0][`LANE    -1:0] matrix_a,
-input wire [`LONG_NAME -1:0][`CHANNEL -1:0] matrix_b
+可明确恢复的单花括号错误会修复并报 `W_TEMPLATE_REPAIR`；端口名模板变量没有值域则是 error。单个闭区间最多展开 4096 项。
 
-CHILD U_CHILD (
-    .short_port (a_signal        ),
-    .long_port  (long_signal_name)
+### define 页签
+
+唯一的 `define`页签可用下列表头集中维护宏匹配值：
+
+- 名称：`宏名`、`名称`、`name`、`macro`、`define`或`端口名`；
+- 值：`数值`、`value`、`default`或`默认值`。
+
+它只为解析、冲突检查和位宽匹配提供值，不向 RTL 写入活动 `` `define``。真实宏仍由项目编译环境提供。
+
+## 集成页签
+
+命名页签优先按 `集成` / `集成_xxx`发现；没有命名候选时保留历史结构识别。有效集成页同一行至少包含两组相邻的 `端口名`、`i/o`表头。模块标签可写：
+
+```text
+RISCV_CORE
+module:RISCV_CORE
+module:RISCV_CORE 例化名:CORE0
+module:RISCV_CORE *注释*
+```
+
+自定义例化名优先于右侧元数据表。同一 module 使用不同例化名时形成独立实例，但模块定义文件只生成一次。`*注释*`子模块仍完成解析与连线，只在输出中整体注释实例；TOP 不允许停用。
+
+第一连接区描述 TOP 与子模块。其余连接区统一按真实端点数量处理：
+
+- 一个真实 input：接完整形状 0；
+- 一个真实 output/inout：开路；
+- 两个或更多真实端点：创建内部 wire；
+- 唯一 output 是驱动源；无 output 报 `W_DRIVER_RISK`；多个 output 报 `E_DRIVER_CONFLICT`。
+
+TOP input 连接 child output 是 `E_DIRECTION`。TOP output 连接 child input 是允许的：若没有 child 驱动 TOP，脚本把 TOP output 置 0，再由该信号驱动 child input。
+
+### NA 功能
+
+| 写法 | 普通端口含义 |
+|---|---|
+| `NA` | 创建自动命名占位，或按单端未连接处理 |
+| `NA[i]` | 占位并参与 generate 索引 |
+| `NA->name` | 创建/复用指定名称的观察或占位 wire |
+| `NA->0` / `NA->1` | 按目标全部 packed 维度生成全 0 / 全 1 |
+| `NA->8'hFF` | 定宽常量；较窄补 0，过宽 warning 后由上下文截断 |
+
+第一 TOP 区和后续内部连接区均支持 `NA->name`。名称已被 TOP 端口或内部 wire 使用时直接复用并输出 `W_NA_TARGET_CONFLICT`，不会自动解决方向、形状和多驱动问题。interface TOP 端口不支持普通连续赋值观察。
+
+parameter 分类中的 `NA->A`、`NA->514`、`NA[i]->B`会在 TOP 正文创建 localparam并传给子模块；规则与冲突处理见[局部参数生成规则](doc/TechReport/V3.5.03局部参数生成规则.md)。
+
+### V3.5.05 子模块端口切片
+
+后续子模块内部连接区支持在端口名末尾选择最左侧 packed 维度：
+
+```text
+tx_fifo[5:3]
+tx_fifo[3+:3]
+tx_fifo[2]
+```
+
+`[3+:3]`会规范输出为 `[3 +: 3]`，与 `[5:3]`选择相同的三个元素。显式范围必须按生成声明的降序 `[msb:lsb]`书写；`[0:2]`会报 `E_PORT_SLICE`。
+
+同一个 output 端口可以在多行使用不同切片。脚本只为它创建一根完整内部 wire、只生成一次实例端口绑定，再把各切片连接给不同 input。例如 OE 为 `[6][2][2]`、两个 LC 为 `[3][2][2]`时：
+
+```text
+LC_A.tx_fifo  <-> OE.tx_fifo[2:0]
+LC_B.tx_fifo  <-> OE.tx_fifo[5:3]
+```
+
+生成结构为：
+
+```systemverilog
+wire [6 -1:0][2 -1:0][2 -1:0] w_tx_fifo;
+
+LC LC_A (
+    .tx_fifo (w_tx_fifo[2:0])
+);
+LC LC_B (
+    .tx_fifo (w_tx_fifo[5:3])
+);
+OE U_OE (
+    .tx_fifo (w_tx_fifo)
 );
 ```
 
-### 可持久化用户代码段
-
-每个文件开头都有`file header`代码段，每个模块端口声明后都有`before statement`代码段；生成 statement 后、实例或`endmodule`前还有`after statement`。集成 TOP 另有 module 前`before module`及每个实例前后的 USER 段：
-
-```verilog
-/*USER CODE BEGIN before module*/
-// 可以在这里填写只属于 TOP、且必须位于 module 之前的声明
-/*USER CODE END   before module*/
-module TOP (...);
-
-/*USER CODE BEGIN before statement*/
-// 可以在这里填写声明或逻辑
-/*USER CODE END   before statement*/
-
-/*USER CODE BEGIN before CHILD*/
-// 可以在这里填写实例前逻辑
-/*USER CODE END   before CHILD*/
-CHILD U_CHILD (...);
-/*USER CODE BEGIN after CHILD*/
-// 可以在这里填写实例后逻辑
-/*USER CODE END   after CHILD*/
-```
-
-重新生成时，脚本按“标签 + 同名标签出现序号”提取旧文件中 BEGIN/END 之间的原文，再合入新生成结构。不要编辑、删除或嵌套标记行；若标记损坏、BEGIN/END 标签不一致，或包含实际用户内容的旧代码段在新结构中失去对应位置，本次生成会报 error 并在写文件前整体停止，以免静默丢失用户代码。`--check`也会执行相同的保护校验。
-
-生成的内部 wire、位宽适配和自动 assign 代码块均同时输出英文与中文说明，便于中英文项目成员直接阅读生成文件。
-
-模块端口按“分类”分组，每组生成三行标题。合并单元格在首行给出的分类会由后续连续端口继承；完全没有分类的连续端口使用 `no group`：
-
-```verilog
-    // ----- ----- ----- ----- ----- -----
-    // CLK & RST
-    // ----- ----- ----- ----- ----- -----
-    input wire clk,
-    input wire rst_n
-```
-
-分类中可加入 `条件：宏名`。例如 `CFG bus 条件：FEATURE_CFG` 显示分类名 `CFG bus`；仅写 `条件：FEATURE_CFG` 时，显示分类名就是 `FEATURE_CFG`。也接受 ``条件：`FEATURE_CFG``。默认配置不生成条件块。仅当文件顶部 `ENABLE_CONDITIONAL_BLOCKS = True` 时，整组端口才放入 `` `ifdef FEATURE_CFG``；条件会同步应用到端口声明、桩模块的 output 赋零以及集成模块的实例连接。条件宏由外部编译环境控制，生成器不会在文件开头创建对应 `` `define``。多个条件组关闭、单独开启或同时开启时，生成器都会按预处理分支放置分隔逗号。即使 CORE 的每个端口都有 `ifdef` 且当前没有任何条件开启，生成的空端口列表和空实例连接列表仍保持合法。条件化子模块 output/inout 驱动无条件或不同条件的 TOP output 时，驱动端存在的配置使用子模块输出，其余配置自动把 TOP output 置零，避免信号悬空。
-
-### 集成页签
-
-页签名推荐使用`集成`或`集成_xxx`，例如`集成_riscv_top`、`集成_debug_top`。脚本会按工作簿顺序自动发现这些页签；为兼容历史工作簿，在没有这种名称时仍保留原有的内容结构识别。只有一个有效候选时直接生成，无论名称是`集成`还是`集成_xxx`；有多个候选时，终端 GUI 会要求选择，CLI 则使用`--integration`指定。一次运行只解析并生成所选集成层次引用的 TOP 和子模块，不会混入其他集成页签对应的模块。
-
-内容结构上，同一行出现至少两组相邻的 `端口名`、`i/o` 表头时，该页签被识别为有效集成页签。每组的模块名位于 `端口名` 上方，既可以写 `RISCV_CORE`，也可以写 `module:RISCV_CORE`、`module：RISCV_CORE`；前缀不进入生成的模块名。V3.45 可写`module:RISCV_CORE 例化名:RISC_CORE1`，标签例化名优先于右侧`模块名/例化名/例化次数`元数据表；同一模块以不同标签例化名出现时会形成相互独立的多个实例，但仍只生成一个模块定义文件。子模块标签写成`module:RISCV_CORE *注释*`时，脚本仍完成端口、连线、parameter、generate 和子模块文件生成，只用一个`/* ... */`块注释该实例；TOP 标签不允许停用。若后续模块块已有模块名和端口数据但漏写重复的`端口名/i/o`表头，脚本也会恢复该块；缺失的集成方向按模块页定义校验并记录 info。唯一例外是作为连接终点的匿名 `NA` 列：它可以紧跟某个正常的`端口名/i/o`列对，不写模块名，也不写自己的表头。
-
-连接区由一个或多个空列隔开：
-
-1. 第一个连续区是 `TOP ↔ 子模块`。第一组是 TOP，后续组是子模块；同一行的端口互连。
-2. 所有后续连接区统一按真实端点数量处理，不再区分“单模块未连接区”和“子模块互连区”。同一行有两个或更多真实模块端点时生成一根内部 wire；wire 名使用唯一 output 驱动端的端口名，例如`producer_out → consumer_in`生成`w_producer_out`，不再生成`w_producer_out_to_consumer_in`。固定数字或可解析宏的位宽不一致时，wire 取所有端点的最大位宽；较窄端口连接低位，唯一窄 output 未驱动的高位显式补零。
-3. 后续连接区一行只有一个真实模块端点且没有 NA 对端时，按未连接处理：子模块 input 接完整形状零复制式，output/inout 使用空连接`.port()`；若旁边存在`NA/NA->name/NA->常量`端点，则改用与多模块区完全相同的 NA 占位处理。
-4. 集成表中完全遗漏的子模块端口也会按未连接端口处理，并产生 `info`；该自动诊断不会令 `--strict` 失败。
-5. 未由子模块 output/inout 驱动的 TOP output 会在 TOP 内赋零；该 TOP output 可以同时连接一个或多个子模块 input，并以置零后的同一信号驱动它们。TOP input 始终只作为外部输入，不在模块内赋值。
-6. TOP 端口引用末尾的 `[i]` 是 generate 指示符。V3.5.03 在 TOP 语句区只声明一次`genvar i`，所有顺序 generate block 复用该索引；连接表达式统一使用`[i]`。循环上限仍优先采用显式例化次数、TOP parameter 或宏，否则从首维取安全范围。
-7. TOP 端口可以显式写常量 bit select，例如 5 bit 的`n_rst`写成`n_rst[0]`连接子模块端口。脚本校验索引未越界，并原样保留`.n_rst (n_rst[0])`；显式选择优先于自动位宽适配。
-8. 子模块互连区的一端可以写`NA`或`N/A`。无论另一端是 input、output 还是 inout，TOP 内的普通占位信号都统一创建为同形状`wire`。实例仍以占位信号连接并附加 TODO。`NA[i]`会生成实例循环和带额外最左维度的占位 wire。`NA`端允许省略模块名和重复表头。在第一个`TOP ↔ 子模块`连接区，TOP 端口的对端写`NA`表示保留顶层观察端口；模板端口仍正常展开。
-9. `NA->名称`为占位线指定精确名称，例如`NA->ready_test_process`生成同形状`wire ... ready_test_process`并连接真实模块端口；若名称已被 TOP 端口或内部 wire 使用，V3.5.03 直接复用已有信号、不重复声明，仅输出`W_NA_TARGET_CONFLICT`，由用户检查方向、位宽和多驱动风险。同一命名 NA 重复使用时也复用首次声明，形状差异降级为 warning；非法 Verilog 名称仍是 error。`NA->0`和`NA->1`按目标端口全部 packed 维度生成全 0/全 1 复制式，例如`[A][B]`信号生成`{A*B{1'b1}}`。V3.4 起，空 input、TOP output 兜底和桩 output 也调用同一个完整形状零值入口，不再混用`'0`、`8'b0`和复制式；仅当任一维静态为 0 时保留`'0`，避免零次复制兼容问题。`NA->8'hFF`等定宽常量会与可解析的目标总位宽比较：较窄时在高位显式补零，等宽时原样使用，较宽时输出`W_NA_CONSTANT_WIDTH`并保留原常量，由 Verilog 连接上下文截断。对于 TOP output，生成对应`assign`且同一行的子模块 output 开路，避免把常量接到输出端。普通未连接、单端和自动 NA 占位诊断为 info；名称冲突与形状风险是 warning，因此会令`--strict`失败。
-10. 集成页签可在任意空白区域增加`模块名 / 例化名 / 例化次数`三列表。未填写时沿用`U_<模块名>`和由`[i]`推导的次数；显式例化名保持用户大小写。模块标签中的`例化名:xxx`优先级更高，并可让同一模块类型形成多个实例；元数据表中的例化次数仍可同时应用。显式次数接受正整数、TOP parameter 或反引号宏，并直接控制 generate 上限；数字超过可解析索引范围时输出越界风险 warning。
-11. 任一连接区的分类列可写`parameter`并向下继承。该行引用的是各模块参数而非端口；显式链接的子模块参数生成可覆盖`parameter`并出现在`#(...)`连接中。若链接仅发生在两个子模块之间，脚本会在 TOP 自动创建同名或唯一化的`localparam`并输出 info。parameter 的`i/o`可直接填写自然数或反引号宏，例如`LANE_NUM | 3`与``LANE_NUM | `LANES``分别生成`#(.LANE_NUM(3))`和``#(.LANE_NUM(`LANES))``。另一条自动传参路径是后文所述的未链接宽度 parameter 正文局部化。
-12. parameter 行支持非 TOP 的 NA 端点。`NA->A`与`NA->514`在 TOP 正文生成局部参数；`NA[i]->B`生成`localparam [COUNT -1:0][32 -1:0] B = 初始化值;`，实例参数连接为`.P(B[i])`并同步生成 COUNT 次循环。存在 parameter NA 时，同一行 parameter/NA 端点的`i/o`都作为初始化来源；只有多个非空来源内容不一致时才输出`E_PARAMETER`。
-
-列位置可以扩展，不限于示例中的 B～Y；关键是每个区内的模块组相邻、不同区之间至少留一个空列。脚本同时检查集成页签的 `i/o` 与模块定义是否一致、多驱动、缺失端口及位宽差异。
-
-#### Parameter 来源的歧义裁决
-
-| 容易误解的写法 | 脚本裁决 | 原因/建议 |
-|---|---|---|
-| 子模块位宽使用`PARAMTER`，集成 parameter 区未连接 | TOP 正文生成`localparam PARAMTER = 数值;`并实例传参 | 它是内部实现常量，不应无意扩展成 TOP 可覆盖 parameter |
-| TOP 已有同名同值参数，子模块也使用该名字 | 直接复用 TOP 声明 | 避免正文再声明同名 localparam 形成遮蔽 |
-| parameter NA 行的子模块`i/o`填写`1`或`{1,2,...}` | 解释为 NA localparam 初始化数据 | 该行的 NA 已决定“通过 localparam 传参”，所以 i/o 不再表示第二条直接覆盖路径 |
-| parameter NA 同时列出 TOP parameter，且没有非空 i/o | 使用 TOP parameter 名作为初始化表达式 | 例如生成`'{default: TOP_VALUE}`；不再报“不能同时使用” |
-| parameter NA 有多个非空 i/o | 内容完全相同则接受，不同则报具体`E_PARAMETER` | 不按列位置猜优先级，防止静默用错值 |
-| `NA[i]`中写`{A,B}` | 按两个位置元素解释，不按单个拼接表达式解释 | 若要把拼接作为所有元素的同一默认值，请写`'{default: {A,B}}` |
-| `[COUNT-1:0]` packed 数组使用位置列表 | 列表第一项对应左边界`COUNT-1` | 这是 SystemVerilog 的声明顺序；若关心`local[i]`的逐项映射，建议使用带 index/default 的 assignment pattern 并在 RTL lint/仿真中确认 |
-| 列表中出现连续逗号 | 空项被忽略并产生`W_PARAMETER_NA_REPAIR`，随后检查有效项数 | 该修复不会静默发生；建议最终回填 XLSX，消除 warning |
-| parameter NA 元素可能超过 32 bit | 当前元素宽度由`PARAMETER_NA_ELEMENT_WIDTH = 32`统一控制 | 按工程最大表达式宽度调整文件顶部常量，避免截断 |
-
-NA 必须写在真实端口的“对端”单元格中，不能用它替代需要查找的真实端口名。各连接区的精确范围如下：
-
-| 位置 | `NA` | `NA->signame` | 说明 |
-|---|---|---|---|
-| 第一块`TOP ↔ 子模块` | 支持 | 支持 | TOP 列写真实端口、对端写 NA 时可保留/命名观察端口；TOP 列直接写`NA->signame`、子模块列写真实端口时，则为该子模块端口创建命名占位 wire；`NA->常量`可给 TOP output 或子模块 input 赋值 |
-| 任意后续连接区 | 支持 | 支持 | 只需一行保留至少一个真实子模块端口；`NA`创建自动命名占位 wire，`NA->signame`创建指定名称 wire，二者都在实例连接处加入 TODO |
-| 后续区没有 NA 对端 | 不适用 | 不适用 | 一个真实 input 自动接零，一个真实 output/inout 自动开路；两个以上真实端点按内部互连处理 |
-
-TOP 连接区的`NA->0/NA->1`属于常量驱动功能；`NA->signame`属于命名观察功能。名称未占用时创建观察 wire；名称已是 TOP 端口或内部 wire 时直接对该信号生成观察 assign，并输出`W_NA_TARGET_CONFLICT`而不中止生成。该宽松规则不会自动消除方向、位宽或多驱动风险。interface TOP 端口不支持连续赋值观察 wire，会输出`E_INTERFACE_CONNECTION`。
-
-### V3.5.03 参数、宏和位宽裁决
-
-- 同一模块内，同名宏/parameter 的非空数值必须一致；部分行留空时自动继承该模块的已知值。上层已有值而下层留空时也会向下传播。
-- 模块头参数统一：只要一个条目进入`module #(...)`，就统一生成可覆盖的`parameter`，不再在模块参数列表中混用`localparam`。子模块 parameter 一旦直接出现在 TOP 内部 wire/NA/generate 的维度中，仍可按 V3.45 规则在 TOP 正文创建带数值默认值的`localparam`并回传；这类正文局部常量不属于 module parameter list。若 TOP 已有同名同值参数声明则直接复用。没有 TOP 端点的显式子模块参数互连也会自动创建 TOP localparam，并输出 info。
-- parameter 参与的维度会使用 XLSX`数值`列进行完整 packed 形状比较，并输出`W_PARAMETER_WIDTH_MISMATCH`。默认`AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH=False`时只告警、保持原连接；设为`True`后按全部 packed 维度的总位数执行低位连接和高位补零。内部互连以唯一 output 驱动端的宽度创建 wire，较宽 input 在实例端口内使用定宽零拼接，例如`.data_in({4'b0, w_data_out})`；不再用最大宽度 wire 加`assign 高位 = '0`。若较窄子模块 output 驱动较宽 TOP output，由于 output 连接必须保持可赋值左值，高位改用等宽的`assign top[7:4] = 4'b0`。总位宽无法可靠计算时仍只告警，不猜测。多维 packed 信号的维度顺序不同但可解析总 bit 数相等时，例如`[2][6]`与`[6][2]`均为 12 bit，实例端口直接连接且只保留形状 warning，不创建 adapter。总位宽确实不等时，多维 output adapter 会声明为源端完整总宽度的一维 packed vector，再安全截取低位，避免在 6 bit 子维度上错误访问`[12-1:0]`。
-- 宏参考只在集成 TOP 文件集中列为注释。上下层或兄弟模块的同名宏若给出不同匹配值会报 error，不再猜测优先级；错误会逐项列出页签与数值。子模块桩文件不重复列出这些宏。
-- 工作簿可增加唯一的`define`页签，以`宏名/名称/name/macro/define`及`数值/value`作为表头集中维护宏匹配值。该页签不会生成模块或活动`` `define``，其内容会合并到本次层次中的所有模块并参与冲突检查。
-- TOP 内部`w_`网络、NA 占位网络和位宽适配网络优先保留来源端口的宏/parameter 表达式，不再仅凭`数值`列固化成数字。V3.45 起，子模块端口使用未显式链接的宽度 parameter 时，脚本在 TOP 语句区 localparam 块创建同名（冲突时唯一化）的局部常量，默认值取子模块`数值`列，并生成`.PARAM(PARAM)`传参，避免 TOP 出现未定义符号且不扩大 TOP 的外部配置接口；该自动处理使用`W_PARAMETER_AUTO_LOCAL`提示。`W_PARAMETER_NOT_EXPORTED`只保留给例化次数等确实要求 TOP parameter、但 TOP 中不存在该符号的场景。
-- V3.4 的 parameter 来源追踪统一用于内部 wire、NA wire 和空连接零值：宏来源保留宏；子模块 parameter 链到 TOP parameter 时使用 TOP parameter 名；TOP parameter 的生成表达式是单一宏时直接使用该宏；直接数字覆盖或 TOP 数字 parameter 来源不把 wire 固化成数字，而为子模块 parameter 名创建 TOP 正文 localparam 后使用该符号。实例参数仍分别保持直接数字或原 TOP parameter 表达式。
-- 可确定的固定/宏位宽不一致仍输出 warning，但 V2 会生成可读的适配：接收端较窄时只接低位（单 bit 为 `[0]`），接收端较宽时高位补零；内部网络按最大位宽建线，窄驱动未覆盖的高位 assign 为零。数组、多维 packed 和 interface 只在能够安全确定语义时适配，否则保留形状诊断供人工处理。
-- `NA->定宽常量`使用目标所有 packed 维度的乘积做比较；源常量较窄时高位补零，源常量较宽时 warning 后保留原式。目标维度无法静态求值时不猜测宽度，保留常量并输出 warning。
-- 显式零位宽只走“保留并诊断”路径，不参与最大宽度 wire、切片或自动适配计算，避免生成负索引之外的二次错误。完整裁决矩阵见[《V3.2 位宽不匹配分析》](doc/TechReport/V3.2位宽不匹配分析.md)。
-- `Reporter` 有 `error`、`warning`、`info` 三级，输出时按严重程度分组并在交互终端使用红、黄、青色。`--strict`只额外把 warning 视为失败；三个显示开关可独立隐藏输出，但不改变判定。
-
-任意页签的表头行中若存在名为 `修改` 或 `修改列` 的列，读取 XLSX 时会先整列移除，再执行任何表头、模板、分类、方向和连接解析。该列可以插在业务列之间，其中所有内容均不会影响生成结果。
-
-### 方向和模板报错排查
-
-- `方向与模块定义不一致 (input/output)`：括号左侧是集成页签该模块列的 `i/o`，右侧是模块子页的定义；先按错误中的页签、行号和 `模块.端口` 核对这两个单元格。
-- `TOP 输入 ... 与子模块输出 ... 方向冲突`：表示 TOP 的外部 input 被子模块 output 反向驱动。通常 TOP input 应连接子模块 input；若信号应由子模块驱动到芯片外部，TOP 方向应为 output。
-- `模板端口展开不一致`（info）：诊断会列出各模块实际端口。V2 会按展开值取并集逐项处理；重点检查只存在于某一模块的展开项是否确实应按未连接语义生成。
-- 排查时先运行 `python .\xlsx2verilog.py 文件.xlsx --check`，保留完整的第一条 error。前面的解析错误可能造成后续连接错误，不应只看最后一条诊断。
-
-## 当前样例的说明
-
-`main_test.xlsx`包含`集成_RISCV_TOP`和`集成_RISCV_CORE_TEST`两个集成候选，CLI 示例需显式传入`--integration`，终端 GUI 则可直接选择。选择`集成_RISCV_TOP`可生成：
-
-- `riscv_top.v`：TOP 端口、APB 内部 wire、`RISCV_CORE_TEST` 和 `MEM_PHY` 实例；
-- `riscv_core_test.v`、`mem_phy.v`：端口定义及 output 赋零。
-
-V3.45 已修复该样例中`MEM_PHY.parameter_test`的未链接宽度：TOP 模块头不会增加可外部覆盖的`parameter PARAMTER`，而是在“parameter NA 及子模块位宽上拉创建的 TOP 语句区局部参数”块生成`localparam PARAMTER = 10;`，内部使用`wire [PARAMTER -1:0]`，并在实例中连接`.PARAMTER(PARAMTER)`，不再留下 TOP 未定义符号。
-
-最新样例还包含 `test_bus_{{i}}_*` 和 `test_bus2_{{j}}_*` 的 `sig1/sig2/sig3` 展开、`sky_cs_if.mst` interface，以及位宽 `` `LANE_NUM * `Test_size`` 数组；后者生成 ``[`LANE_NUM -1:0][`Test_size -1:0] array``。模板宏按专用规则生成 `DW_SIG1`～`DW_SIG3`；其 XLSX 默认值为不完整的 `155、…`，因此告警并使用 `114`。
-
-新增 `test_bus2` 样例刻意保留了两个表格问题用于验证边界：`dat` 的端口名使用 `j`、位宽却引用未绑定的 `i`，因此三个端口均生成 `[114 -1:0]` 并告警；`valid` 写成 `{j}}`，脚本恢复为 `{{j}}` 后展开并要求修正 XLSX。这些 warning 是有意保留的待确认标记。
-
-集成表中的三个 `test_bus_*_valid` 同时连接 `RISCV_CORE_TEST` 和 `MEM_PHY` 的 output，因此顶层 net 存在多驱动风险。脚本按表格生成并输出“多个子模块驱动端” warning；请在项目定义确定后修改 XLSX 方向或连接关系。
-
-样例中两个子模块各有一个重复的 `ahb_test_5`，脚本按允许重复的规则合并到首次定义；APB 两端的数字位宽不同，脚本按最大位宽生成 wire、较窄端口使用低位切片、未驱动高位补零，并输出如下形式的警告：
+输入端和输出端可以同时写范围。同一个 input 端口分散在多行时，脚本按目标下标从高到低拼成一个完整表达式；未覆盖区间和显式 `NA->0`都按该段剩余 packed 维度生成定宽全 0：
 
 ```text
-warning[W_WIDTH_MISMATCH][RISCV_CORE_TEST.apb_3信号和MEM_PHY.apb_3信号应该连接，但是其位宽不匹配]
+LC.tx_fifo[1:0] <-> OE.tx_fifo[4:3]
+LC.tx_fifo[2]   <-> NA->0
 ```
 
-修正 Excel 后可使用 `--strict` 作为自动化流水线的质量门禁。
+生成：
 
-`review_test_cases/10_special_case/review2case.xlsx` 是本轮边界样例：其中 `APB_1`、`LANE_NUM` 的跨模块宏值冲突应报 error；在临时副本中人工统一宏值后可生成 4 个模块。TOP 的 5 bit `dft_test_en` 连接标量子模块输入时使用 `[0]`，`bus_in[i]` 和 `dyadic_bus_out_{{z}}[i]` 则驱动一个 5 次 `MEM_DAT` generate。原样例保留不修改，便于复验拒绝路径。
+```systemverilog
+.tx_fifo ({{2*2{1'b0}}, w_tx_fifo[4:3]})
+```
 
-`review_test_cases/12_test_for_techreview2/techreview2version2.xlsx`覆盖本轮新增规格：显式 parameter 分类、子模块端口连接 NA、常量 bit select、generate 排版和带页签来源的宏冲突诊断。原件刻意保留四组宏冲突，预期直接校验失败；自动测试在临时副本上统一冲突值后检查 4 个小写 Verilog 文件，不修改原始 XLSX。
+切片两端总位宽不同时，源窄则在端口表达式中补定宽 0；源宽则先写入等宽的一维 adapter，再安全截取低位。这样不会把一个已知不等宽表达式直接交给 VCS。该处理是显式切片语义的一部分，不受 parameter 位宽自动适配总开关影响。若最左维来自 parameter 或宏，边界按 XLSX 数值列/当前宏匹配值检查，并输出`W_PORT_SLICE_WIDTH`；之后若修改实例传参或编译宏，必须保证选择范围仍未越界且总宽度仍一致。
 
-`review_test_cases/13_test_for_techreview3/techreview2version3.xlsx`覆盖用户代码段、`NA[i]`内部 generate、`z=0:31`范围展开和`RISCV_CRG`的 32 个模板端口。原件继承四组刻意保留的宏冲突，预期直接校验失败；`tests_script/test_version2_review3.py`在临时副本上统一宏值后回归。
+当前切片限制：仅用于第一个 TOP 连接区之后的子模块内部连接区；只支持自然数范围；作用于最左 packed 维；驱动端必须是唯一 output、接收端必须是 input；暂不与 interface、inout、条件端口、模板展开或 `[i]` generate 标记混用。目标切片重叠、范围反向或越界会阻止写入。
 
-`review_test_cases/14_edge_case_test_problem/eage_case.xlsx`是 V3 主验收样例：参数分类在 TOP 和`RISCV_CORE_TEST`间显式链接；`RST_LANE`使用`` `GLB_RST_LANE``并以`1`匹配；`NA->ready_test_process`创建命名 wire；`NA->1`把三个 TOP valid 输出赋 1；`MEM_DAT`使用`PROJECT_PERSONAL_MEM_DAT`实例名；`RISCV_CRG`显式例化 10 次。该样例仍刻意保留模板变量、占位参数和位宽差异 warning，因此普通`--check`成功，`--strict`预期失败。
+## 文件顶部配置
 
-`review_test_cases/17_v3_techreview2_width_boundary/width_boundary.xlsx`是 V3.2 位宽边界样例，集中覆盖固定宽度扩展/截断、内部网络取最大宽度、参数位宽延后到 elaboration、多维形状差异、显式零位宽、`NA->0/1`复制以及`NA->8'hFF`补零/过宽 warning。预期普通`--check`返回`0`，并产生`1`条`W_ZERO_WIDTH`、`8`条`W_WIDTH_MISMATCH`和`1`条`W_NA_CONSTANT_WIDTH`；详细逐行结论见该目录下的[检视报告](review_test_cases/17_v3_techreview2_width_boundary/检视报告.md)。
+配置集中在 `xlsx2verilog.py`开头的 `User configuration`：
 
-## 文档归档
+```python
+ENABLE_CONDITIONAL_BLOCKS = False
+ONLY_TOP = False
+AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH = False
+OVERWRITE_FILE_HEADER = False
 
-需求按版本归档在`doc/PRD/`；当前维护资料与功能索引位于`doc/TechReport/`；PRD 14 的跨集成同步与层级信号传播构想见[`V3.5 跨集成同步与层级信号传播方案`](doc/TechReport/V3.5跨集成同步与层级信号传播方案.md)；历史检视报告位于`doc/TechReport/design_review/`；附录需求归档在`doc/appendix需求/`。
+SHOW_ERROR_MESSAGES = True
+SHOW_WARNING_MESSAGES = True
+SHOW_INFO_MESSAGES = True
+
+DIAGNOSTIC_VISIBILITY_BY_CODE = {
+    "E_DIRECTION": True,
+    "W_WIDTH_MISMATCH": True,
+    "W_PARAMETER_WIDTH_MISMATCH": True,
+    "I_UNCONNECTED": False,
+    # 完整表见脚本开头
+}
+```
+
+| 配置 | 作用 |
+|---|---|
+| `ENABLE_CONDITIONAL_BLOCKS` | 默认不生成 `ifdef`；设为 True 后按分类条件同步包裹声明、stub assign、实例连接和 TOP 兜底 |
+| `ONLY_TOP` | 仍解析、校验完整层次，但只写所选 TOP |
+| `AUTO_ZERO_FILL_PARAMETER_WIDTH_MISMATCH` | 默认只 warning；开启后按 XLSX 匹配值自动低位连接/补零 |
+| `OVERWRITE_FILE_HEADER` | False 保留已有 file header USER 内容；True 用配置头覆盖 |
+| `SHOW_*` | 诊断级别显示总开关 |
+| `DIAGNOSTIC_VISIBILITY_BY_CODE` | 每个诊断代码的细粒度显示开关 |
+
+诊断显示开关只影响终端，不改变内部记录、返回码、error 写入保护或 `--strict`判定。
+
+## 输出与用户代码段
+
+输出文件名统一小写，模块名保持模型中的大小写。文件使用 UTF-8、LF，写入采用临时文件替换；输出目录中的无关文件不会删除。
+
+每个生成文件有稳定 USER CODE 段：
+
+- `file header`；
+- `before statement`；
+- 自动 statement 后、首个实例或 `endmodule`前的 `after statement`；
+- TOP module 前的 `before module`；
+- 每个实例前后的 `before <identity>` / `after <identity>`。
+
+只编辑 BEGIN/END 中间内容，不要修改、删除或嵌套 marker。重新生成按“标签 + occurrence”保留段内容；损坏 marker 或有内容的旧段失去对应位置时，在任何文件写入前失败。
+
+## merger
+
+典型用法见 [appendix README](appendix/README.md)。merger 以新生成文件为结构真源，并保护：
+
+- USER CODE 段；
+- 同模块、同 scope、同信号的 `wire/reg`选择；
+- 同模块、同参数的 `localparam/parameter`选择；
+- 带 `//USER:`的完整单行 assign、声明、parameter、named-port connection；
+- 带 `//USER:`的 `genvar/generate/endgenerate`。
+
+merger 对旧工程先备份，再暂存和原子替换；失败会回滚。但它不是完整 SystemVerilog parser，`//USER:`保护只承诺文档列出的单行形式。人工 assign 被完整保留后仍需项目编译/lint验证。重复 USER 标签的 occurrence 匹配等边界见[代码风险检视](doc/TechReport/V3.5.03代码风险检视.md)。
+
+## 诊断与排查
+
+推荐顺序：
+
+1. 先运行普通 `--check`并处理第一条 error；
+2. 再处理 width、placeholder、driver、NA 等 warning；
+3. 最后运行 `--check --strict`作为质量门禁；
+4. 对打开自动适配、interface、多维或 parameter override 的工程执行真实 SystemVerilog compile/lint。
+
+常见诊断：
+
+| 代码 | 含义 |
+|---|---|
+| `E_DIRECTION` | TOP input 被 child output 反向驱动，或方向不合法 |
+| `E_PARAMETER` | parameter 行来源、表达式或链接冲突 |
+| `E_DRIVER_CONFLICT` | 内部网络有多个 output 驱动 |
+| `W_WIDTH_MISMATCH` | literal/macro 等普通形状不一致 |
+| `W_PARAMETER_WIDTH_MISMATCH` | 含 parameter 的形状不一致 |
+| `W_WIDTH_PLACEHOLDER` | 使用了 114 待确认宽度 |
+| `W_ZERO_WIDTH` | 保留了显式零位宽 |
+| `W_PARAMETER_AUTO_LOCAL` | 未链接的 child 宽度 parameter 已在 TOP 正文局部化 |
+| `W_NA_TARGET_CONFLICT` | 命名 NA 复用了已有信号，需人工检查方向/驱动 |
 
 ## 测试
 
 ```powershell
+# 全量单元测试
 python -m unittest discover -s tests_script -v
-python -m unittest tests_script.test_version350 tests_script.test_merger_v350 -v
+
+# 当前宽度、端口切片、parameter 与 merger 定向回归
+python -m unittest tests_script.test_version350 tests_script.test_version3505 tests_script.test_version3_review4 tests_script.test_version3_bugfix345 tests_script.test_merger_v350 -v
+
+# Python 语法检查
 python -m py_compile .\xlsx2verilog.py .\appendix\xlsx2verilog_merger.py
+
+# 结构化 review matrix
 python .\tests_script\run_review_matrix.py
 python .\tests_script\run_tech_review2_review.py
-python .\xlsx2verilog.py .\review_test_cases\07_real_test_1\ibex_if_stage_3children.xlsx --check --strict
-python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\01_core_layer.xlsx --check --strict
-python .\xlsx2verilog.py .\review_test_cases\08_real_test_2\02_if_stage_layer.xlsx --check --strict
-# 以下三个原件刻意保留跨模块宏冲突，预期返回 2
-python .\xlsx2verilog.py .\review_test_cases\09_version_2\test.xlsx --check
-python .\xlsx2verilog.py .\review_test_cases\10_special_case\review2case.xlsx --check
-python .\xlsx2verilog.py .\review_test_cases\13_test_for_techreview3\techreview2version3.xlsx --check
-# V3 主验收样例：普通检查返回 0；其已知 warning 会令 --strict 失败
-python .\xlsx2verilog.py .\review_test_cases\14_edge_case_test_problem\eage_case.xlsx --check
-# V3.2 位宽边界样例：普通检查返回 0；其已知 warning 会令 --strict 失败
+
+# V3.2/V3.5 位宽边界样例：普通 check 成功，strict 因已知 warning 失败
 python .\xlsx2verilog.py .\review_test_cases\17_v3_techreview2_width_boundary\width_boundary.xlsx --check
+
+# V3 主验收样例：普通 check 成功，strict 因已知 warning 失败
+python .\xlsx2verilog.py .\review_test_cases\14_edge_case_test_problem\eage_case.xlsx --check
 ```
 
-测试同样只使用标准库。`run_review_matrix.py`会创建 6 种不同结构的 XLSX 并静态检视生成结果。V2 三轮回归位于`tests_script/test_version2_review*.py`；V3.1～V3.4 规则分别由`tests_script/test_version3_review1.py`至`tests_script/test_version3_review4.py`覆盖，V3.45 bugfix 位于`tests_script/test_version3_bugfix345.py`；V3.5 主生成器与 merger 的新增规则分别位于`tests_script/test_version350.py`和`tests_script/test_merger_v350.py`，后者包含本次真实`riscv_top`双`test_rx`回归。历史 merger 的路径、确认和事务测试保留在原测试记录中。`10_special_case`、`12_test_for_techreview2`与`13_test_for_techreview3`原文件预期因宏冲突失败，不能当作 strict 成功样例。参数与集成功能的历史实现结论见[`V3.1 TechReview1 实现与代码检视报告`](doc/TechReport/design_review/V3_TechReview1实现与代码检视报告_20260824.md)，V3.2 裁决矩阵见[《V3.2 位宽不匹配分析》](doc/TechReport/V3.2位宽不匹配分析.md)。
+部分历史 workbook 刻意保留宏冲突，预期返回 2，不应当作成功样例：
+
+- `review_test_cases/09_version_2/test.xlsx`；
+- `review_test_cases/10_special_case/review2case.xlsx`；
+- `review_test_cases/13_test_for_techreview3/techreview2version3.xlsx`。
+
+V3.5.05 全量回归包含 119 个测试，其中 7 个历史可视化附录测试因组件未归档而跳过。新增切片测试覆盖双实例分流、`+:`、双边切片、bit 与 range 拼接、`NA->0`、自动补零、扁平截断、反向/零宽/越界和目标重叠。warning 数量会随规则演进，不应在 README 中长期写成固定验收规格，测试应优先断言诊断代码与具体行为。
+
+## 归档
+
+- 当前维护文档：`doc/TechReport/`；
+- 历史实现检视：`doc/TechReport/design_review/`；
+- 主生成器需求：`doc/PRD/`；
+- merger 与其他附录需求：`doc/appendix需求/`；
+- 跨集成同步的未来方案：[V3.5 跨集成同步与层级信号传播方案](doc/TechReport/V3.5跨集成同步与层级信号传播方案.md)。

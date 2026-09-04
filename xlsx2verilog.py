@@ -75,6 +75,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "E_GENERATE_INDEX": True,  # 循环索引错误：显示 generate 标记冲突。
     "E_NA_TARGET": True,  # NA 目标错误：显示非法、不适用或同一行多目标的情况。
     "E_BIT_SELECT": True,  # 位选择错误：显示不支持或越界的 bit select。
+    "E_PORT_SLICE": True,  # 端口切片错误：显示范围语法、越界、方向或分段覆盖冲突。
     "E_INTERFACE_CONNECTION": True,  # 接口错误：显示 interface 连接限制。
     "E_DRIVER_CONFLICT": True,  # 驱动冲突：显示同一网络的多个 output。
     "E_USER_CODE": True,  # 用户代码错误：显示 USER CODE 标记损坏或丢失。
@@ -86,6 +87,7 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "W_PARAMETER_WIDTH_MISMATCH": True,  # 参数位宽不匹配：按数值列发现参数或多维 packed 形状不一致。
     "W_ZERO_WIDTH": True,  # 零位宽：显示已生成 [0 -1:0] 但需确认工具链行为。
     "W_NA_CONSTANT_WIDTH": True,  # NA 常量：显示定宽常量大于目标或无法安全匹配。
+    "W_PORT_SLICE_WIDTH": True,  # 端口切片位宽：显示形状不一致、自动适配或符号维边界复核要求。
     "W_NA_TARGET_CONFLICT": True,  # NA 名称冲突：复用已有信号，提示检查方向和多驱动风险。
     "W_PARAMETER_NOT_EXPORTED": True,  # 参数未上拉：例化次数等位置引用了 TOP 中不存在的 parameter。
     "W_PARAMETER_AUTO_LOCAL": True,  # 参数自动局部化：子模块位宽 parameter 未显式链接，TOP 正文已创建 localparam。
@@ -105,14 +107,15 @@ DIAGNOSTIC_VISIBILITY_BY_CODE = {
     "I_TEMPLATE_PARTIAL": True,  # 模板部分匹配：显示缺少对端的展开项。
     "I_NA_CONNECTION": False,  # NA 连接：显示占位、常量、观察或开路处理。
     "I_UNCONNECTED": False,  # 未连接端口：显示接零、开路或自动补全处理。
+    "I_PORT_SLICE": True,  # 端口切片：显示完整源网络、分段拼接及未覆盖 input 补零。
     "I_INSTANCE": True,  # 例化信息：显示实例名、次数和 generate 范围。
     "I_ROW_COMMENTED": True,  # 注释行：显示含 *注释* 的 XLSX 行已停用。
 }
 
 # Startup identification.  These lines are centered to one shared width.
 SCRIPT_DISPLAY_NAME = "CustomScipt xlsx2verilog"
-SCRIPT_VERSION = "Version V3.5.03"
-SCRIPT_RELEASE_DATE = "2026.9.3"
+SCRIPT_VERSION = "Version V3.5.05"
+SCRIPT_RELEASE_DATE = "2026.9.4"
 SCRIPT_CONTACT = "Contact xxx-xxxx in case"
 
 
@@ -157,6 +160,12 @@ CONDITION_CATEGORY_RE = re.compile(
 )
 INDEX_MARKER_RE = re.compile(r"^(.*)\[([A-Za-z_][A-Za-z0-9_$]*)\]\s*$")
 BIT_SELECT_RE = re.compile(r"^(.*)\[\s*([0-9]+)\s*\]\s*$")
+RANGE_SELECT_RE = re.compile(
+    r"^(.*)\[\s*([0-9]+)\s*:\s*([0-9]+)\s*\]\s*$"
+)
+INDEXED_PLUS_SELECT_RE = re.compile(
+    r"^(.*)\[\s*([0-9]+)\s*\+\s*:\s*([0-9]+)\s*\]\s*$"
+)
 ANONYMOUS_NA_RE = re.compile(
     r"^(?:na|n/a)(?:\s*\[\s*[A-Za-z_][A-Za-z0-9_$]*\s*\])?"
     r"(?:\s*->\s*[^\s].*)?$",
@@ -2585,11 +2594,30 @@ def connection_constant_value(
     literal is zero-extended when narrower; an oversized literal is retained
     (Verilog will context-truncate it) and reported for engineering review.
     """
-    constant = clean(value)
     dimensions = (*port.arrays, *port.packed_dimensions, port.width)
+    return dimensions_constant_value(
+        value,
+        dimensions,
+        parameter_map,
+        reporter=reporter,
+        context=context,
+    )
+
+
+def dimensions_constant_value(
+    value: str,
+    dimensions: tuple[Width, ...],
+    parameter_map: dict[str, str] | None = None,
+    *,
+    reporter: Reporter | None = None,
+    context: str = "NA 常量",
+) -> str:
+    """Fit a constant to an explicit packed shape, including a selected slice."""
+
+    constant = clean(value)
     bit_count = "*".join(
         width_expression(dimension, parameter_map) for dimension in dimensions
-    )
+    ) or "1"
     if constant in {"0", "1"}:
         resolved_for_zero = [
             evaluate_int_expression(
@@ -3076,6 +3104,40 @@ class Binding:
 
 
 @dataclass(frozen=True)
+class PortSelection:
+    """One natural-number selection of the leftmost packed dimension."""
+
+    expression: str
+    low: int
+    high: int
+    width: int
+    is_bit: bool = False
+
+
+@dataclass(frozen=True)
+class SlicedInputPiece:
+    """One already width-fitted expression assigned to an input port slice."""
+
+    low: int
+    high: int
+    expression: str
+    row: int
+
+
+@dataclass
+class SlicedInputAssembly:
+    """All rows that jointly construct one complete child input binding."""
+
+    child_key: str
+    port: Port
+    parameter_map: dict[str, str]
+    extent: int
+    trailing_dimensions: tuple[Width, ...]
+    pieces: list[SlicedInputPiece] = field(default_factory=list)
+    rows: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class Assignment:
     target: str
     expression: str
@@ -3107,6 +3169,47 @@ def split_bit_select(reference: Any) -> tuple[str, str | None, int | None]:
         return text, None, None
     index = int(match.group(2))
     return match.group(1).strip(), f"[{index}]", index
+
+
+def split_port_selection(reference: Any) -> tuple[str, PortSelection | None]:
+    """Split ``[msb:lsb]``, ``[base+:width]`` or ``[bit]`` from a port name.
+
+    The generated ordinary packed dimensions are descending ``[N-1:0]``.
+    Explicit ranges therefore require ``msb >= lsb``.  Indexed ``+:`` syntax
+    keeps the user's ascending base/width notation while selecting the same
+    descending packed elements.
+    """
+
+    text = clean(reference)
+    indexed = INDEXED_PLUS_SELECT_RE.fullmatch(text)
+    if indexed is not None:
+        base = int(indexed.group(2))
+        width = int(indexed.group(3))
+        if width <= 0:
+            return indexed.group(1).strip(), PortSelection(
+                f"[{base} +: {width}]", base, base - 1, width
+            )
+        return indexed.group(1).strip(), PortSelection(
+            f"[{base} +: {width}]",
+            base,
+            base + width - 1,
+            width,
+        )
+    ranged = RANGE_SELECT_RE.fullmatch(text)
+    if ranged is not None:
+        high = int(ranged.group(2))
+        low = int(ranged.group(3))
+        width = high - low + 1
+        return ranged.group(1).strip(), PortSelection(
+            f"[{high}:{low}]", low, high, width
+        )
+    bit = BIT_SELECT_RE.fullmatch(text)
+    if bit is not None:
+        index = int(bit.group(2))
+        return bit.group(1).strip(), PortSelection(
+            f"[{index}]", index, index, 1, is_bit=True
+        )
+    return text, None
 
 
 def parse_na_connection(value: Any) -> tuple[str | None, str | None] | None:
@@ -3843,6 +3946,10 @@ def render_integration(
     adapter_assignments: list[Assignment] = []
     used_signals = set(top_ports)
     named_na_wires: dict[str, Wire] = {}
+    sliced_output_nets: dict[tuple[str, str], str] = {}
+    sliced_input_assemblies: dict[tuple[str, str], SlicedInputAssembly] = {}
+    warned_symbolic_slice_bounds: set[tuple[str, str, str]] = set()
+
     def configured_count_width(child_key: str) -> Width | None:
         child = child_for_key(child_key)
         configured = instance_spec_for_key(child_key)
@@ -4056,6 +4163,296 @@ def render_integration(
         )
         if assignment not in adapter_assignments:
             adapter_assignments.append(assignment)
+
+    def connection_dimensions(port: Port) -> tuple[Width, ...]:
+        """Return dimensions in the same left-to-right order as declarations."""
+
+        return (*port.arrays, *port.packed_dimensions, port.width)
+
+    def dimensions_total_width(dimensions: tuple[Width, ...]) -> int | None:
+        values = [resolved_width_value(item, all_macros) for item in dimensions]
+        if any(value is None for value in values):
+            return None
+        total = 1
+        for value in values:
+            assert value is not None
+            total *= value
+        return total
+
+    def dimensions_shape(dimensions: tuple[Width, ...]) -> tuple[object, ...]:
+        values = tuple(resolved_width_value(item, all_macros) for item in dimensions)
+        if all(value is not None for value in values):
+            return values
+        return tuple(item.effective for item in dimensions)
+
+    def selected_dimensions(
+        port: Port,
+        selection: PortSelection | None,
+        row: int,
+        module_name: str,
+    ) -> tuple[Width, ...] | None:
+        dimensions = connection_dimensions(port)
+        if selection is None:
+            return dimensions
+        reference = f"{module_name}.{port.name}{selection.expression}"
+        if port.is_interface:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: interface {reference} "
+                "不支持 packed 端口切片",
+                code="E_PORT_SLICE",
+            )
+            return None
+        if not dimensions:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {reference} 没有可选择的 "
+                "packed 维度",
+                code="E_PORT_SLICE",
+            )
+            return None
+        if selection.width <= 0 or selection.high < selection.low:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {reference} 的切片宽度必须大于 0，"
+                "显式范围必须按 [msb:lsb] 降序书写",
+                code="E_PORT_SLICE",
+            )
+            return None
+        extent = resolved_width_value(dimensions[0], all_macros)
+        if extent is None:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {reference} 的最左维无法"
+                "静态求值，不能安全检查切片边界",
+                code="E_PORT_SLICE",
+            )
+            return None
+        if dimensions[0].kind != "literal":
+            warning_key = (module_name, port.name, selection.expression)
+            if warning_key not in warned_symbolic_slice_bounds:
+                warned_symbolic_slice_bounds.add(warning_key)
+                reporter.warning(
+                    f"集成页签 {sheet.name} 第 {row} 行: {reference} 的边界按"
+                    f"当前匹配值 {extent} 检查；若实例传参或编译宏改变最左维，"
+                    "请确保切片仍未越界且拼接总宽度保持一致",
+                    code="W_PORT_SLICE_WIDTH",
+                )
+        if selection.low < 0 or selection.high >= extent:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {reference} 超出最左维"
+                f"范围 [{extent - 1}:0]",
+                code="E_PORT_SLICE",
+            )
+            return None
+        if selection.is_bit:
+            return dimensions[1:]
+        selected_width = Width("literal", str(selection.width), str(selection.width))
+        return (selected_width, *dimensions[1:])
+
+    def ensure_sliced_output_net(
+        block: IntegrationBlock,
+        port: Port,
+        row: int,
+    ) -> tuple[str, dict[str, str]]:
+        child_key = block_key(block)
+        key = (child_key, port.name)
+        parameter_map = wire_parameter_map(
+            child_key, modules[block.module_name], port, row
+        )
+        signal_name = sliced_output_nets.get(key)
+        if signal_name is None:
+            signal_name = unique_name(f"w_{port.name}", used_signals)
+            sliced_output_nets[key] = signal_name
+            wires.append(
+                Wire(
+                    name=signal_name,
+                    width=port.width,
+                    arrays=port.arrays,
+                    parameter_map=parameter_map,
+                    packed_dimensions=port.packed_dimensions,
+                )
+            )
+            reporter.info(
+                f"集成页签 {sheet.name} 第 {row} 行: 为分段输出 "
+                f"{block.module_name}.{port.name} 创建完整网络 {signal_name}",
+                code="I_PORT_SLICE",
+            )
+        bind(child_key, port, signal_name, row)
+        return signal_name, parameter_map
+
+    def fit_sliced_expression(
+        expression: str,
+        source_dimensions: tuple[Width, ...],
+        target_dimensions: tuple[Width, ...],
+        row: int,
+        adapter_base: str,
+        source_parameter_map: dict[str, str] | None = None,
+    ) -> str | None:
+        source_width = dimensions_total_width(source_dimensions)
+        target_width = dimensions_total_width(target_dimensions)
+        if source_width is None or target_width is None:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: 端口切片两端总位宽"
+                "无法静态求值；为避免生成 VCS width mismatch，本行不生成",
+                code="E_PORT_SLICE",
+            )
+            return None
+        if source_width <= 0 or target_width <= 0:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: 端口切片不能使用零总位宽 "
+                f"({source_width}/{target_width})",
+                code="E_PORT_SLICE",
+            )
+            return None
+        source_shape = dimensions_shape(source_dimensions)
+        target_shape = dimensions_shape(target_dimensions)
+        if source_shape != target_shape:
+            reporter.warning(
+                f"集成页签 {sheet.name} 第 {row} 行: 端口切片形状 "
+                f"{source_shape} -> {target_shape} 不一致；已按总位宽低位连接并补零",
+                code="W_PORT_SLICE_WIDTH",
+            )
+        if source_width == target_width:
+            return expression
+        if source_width < target_width:
+            return f"{{{target_width - source_width}'b0, {expression}}}"
+
+        # A part-select on a multidimensional packed expression addresses its
+        # leftmost dimension, not a flattened total width.  First assign the
+        # selected expression to an equal-width flat wire, then take low bits.
+        adapter_name = unique_name(f"w_{adapter_base}_slice_adapter", used_signals)
+        source_width_expression = "*".join(
+            width_expression(item, source_parameter_map)
+            for item in source_dimensions
+        ) or "1"
+        wires.append(
+            Wire(
+                name=adapter_name,
+                width=Width(
+                    "literal", source_width_expression, str(source_width)
+                ),
+                arrays=(),
+                parameter_map={},
+            )
+        )
+        add_assignment(adapter_name, expression)
+        return low_bits(adapter_name, target_width)
+
+    def add_sliced_input_piece(
+        block: IntegrationBlock,
+        port: Port,
+        selection: PortSelection,
+        expression: str,
+        row: int,
+    ) -> None:
+        child_key = block_key(block)
+        dimensions = connection_dimensions(port)
+        extent = resolved_width_value(dimensions[0], all_macros)
+        if extent is None:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}."
+                f"{port.name} 的最左维无法确定，不能拼接分段 input",
+                code="E_PORT_SLICE",
+            )
+            return
+        key = (child_key, port.name)
+        if port.name in bindings.get(child_key, {}):
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}."
+                f"{port.name} 已有完整连接，不能再加入切片",
+                code="E_PORT_SLICE",
+            )
+            return
+        assembly = sliced_input_assemblies.get(key)
+        if assembly is None:
+            assembly = SlicedInputAssembly(
+                child_key=child_key,
+                port=port,
+                parameter_map=wire_parameter_map(
+                    child_key, modules[block.module_name], port, row
+                ),
+                extent=extent,
+                trailing_dimensions=dimensions[1:],
+            )
+            sliced_input_assemblies[key] = assembly
+        for previous in assembly.pieces:
+            if not (
+                selection.high < previous.low or selection.low > previous.high
+            ):
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: {block.module_name}."
+                    f"{port.name}{selection.expression} 与第 {previous.row} 行的"
+                    f"目标切片 [{previous.high}:{previous.low}] 重叠",
+                    code="E_PORT_SLICE",
+                )
+                return
+        assembly.pieces.append(
+            SlicedInputPiece(
+                selection.low,
+                selection.high,
+                expression,
+                row,
+            )
+        )
+        assembly.rows.append(row)
+
+    def finalize_sliced_input_assemblies() -> None:
+        for assembly in sliced_input_assemblies.values():
+            items: list[str] = []
+            cursor = assembly.extent - 1
+            filled = 0
+            for piece in sorted(
+                assembly.pieces, key=lambda item: item.high, reverse=True
+            ):
+                if cursor > piece.high:
+                    gap = cursor - piece.high
+                    gap_dimensions = (
+                        assembly.trailing_dimensions
+                        if gap == 1
+                        else (
+                            Width("literal", str(gap), str(gap)),
+                            *assembly.trailing_dimensions,
+                        )
+                    )
+                    items.append(
+                        dimensions_constant_value(
+                            "0",
+                            gap_dimensions,
+                            assembly.parameter_map,
+                        )
+                    )
+                    filled += gap
+                items.append(piece.expression)
+                cursor = piece.low - 1
+            if cursor >= 0:
+                gap = cursor + 1
+                gap_dimensions = (
+                    assembly.trailing_dimensions
+                    if gap == 1
+                    else (
+                        Width("literal", str(gap), str(gap)),
+                        *assembly.trailing_dimensions,
+                    )
+                )
+                items.append(
+                    dimensions_constant_value(
+                        "0",
+                        gap_dimensions,
+                        assembly.parameter_map,
+                    )
+                )
+                filled += gap
+            expression = items[0] if len(items) == 1 else "{" + ", ".join(items) + "}"
+            bind(
+                assembly.child_key,
+                assembly.port,
+                expression,
+                assembly.rows[-1],
+            )
+            if filled:
+                module_name = child_modules[assembly.child_key].name
+                reporter.info(
+                    f"集成页签 {sheet.name}: {module_name}.{assembly.port.name} "
+                    f"共有 {filled} 个未覆盖的最左维元素，已在完整端口表达式中补 0",
+                    code="I_PORT_SLICE",
+                )
 
     def shapes_match(left: Port, right: Port) -> bool:
         left_shape = comparable_port_shape(left, all_macros)
@@ -4900,11 +5297,233 @@ def render_integration(
                             code="W_DRIVER_RISK",
                         )
 
+    def handle_sliced_internal_row(
+        group: list[IntegrationBlock], row: int
+    ) -> bool:
+        """Plan one internal row containing a numeric port range or bit select.
+
+        A sliced output remains connected to one complete internal wire even
+        when it appears on several worksheet rows.  Sliced child inputs are
+        collected and rendered once as a full-width concatenation.
+        """
+
+        parsed: list[
+            tuple[IntegrationBlock, str, PortSelection | None]
+        ] = []
+        na_entries: list[tuple[IntegrationBlock, str | None, str | None]] = []
+        has_selection = False
+        for block in group:
+            reference = clean(sheet.cell(row, block.port_column))
+            if not reference:
+                continue
+            na_reference = parse_na_connection(reference)
+            if na_reference is not None:
+                na_entries.append((block, *na_reference))
+                continue
+            port_name, selection = split_port_selection(reference)
+            has_selection = has_selection or selection is not None
+            parsed.append((block, port_name, selection))
+        if not has_selection:
+            return False
+
+        endpoints: list[tuple[IntegrationBlock, Port, PortSelection | None]] = []
+        for block, port_name, selection in parsed:
+            indexed_name, generate_index = split_index_marker(port_name)
+            if generate_index is not None:
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: 端口切片不能与 "
+                    f"generate 索引 [{generate_index}] 在同一连接行混用",
+                    code="E_PORT_SLICE",
+                )
+                continue
+            ports = get_ports(block.module_name, indexed_name, row)
+            if len(ports) != 1:
+                if len(ports) > 1:
+                    reporter.error(
+                        f"集成页签 {sheet.name} 第 {row} 行: 模板端口 "
+                        f"{block.module_name}.{indexed_name} 展开为多个端口，"
+                        "当前不能与范围切片混用",
+                        code="E_PORT_SLICE",
+                    )
+                continue
+            port = ports[0]
+            validate_sheet_direction(block, port, row)
+            if block.module_name == top.name:
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: V3.5.05 端口切片"
+                    "仅支持后续子模块内部连接区，不支持 TOP 端点",
+                    code="E_PORT_SLICE",
+                )
+                continue
+            if port.condition is not None:
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: 条件端口 "
+                    f"{block.module_name}.{port.name} 暂不支持分段拼接",
+                    code="E_PORT_SLICE",
+                )
+                continue
+            if port.is_interface:
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: interface "
+                    f"{block.module_name}.{port.name} 不支持 packed 端口切片",
+                    code="E_PORT_SLICE",
+                )
+                continue
+            endpoints.append((block, port, selection))
+
+        constants = [
+            target
+            for _, _, target in na_entries
+            if target is not None and is_verilog_constant(target)
+        ]
+        unsupported_na = [
+            target
+            for _, _, target in na_entries
+            if target is None or not is_verilog_constant(target)
+        ]
+        if unsupported_na:
+            labels = ", ".join(
+                "NA" if item is None else f"NA->{item}"
+                for item in unsupported_na
+            )
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: 分段连接中的 {labels} "
+                "必须明确写成 NA->常量",
+                code="E_PORT_SLICE",
+            )
+        distinct_constants = list(dict.fromkeys(constants))
+        if len(distinct_constants) > 1:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: 分段连接存在多个常量来源 "
+                f"({', '.join(distinct_constants)})",
+                code="E_PORT_SLICE",
+            )
+        constant = distinct_constants[0] if len(distinct_constants) == 1 else None
+
+        drivers = [item for item in endpoints if item[1].direction == "output"]
+        if len(drivers) > 1:
+            names = ", ".join(
+                f"{block.module_name}.{port.name}"
+                for block, port, _ in drivers
+            )
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: 分段连接存在多个 output "
+                f"驱动端 ({names})",
+                code="E_DRIVER_CONFLICT",
+            )
+            return True
+        if drivers and constant is not None:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: 分段连接不能同时使用 "
+                f"output 驱动和 NA->{constant}",
+                code="E_PORT_SLICE",
+            )
+            return True
+        if any(port.direction == "inout" for _, port, _ in endpoints):
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: V3.5.05 不支持 inout "
+                "端口切片，请使用显式 wrapper 处理双向语义",
+                code="E_PORT_SLICE",
+            )
+            return True
+
+        source_expression: str | None = None
+        source_dimensions: tuple[Width, ...] | None = None
+        source_parameter_map: dict[str, str] | None = None
+        source_item = drivers[0] if drivers else None
+        if source_item is not None:
+            source_block, source_port, source_selection = source_item
+            source_dimensions = selected_dimensions(
+                source_port, source_selection, row, source_block.module_name
+            )
+            if source_dimensions is None:
+                return True
+            source_net, source_parameter_map = ensure_sliced_output_net(
+                source_block, source_port, row
+            )
+            source_expression = source_net + (
+                source_selection.expression if source_selection else ""
+            )
+        elif constant is None:
+            reporter.error(
+                f"集成页签 {sheet.name} 第 {row} 行: 分段连接没有 output "
+                "驱动端；请增加驱动端或使用 NA->0",
+                code="E_PORT_SLICE",
+            )
+            return True
+
+        receivers = [item for item in endpoints if item != source_item]
+        if not receivers:
+            reporter.warning(
+                f"集成页签 {sheet.name} 第 {row} 行: 分段 output 没有 input 接收端",
+                code="W_DRIVER_RISK",
+            )
+            return True
+        for block, port, selection in receivers:
+            if port.direction != "input":
+                reporter.error(
+                    f"集成页签 {sheet.name} 第 {row} 行: 分段连接接收端 "
+                    f"{block.module_name}.{port.name} 必须是 input，实际为 {port.direction}",
+                    code="E_PORT_SLICE",
+                )
+                continue
+            target_dimensions = selected_dimensions(
+                port, selection, row, block.module_name
+            )
+            if target_dimensions is None:
+                continue
+            if constant is not None:
+                expression = dimensions_constant_value(
+                    constant,
+                    target_dimensions,
+                    wire_parameter_map(
+                        block_key(block), modules[block.module_name], port, row
+                    ),
+                    reporter=reporter,
+                    context=(
+                        f"集成页签 {sheet.name} 第 {row} 行: "
+                        f"{block.module_name}.{port.name}"
+                    ),
+                )
+            else:
+                assert source_expression is not None
+                assert source_dimensions is not None
+                fitted = fit_sliced_expression(
+                    source_expression,
+                    source_dimensions,
+                    target_dimensions,
+                    row,
+                    f"{port.name}_{row}",
+                    source_parameter_map,
+                )
+                if fitted is None:
+                    continue
+                expression = fitted
+            if selection is None:
+                bind(block_key(block), port, expression, row)
+            else:
+                add_sliced_input_piece(block, port, selection, expression, row)
+            reporter.info(
+                f"集成页签 {sheet.name} 第 {row} 行: 分段连接 "
+                + (
+                    f"{source_item[0].module_name}.{source_item[1].name}"
+                    f"{source_item[2].expression if source_item[2] else ''}"
+                    if source_item is not None
+                    else f"NA->{constant}"
+                )
+                + f" -> {block.module_name}.{port.name}"
+                f"{selection.expression if selection else ''}",
+                code="I_PORT_SLICE",
+            )
+        return True
+
     for group_index, group in enumerate(integration.groups[1:], start=1):
         for row in range(integration.header_row + 1, sheet.max_row + 1):
             if skip_commented_integration_row(row):
                 continue
             if row in parameter_rows_by_group[group_index]:
+                continue
+            if handle_sliced_internal_row(group, row):
                 continue
             expanded: list[tuple[IntegrationBlock, list[Port]]] = []
             na_blocks: list[
@@ -5149,6 +5768,8 @@ def render_integration(
                                 ),
                                 driver_port.condition,
                             )
+
+    finalize_sliced_input_assemblies()
 
     # Named-port instantiations may omit ports, but explicitly tie/open all omitted
     # child ports to make the generated integration deterministic and lint-friendly.

@@ -34,7 +34,7 @@ class Version350Tests(unittest.TestCase):
 
             paths, reporter = generate(workbook, root / "generated")
             self.assertFalse(reporter.has_errors, [item.message for item in reporter.items])
-            self.assertEqual("Version V3.5.03", SCRIPT_VERSION)
+            self.assertEqual("Version V3.5.05", SCRIPT_VERSION)
             text = paths[0].read_text(encoding="utf-8")
             self.assertIn("// `define CentralWidth 16", text)
             self.assertRegex(text, r"parameter\s+COUNT\s+= 3")

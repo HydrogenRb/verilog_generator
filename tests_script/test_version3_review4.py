@@ -235,7 +235,7 @@ class Version3TechReview4Tests(unittest.TestCase):
             )
 
             paths, reporter = generate(workbook, root / "generated")
-            self.assertEqual(SCRIPT_VERSION, "Version V3.5.03")
+            self.assertEqual(SCRIPT_VERSION, "Version V3.5.05")
             self.assertFalse(reporter.has_errors)
             top = next(path for path in paths if path.name == "top.v").read_text(
                 encoding="utf-8"
